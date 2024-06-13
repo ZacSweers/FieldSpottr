@@ -1,7 +1,10 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+@file:OptIn(ExperimentalKotlinGradlePluginApi::class)
+
 import com.diffplug.spotless.LineEnding
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
 
