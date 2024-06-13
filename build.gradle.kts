@@ -89,7 +89,7 @@ kotlin {
     optIn.addAll(
       "androidx.compose.material3.ExperimentalMaterial3Api",
       "androidx.compose.foundation.ExperimentalFoundationApi",
-      )
+    )
     freeCompilerArgs.addAll(
       // Match JVM assertion behavior:
       // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
