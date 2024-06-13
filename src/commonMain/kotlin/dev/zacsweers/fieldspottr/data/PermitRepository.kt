@@ -14,10 +14,6 @@ import io.ktor.http.userAgent
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.core.isEmpty
 import io.ktor.utils.io.core.readBytes
-import java.util.Objects
-import kotlin.io.path.absolutePathString
-import kotlin.io.path.appendBytes
-import kotlin.io.path.createFile
 import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -81,7 +77,7 @@ class PermitRepository(
       }
 
       val allPermits = db.fsdbQueries.getAllPermits().executeAsList()
-      val uniqueFields = allPermits.distinctBy { Objects.hash(it.fieldId, it.area) }
+      val uniqueFields = allPermits.distinctBy { hashOf(it.fieldId, it.area) }
       val earliestPermit = allPermits.minByOrNull { it.start }
       val latestPermit = allPermits.maxByOrNull { it.end }
       val message =
@@ -106,7 +102,6 @@ class PermitRepository(
       )
     }
 
-  // TODO group by mapped field
   suspend fun loadPermits(date: LocalDate, group: String): List<DbPermit> =
     withContext(Dispatchers.IO) {
       val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
@@ -130,28 +125,31 @@ class PermitRepository(
       }
       appDirs.fs.delete(targetPath)
     }
-    // TODO KMP this
-    val file = targetPath.toNioPath()
-    file.createFile()
-    client
-      .prepareGet(area.csvUrl) {
-        // Lie and say we're a browser. NYC parks doesn't like bots
-        // TODO use a real user agent?
-        userAgent(
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-        )
-      }
-      .execute { httpResponse ->
-        val channel = httpResponse.body<ByteReadChannel>()
-        while (!channel.isClosedForRead) {
-          val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
-          while (!packet.isEmpty) {
-            val bytes = packet.readBytes()
-            file.appendBytes(bytes)
-          }
+
+    // Create the file
+    appDirs.fs.touch(targetPath)
+
+    appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
+      client
+        .prepareGet(area.csvUrl) {
+          // Lie and say we're a browser. NYC parks doesn't like bots
+          // TODO use a real user agent?
+          userAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+          )
         }
-        logger("Saved CSV to ${file.absolutePathString()}")
-      }
+        .execute { httpResponse ->
+          val channel = httpResponse.body<ByteReadChannel>()
+          while (!channel.isClosedForRead) {
+            val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
+            while (!packet.isEmpty) {
+              val bytes = packet.readBytes()
+              sink.write(bytes)
+            }
+          }
+          logger("Saved CSV to $targetPath")
+        }
+    }
     return false to targetPath
   }
 
@@ -188,7 +186,7 @@ class PermitRepository(
           return@forEach
         }
         val group = area.fieldMappings.getValue(field).group
-        val recordId = Objects.hash(area.areaName, group, start, end, field)
+        val recordId = hashOf(area.areaName, group, start, end, field)
 
         val startTime = LocalDateTime.parse(start, FORMATTER)
         val endTime = LocalDateTime.parse(end, FORMATTER)
@@ -223,4 +221,18 @@ private operator fun <E> List<E>.component6(): E {
 
 private operator fun <E> List<E>.component7(): E {
   return this[6]
+}
+
+private fun FileSystem.touch(path: Path) {
+  path.parent?.let { createDirectories(it) }
+  sink(path).buffer().use {}
+}
+
+private fun hashOf(vararg inputs: Any): Int {
+  var hash = 0
+  for (v in inputs) {
+    hash += v.hashCode()
+    hash *= 31
+  }
+  return hash
 }
