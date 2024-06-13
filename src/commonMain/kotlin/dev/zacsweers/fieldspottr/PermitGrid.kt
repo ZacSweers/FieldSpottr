@@ -84,8 +84,8 @@ fun PermitGrid(
           val eventBefore = getEvent(state, fields, columnNumber, rowNumber - 1)
           val eventAfter = getEvent(state, fields, columnNumber, rowNumber + 1)
 
-          val hasEventBefore = eventBefore != null
-          val hasEventAfter = eventAfter != null
+          val hasEventBefore = eventBefore != null && eventBefore == event
+          val hasEventAfter = eventAfter != null && eventAfter == event
 
           Box {
             event?.let {
