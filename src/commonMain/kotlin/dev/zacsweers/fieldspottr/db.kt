@@ -9,5 +9,5 @@ import app.cash.sqldelight.db.SqlSchema
 
 @Stable
 expect class SqlDriverFactory {
-  fun create(schema: SqlSchema<QueryResult.Value<Unit>>, name: String): SqlDriver
+  suspend fun create(schema: SqlSchema<QueryResult.AsyncValue<Unit>>, name: String): SqlDriver
 }

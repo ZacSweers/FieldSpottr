@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.prepareGet
 import io.ktor.http.userAgent
 import io.ktor.utils.io.ByteReadChannel
@@ -16,6 +17,9 @@ import io.ktor.utils.io.core.isEmpty
 import io.ktor.utils.io.core.readBytes
 import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.Instant
@@ -31,7 +35,12 @@ import kotlinx.datetime.toLocalDateTime
 import okio.BufferedSource
 import okio.FileSystem
 import okio.Path
+import okio.SYSTEM
 import okio.buffer
+import okio.use
+
+/** The default buffer size when working with buffered streams. */
+private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
 
 private val FORMATTER =
   LocalDateTime.Format {
@@ -63,44 +72,59 @@ class PermitRepository(
   private val appDirs: FSAppDirs,
   private val logger: (String) -> Unit = {},
 ) {
-  private val client = HttpClient()
-  private val db by lazy {
-    val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
-    FSDatabase(driver).also { FSDatabase.Schema.create(driver) }
+  private val client = HttpClient(CIO)
+
+  private val _db: FSDatabase? = null
+  private val dbInitMutex = Mutex()
+
+  private suspend fun db(): FSDatabase {
+    return _db
+      ?: dbInitMutex.withLock {
+        val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
+        FSDatabase(driver)
+      }
   }
 
   // TODO return a flow emitting log updates?
-  suspend fun populateDb() =
-    withContext(Dispatchers.IO) {
-      for (area in Area.entries) {
-        db.populateDbFrom(area)
-      }
-
-      val allPermits = db.fsdbQueries.getAllPermits().executeAsList()
-      val uniqueFields = allPermits.distinctBy { hashOf(it.fieldId, it.area) }
-      val earliestPermit = allPermits.minByOrNull { it.start }
-      val latestPermit = allPermits.maxByOrNull { it.end }
-      val message =
-        """
-      Populated database with permits from
-      - ${Area.entries.size} areas
-      - ${uniqueFields.size} unique fields
-      - ${allPermits.size} total permits
-      - Earliest permit: ${earliestPermit?.start}
-      - Latest permit: ${latestPermit?.start}
-      - Earliest permit (local): ${earliestPermit?.start?.let { Instant.fromEpochMilliseconds(it).toLocalDateTime(
-          NYC_TZ
-        ) }}
-      - Latest permit (local): ${latestPermit?.start?.let { Instant.fromEpochMilliseconds(it).toLocalDateTime(
-          NYC_TZ
-        ) }}
-    """
-          .trimIndent()
-      logger(message)
-      logger(
-        "Unique fields: ${uniqueFields.size}.\n${uniqueFields.joinToString("\n") { it.fieldId }}"
-      )
+  suspend fun populateDb() {
+    val db = db()
+    for (area in Area.entries) {
+      db.populateDbFrom(area)
     }
+
+    val allPermits = db.fsdbQueries.getAllPermits().executeAsList()
+    val uniqueFields = allPermits.distinctBy { hashOf(it.fieldId, it.area) }
+    val earliestPermit = allPermits.minByOrNull { it.start }
+    val latestPermit = allPermits.maxByOrNull { it.end }
+    val message =
+      """
+        Populated database with permits from
+        - ${Area.entries.size} areas
+        - ${uniqueFields.size} unique fields
+        - ${allPermits.size} total permits
+        - Earliest permit: ${earliestPermit?.start}
+        - Latest permit: ${latestPermit?.start}
+        - Earliest permit (local): ${
+          earliestPermit?.start?.let {
+            Instant.fromEpochMilliseconds(it).toLocalDateTime(
+              NYC_TZ
+            )
+          }
+        }
+        - Latest permit (local): ${
+          latestPermit?.start?.let {
+            Instant.fromEpochMilliseconds(it).toLocalDateTime(
+              NYC_TZ
+            )
+          }
+        }
+      """
+        .trimIndent()
+    logger(message)
+    logger(
+      "Unique fields: ${uniqueFields.size}.\n${uniqueFields.joinToString("\n") { it.fieldId }}"
+    )
+  }
 
   suspend fun loadPermits(date: LocalDate, group: String): List<DbPermit> =
     withContext(Dispatchers.IO) {
@@ -109,7 +133,7 @@ class PermitRepository(
       logger("Loading permits from DB for $date")
       logger("Start time is $startTime")
       logger("End time is $endTime")
-      db.fsdbQueries.getPermits(group, startTime, endTime).executeAsList()
+      db().fsdbQueries.getPermits(group, startTime, endTime).executeAsList()
     }
 
   private suspend fun getOrFetchCsv(area: Area): Pair<Boolean, Path> {
@@ -156,63 +180,64 @@ class PermitRepository(
   private val BufferedSource.lines: Sequence<String>
     get() = generateSequence(::readUtf8Line)
 
-  private fun BufferedSource.useLines(body: (Sequence<String>) -> Unit) {
+  private inline fun BufferedSource.useLines(body: (Sequence<String>) -> Unit) {
     use { body(lines) }
   }
 
-  private suspend fun FSDatabase.populateDbFrom(area: Area) {
-    // Check area last update in the DB. If it's less than a week old, skip it
-    val lastUpdate = transactionWithResult {
-      fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
-    }
-    val now = System.now().minus(7.days)
-    if (lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)) {
-      logger("Skipping ${area.areaName} as it's up to date")
-      return
-    }
+  private suspend fun FSDatabase.populateDbFrom(area: Area) =
+    withContext(Dispatchers.IO) {
+      // Check area last update in the DB. If it's less than a week old, skip it
+      val lastUpdate = transactionWithResult {
+        fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
+      }
+      val now = System.now().minus(7.days)
+      if (lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)) {
+        logger("Skipping ${area.areaName} as it's up to date")
+        return@withContext
+      }
 
-    logger("Populating DB from ${area.areaName}")
-    val (upToDate, csvFile) = getOrFetchCsv(area)
-    if (upToDate) return
-    logger("Deleting existing permits")
-    transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
+      logger("Populating DB from ${area.areaName}")
+      val (upToDate, csvFile) = getOrFetchCsv(area)
+      if (upToDate) return@withContext
+      logger("Deleting existing permits")
+      transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
 
-    FileSystem.SYSTEM.source(csvFile).buffer().useLines { lines ->
-      lines.drop(1).forEach { line ->
-        val (start, end, field, type, name, org, status) =
-          line.split(",").map { it.removeSurrounding("\"") }
-        if (field !in area.fieldMappings) {
-          // Irrelevant field
-          return@forEach
-        }
-        val group = area.fieldMappings.getValue(field).group
-        val recordId = hashOf(area.areaName, group, start, end, field)
+      FileSystem.SYSTEM.source(csvFile).buffer().useLines { lines ->
+        lines.drop(1).forEach { line ->
+          val (start, end, field, type, name, org, status) =
+            line.split(",").map { it.removeSurrounding("\"") }
+          if (field !in area.fieldMappings) {
+            // Irrelevant field
+            return@forEach
+          }
+          val group = area.fieldMappings.getValue(field).group
+          val recordId = hashOf(area.areaName, group, start, end, field)
 
-        val startTime = LocalDateTime.parse(start, FORMATTER)
-        val endTime = LocalDateTime.parse(end, FORMATTER)
+          val startTime = LocalDateTime.parse(start, FORMATTER)
+          val endTime = LocalDateTime.parse(end, FORMATTER)
 
-        logger("Adding permit for $field from ${area.areaName} in $group")
-        transaction {
-          fsdbQueries.addPermit(
-            DbPermit(
-              recordId = recordId.toLong(),
-              area = area.areaName,
-              groupName = group,
-              start = startTime.toInstant(NYC_TZ).toEpochMilliseconds(),
-              end = endTime.toInstant(NYC_TZ).toEpochMilliseconds(),
-              fieldId = field,
-              type = type,
-              name = name,
-              org = org,
-              status = status,
+          logger("Adding permit for $field from ${area.areaName} in $group")
+          transaction {
+            fsdbQueries.addPermit(
+              DbPermit(
+                recordId = recordId.toLong(),
+                area = area.areaName,
+                groupName = group,
+                start = startTime.toInstant(NYC_TZ).toEpochMilliseconds(),
+                end = endTime.toInstant(NYC_TZ).toEpochMilliseconds(),
+                fieldId = field,
+                type = type,
+                name = name,
+                org = org,
+                status = status,
+              )
             )
-          )
+          }
         }
       }
+      // Log last update time
+      transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
     }
-    // Log last update time
-    transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
-  }
 }
 
 private operator fun <E> List<E>.component6(): E {

@@ -65,6 +65,20 @@ kotlin {
         "-P",
         "plugin:org.jetbrains.kotlin.parcelize:additionalAnnotation=dev.zacsweers.fieldspottr.parcel.CommonParcelize",
       )
+      freeCompilerArgs.addAll(
+        "-Xjsr305=strict",
+        // Potentially useful for static analysis tools or annotation processors.
+        "-Xemit-jvm-type-annotations",
+        // Enable new jvm-default behavior
+        // https://blog.jetbrains.com/kotlin/2020/07/kotlin-1-4-m3-generating-default-methods-in-interfaces/
+        "-Xjvm-default=all",
+        // https://kotlinlang.org/docs/whatsnew1520.html#support-for-jspecify-nullness-annotations
+        "-Xjspecify-annotations=strict",
+        // Match JVM assertion behavior:
+        // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
+        "-Xassertions=jvm",
+        "-Xtype-enhancement-improvements-strict-mode",
+      )
     }
   }
   jvm {
@@ -79,10 +93,18 @@ kotlin {
         "-Xjvm-default=all",
         // https://kotlinlang.org/docs/whatsnew1520.html#support-for-jspecify-nullness-annotations
         "-Xjspecify-annotations=strict",
+        // Match JVM assertion behavior:
+        // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
+        "-Xassertions=jvm",
+        "-Xtype-enhancement-improvements-strict-mode",
       )
     }
   }
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
+
+  listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
+    it.binaries.framework { baseName = "fieldspottr" }
+  }
 
   compilerOptions {
     progressiveMode = true
@@ -90,13 +112,7 @@ kotlin {
       "androidx.compose.material3.ExperimentalMaterial3Api",
       "androidx.compose.foundation.ExperimentalFoundationApi",
     )
-    freeCompilerArgs.addAll(
-      // Match JVM assertion behavior:
-      // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
-      "-Xassertions=jvm",
-      "-Xtype-enhancement-improvements-strict-mode",
-      "-Xexpect-actual-classes",
-    )
+    freeCompilerArgs.addAll("-Xexpect-actual-classes")
   }
 
   sourceSets {
@@ -107,12 +123,12 @@ kotlin {
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
         implementation(libs.ktor.client)
+        implementation(libs.ktor.client.engine.cio)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
         implementation(libs.coroutines)
-        implementation(libs.sqldelight.coroutines)
-        implementation(libs.sqldelight.primitiveAdapters)
+        implementation(libs.sqldelight.async)
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
       }
@@ -120,8 +136,6 @@ kotlin {
     androidMain {
       dependencies {
         implementation(project.dependencies.platform(libs.kotlin.bom))
-        implementation(libs.ktor.client.engine.okhttp)
-        implementation(libs.okhttp)
         implementation(libs.coroutines.android)
         implementation(libs.sqldelight.driver.android)
         implementation(libs.androidx.appCompat)
@@ -131,13 +145,12 @@ kotlin {
     jvmMain {
       dependencies {
         implementation(project.dependencies.platform(libs.kotlin.bom))
-        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.sqldelight.driver.jdbc)
         implementation(compose.desktop.currentOs)
         implementation(libs.appDirs)
-        implementation(libs.okhttp)
       }
     }
+    nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
   }
 }
 
@@ -199,7 +212,14 @@ composeCompiler {
   includeSourceInformation = true
 }
 
-sqldelight { databases { create("FSDatabase") { packageName.set("dev.zacsweers.fieldspottr") } } }
+sqldelight {
+  databases {
+    create("FSDatabase") {
+      packageName.set("dev.zacsweers.fieldspottr")
+      generateAsync.set(true)
+    }
+  }
+}
 
 tasks
   .withType<JavaExec>()
