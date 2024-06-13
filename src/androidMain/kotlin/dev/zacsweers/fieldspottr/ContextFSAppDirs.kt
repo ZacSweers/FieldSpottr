@@ -1,0 +1,19 @@
+package dev.zacsweers.fieldspottr
+
+import android.content.Context
+import okio.FileSystem
+import okio.Path
+import okio.Path.Companion.toOkioPath
+
+class ContextFSAppDirs(private val context: Context, override val fs: FileSystem) : FSAppDirs {
+
+  override val userConfig: Path by lazy {
+    (context.filesDir.toOkioPath() / "config").also(fs::createDirectories)
+  }
+
+  override val userData: Path by lazy {
+    (context.filesDir.toOkioPath() / "data").also(fs::createDirectories)
+  }
+
+  override val userCache: Path by lazy { context.cacheDir.toOkioPath() }
+}

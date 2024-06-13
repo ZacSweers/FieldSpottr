@@ -1,0 +1,47 @@
+-- permit table.
+CREATE TABLE IF NOT EXISTS dbPermit (
+  recordId INTEGER NOT NULL,
+  area TEXT NOT NULL,
+  groupName TEXT NOT NULL,
+  fieldId TEXT NOT NULL,
+  start INTEGER NOT NULL,
+  end INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  -- May be empty
+  org TEXT NOT NULL,
+  status TEXT NOT NULL,
+  PRIMARY KEY(recordId)
+);
+
+CREATE TABLE IF NOT EXISTS dbArea (
+  name TEXT NOT NULL,
+  lastUpdated INTEGER NOT NULL,
+  PRIMARY KEY(name)
+);
+
+addPermit:
+INSERT OR REPLACE INTO dbPermit
+VALUES ?;
+
+getAllPermits:
+SELECT * FROM dbPermit;
+
+getPermitsForField:
+SELECT * FROM dbPermit WHERE fieldId = ?;
+
+getPermit:
+SELECT * FROM dbPermit WHERE recordId = ?;
+
+getPermits:
+SELECT * FROM dbPermit WHERE groupName = :groupName AND start > :startTime AND start < :endTime;
+
+deleteAreaPermits:
+DELETE FROM dbPermit WHERE area = ?;
+
+updateAreaOp:
+INSERT OR REPLACE INTO dbArea
+VALUES ?;
+
+lastAreaUpdate:
+SELECT lastUpdated FROM dbArea WHERE name = ?;

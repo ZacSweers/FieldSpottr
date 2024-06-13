@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+  <application
+      android:enableOnBackInvokedCallback="true"
+      android:label="FieldSpottr"
+      android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+    <activity
+        android:name="dev.zacsweers.fieldspottr.MainActivity"
+        android:configChanges="colorMode|density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <intent-filter tools:ignore="AppLinkUrlError">
+        <action android:name="android.intent.action.VIEW" />
+
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+      </intent-filter>
+    </activity>
+
+
+  </application>
+
+  <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
