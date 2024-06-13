@@ -108,7 +108,7 @@ fun PermitGrid(
                   !hasEventAfter -> EventSection.End
                   else -> EventSection.Middle
                 }
-              BasicPermitEvent(
+              PermitEvent(
                 modifier = Modifier.animateItemPlacement(),
                 start = start,
                 end = end,
@@ -152,7 +152,7 @@ val EventTimeFormatter =
   }
 
 @Composable
-fun BasicPermitEvent(
+fun PermitEvent(
   event: DbPermit,
   color: Color,
   start: String,
