@@ -1,3 +1,5 @@
+// Copyright (C) 2024 Zac Sweers
+// SPDX-License-Identifier: Apache-2.0
 @file:OptIn(ExperimentalMaterial3Api::class)
 
 package dev.zacsweers.fieldspottr
@@ -77,19 +79,16 @@ import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuitx.overlays.alertDialogOverlay
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.theme.FSTheme
-import java.time.format.DateTimeFormatter
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.LocalDateTime.Companion
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.TimeZone.Companion.UTC
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.format.char
-import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toLocalDateTime
 
 @Composable
@@ -301,14 +300,15 @@ fun PermitGrid(
   }
 }
 
-val EventTimeFormatter = LocalDateTime.Format {
-  // "h:mm a"
-  hour()
-  char(':')
-  minute()
-  char(' ')
-  amPmMarker("am", "pm")
-}
+val EventTimeFormatter =
+  LocalDateTime.Format {
+    // "h:mm a"
+    hour()
+    char(':')
+    minute()
+    char(' ')
+    amPmMarker("am", "pm")
+  }
 
 @Composable
 fun BasicPermitEvent(
@@ -323,11 +323,7 @@ fun BasicPermitEvent(
         .fillMaxSize()
         .padding(2.dp)
         .clipToBounds()
-        .background(
-          color,
-          shape =
-            RoundedCornerShape(4.dp),
-        )
+        .background(color, shape = RoundedCornerShape(4.dp))
         .padding(4.dp)
         .clickable(enabled = onEventClick != null) { onEventClick!!(event) }
   ) {

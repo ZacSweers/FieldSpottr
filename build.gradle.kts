@@ -1,8 +1,7 @@
-@file:OptIn(ExperimentalKotlinGradlePluginApi::class)
-
+// Copyright (C) 2024 Zac Sweers
+// SPDX-License-Identifier: Apache-2.0
 import com.diffplug.spotless.LineEnding
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
 
@@ -69,9 +68,7 @@ kotlin {
     }
   }
   jvm {
-    mainRun {
-      mainClass.set("dev.zacsweers.fieldspottr.MainKt")
-    }
+    mainRun { mainClass.set("dev.zacsweers.fieldspottr.MainKt") }
     compilerOptions {
       freeCompilerArgs.addAll(
         "-Xjsr305=strict",
@@ -200,7 +197,10 @@ composeCompiler {
 
 sqldelight { databases { create("FSDatabase") { packageName.set("dev.zacsweers.fieldspottr") } } }
 
-tasks.withType<JavaExec>().named{ it == "run" }.configureEach {
-  dependsOn("jvmJar")
-  classpath("jvmJar")
-}
+tasks
+  .withType<JavaExec>()
+  .named { it == "run" }
+  .configureEach {
+    dependsOn("jvmJar")
+    classpath("jvmJar")
+  }
