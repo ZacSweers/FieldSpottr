@@ -27,6 +27,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.slack.circuit.overlay.LocalOverlayHost
 import com.slack.circuit.retained.rememberRetained
@@ -122,7 +124,9 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     modifier = modifier,
     topBar = {
       CenterAlignedTopAppBar(
-        title = { Text("Field Spottr") },
+        title = {
+          Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
+        },
         actions = {
           IconButton(onClick = { state.eventSink(HomeScreen.Event.Refresh) }) {
             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
@@ -140,7 +144,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     },
   ) { innerPadding ->
     Column(Modifier.padding(innerPadding), verticalArrangement = spacedBy(16.dp)) {
-      GroupSelector2(
+      GroupSelector(
         state.selectedGroup,
         modifier = Modifier.align(CenterHorizontally).padding(horizontal = 16.dp),
       ) { newGroup ->
