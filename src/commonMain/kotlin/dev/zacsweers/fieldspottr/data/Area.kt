@@ -32,12 +32,11 @@ internal enum class Area(
       FieldGroup(
         "Grand Street",
         listOf(
-          Field("Soccer-02 Grand Street", "Field", "Grand Street"),
+          Field("Soccer-02 Grand Street", "Main Field", "Grand Street"),
           Field("Grand Street Mini Field-Soccer-03", "Mini Field", "Grand Street"),
         ),
         "ERP",
       ),
-      FieldGroup("Pier 42", listOf(Field("Pier 42 - Soccer-01", "Field", "Pier 42")), "ERP"),
     ),
   ),
   BARUCH(
@@ -69,6 +68,11 @@ internal enum class Area(
         "Corlears Hook",
       )
     ),
+  ),
+  PIER_42(
+    "Pier 42",
+    "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
+    listOf(FieldGroup("Pier 42", listOf(Field("Soccer-01", "Soccer", "Pier 42")), "ERP")),
   ),
   PETERS_FIELD(
     "Peter's Field",
