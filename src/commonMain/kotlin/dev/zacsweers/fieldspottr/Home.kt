@@ -156,14 +156,23 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       }
       val overlayHost = LocalOverlayHost.current
       val scope = rememberCoroutineScope()
-      PermitGrid(state, modifier = Modifier.align(CenterHorizontally)) { event ->
+      PermitGrid(state, modifier = Modifier.align(CenterHorizontally)) { event, duration ->
         scope.launch {
           overlayHost.show(
             alertDialogOverlay(
               title = { Text(event.name) },
-              text = { Text(event.org) },
+              text = {
+                Text(
+                  """
+                    $duration
+                    Org: ${event.org}
+                    Status: ${event.status}
+                  """
+                    .trimIndent()
+                )
+              },
               confirmButton = { onClick -> TextButton(onClick) { Text("Done") } },
-              dismissButton = { onClick -> TextButton(onClick) { Text("Cancel") } },
+              dismissButton = null,
             )
           )
         }

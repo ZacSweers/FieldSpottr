@@ -46,7 +46,7 @@ import kotlinx.datetime.toLocalDateTime
 fun PermitGrid(
   state: HomeScreen.State,
   modifier: Modifier = Modifier,
-  onEventClick: (DbPermit) -> Unit,
+  onEventClick: (DbPermit, String) -> Unit,
 ) {
   val group = Area.groups.getValue(state.selectedGroup)
   val fields = group.fields
@@ -131,13 +131,13 @@ fun PermitGrid(
                       !hasEventAfter -> EventSection.End
                       else -> EventSection.Middle
                     }
+                  val duration = "$start - $end"
                   PermitEvent(
                     modifier = Modifier.animateItemPlacement(),
-                    start = start,
-                    end = end,
+                    duration = duration,
                     section = section,
                     event = it,
-                    onEventClick = { onEventClick(event) },
+                    onEventClick = { onEventClick(event, duration) },
                   )
                 }
                 if (!hasEventAfter) {
@@ -175,8 +175,7 @@ val EventTimeFormatter =
 @Composable
 fun PermitEvent(
   event: DbPermit,
-  start: String,
-  end: String,
+  duration: String,
   section: EventSection,
   modifier: Modifier = Modifier,
   onEventClick: ((DbPermit) -> Unit)? = null,
@@ -202,7 +201,7 @@ fun PermitEvent(
   ) {
     if (section == Single || section == EventSection.Start) {
       Text(
-        text = "$start - $end",
+        text = duration,
         style = MaterialTheme.typography.bodySmall,
         maxLines = 1,
         overflow = TextOverflow.Clip,
