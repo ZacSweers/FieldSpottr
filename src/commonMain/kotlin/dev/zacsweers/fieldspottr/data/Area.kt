@@ -30,16 +30,6 @@ internal enum class Area(
         "ERP",
       ),
       FieldGroup(
-        "Baruch",
-        listOf(
-          Field("Baruch Playground - Softball-01", "Baruch Soccer Field 1", "Baruch"),
-          Field("Baruch Playground - Football-01", "Baruch Soccer Field 1", "Baruch"),
-          Field("Baruch Playground - Football-02", "Baruch Soccer Field 2", "Baruch"),
-          Field("Baruch Playground - Softball-02", "Baruch Soccer Field 2", "Baruch"),
-        ),
-        "ERP",
-      ),
-      FieldGroup(
         "Grand Street",
         listOf(
           Field("Soccer-02 Grand Street", "Grand Street", "Grand Street"),
@@ -56,6 +46,22 @@ internal enum class Area(
         ),
         "ERP",
       ),
+    ),
+  ),
+  BARUCH(
+    "Baruch",
+    "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
+    listOf(
+      FieldGroup(
+        "Baruch",
+        listOf(
+          Field("Softball-01", "Softball Field 1", "Baruch"),
+          Field("Football-01", "Soccer Field 1", "Baruch"),
+          Field("Football-02", "Soccer Field 2", "Baruch"),
+          Field("Softball-02", "Softball Field 2", "Baruch"),
+        ),
+        "Baruch",
+      )
     ),
   ),
   PETERS_FIELD(
