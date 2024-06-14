@@ -14,9 +14,9 @@ internal enum class Area(
       FieldGroup(
         "Track",
         listOf(
-          Field("Soccer-01A East 6th Street", "Field 1", "Track"),
-          Field("Soccer-01 East 6th Street", "Field 2", "Track"),
-          Field("Soccer-01B East 6th Street", "Field 3", "Track"),
+          Field("Soccer-01A East 6th Street", "North Half", "Track"),
+          Field("Soccer-01 East 6th Street", "Whole Field", "Track"),
+          Field("Soccer-01B East 6th Street", "South Half", "Track"),
         ),
         "ERP",
       ),
