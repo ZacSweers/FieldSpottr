@@ -1,6 +1,7 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
 import com.diffplug.spotless.LineEnding
+import kotlin.math.pow
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
@@ -162,11 +163,22 @@ dependencies.modules {
   module("com.google.guava:listenablefuture") { replacedBy("com.google.guava:guava") }
 }
 
+val appId = "dev.zacsweers.fieldspottr"
+
+val semVer = "0.1.0"
+// convert the version name to a binary number that grows with each release
+val code =
+  semVer.split(".").asReversed().withIndex().sumOf { (i, value) ->
+    value.toInt() * (2.0.pow(i)).toInt()
+  }
+
 android {
-  namespace = "dev.zacsweers.fieldspottr"
+  namespace = appId
   compileSdk = 34
 
   defaultConfig {
+    versionCode = code
+    versionName = semVer
     minSdk = 29
     targetSdk = 34
   }
@@ -180,14 +192,19 @@ android {
 
   lint { checkTestSources = true }
   buildTypes {
-    maybeCreate("debug").apply { matchingFallbacks += listOf("release") }
+    maybeCreate("debug").apply {
+      applicationIdSuffix = ".debug"
+      matchingFallbacks += listOf("release")
+    }
     maybeCreate("release").apply {
+      isDebuggable = false
       isMinifyEnabled = true
       signingConfig = signingConfigs.getByName("debug")
       matchingFallbacks += listOf("release")
       proguardFiles("proguardrules.pro")
     }
   }
+  bundle {}
   compileOptions { isCoreLibraryDesugaringEnabled = true }
   dependencies {
     add("coreLibraryDesugaring", libs.desugarJdkLibs)
@@ -201,8 +218,8 @@ compose {
       mainClass = "dev.zacsweers.fieldspottr.MainKt"
       nativeDistributions {
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-        packageName = "dev.zacsweers.fieldspottr"
-        packageVersion = "1.0.0"
+        packageName = appId
+        packageVersion = semVer
       }
     }
   }
