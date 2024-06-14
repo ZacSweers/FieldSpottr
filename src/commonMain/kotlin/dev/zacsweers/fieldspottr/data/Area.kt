@@ -38,14 +38,6 @@ internal enum class Area(
         "ERP",
       ),
       FieldGroup("Pier 42", listOf(Field("Pier 42 - Soccer-01", "Field", "Pier 42")), "ERP"),
-      FieldGroup(
-        "Corlears Hook",
-        listOf(
-          Field("Corlears Hook Park - Soccer-01", "Soccer", "Corlears Hook"),
-          Field("Corlears Hook Park - Softball-01", "Softball", "Corlears Hook"),
-        ),
-        "ERP",
-      ),
     ),
   ),
   BARUCH(
@@ -61,6 +53,20 @@ internal enum class Area(
           Field("Softball-02", "Softball 2", "Baruch"),
         ),
         "Baruch",
+      )
+    ),
+  ),
+  CORLEARS(
+    "Corlears Hook",
+    "https://www.nycgovparks.org/permits/field-and-court/issued/M017/csv",
+    listOf(
+      FieldGroup(
+        "Corlears Hook",
+        listOf(
+          Field("Soccer-01", "Soccer", "Corlears Hook"),
+          Field("Softball-01", "Softball", "Corlears Hook"),
+        ),
+        "Corlears Hook",
       )
     ),
   ),
