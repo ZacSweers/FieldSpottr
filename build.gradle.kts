@@ -165,7 +165,7 @@ dependencies.modules {
 
 val appId = "dev.zacsweers.fieldspottr"
 
-val semVer = "0.1.0"
+val semVer = "1.0.0"
 // convert the version name to a binary number that grows with each release
 val code =
   semVer.split(".").asReversed().withIndex().sumOf { (i, value) ->
@@ -199,7 +199,6 @@ android {
     maybeCreate("release").apply {
       isDebuggable = false
       isMinifyEnabled = true
-      signingConfig = signingConfigs.getByName("debug")
       matchingFallbacks += listOf("release")
       proguardFiles("proguardrules.pro")
     }
