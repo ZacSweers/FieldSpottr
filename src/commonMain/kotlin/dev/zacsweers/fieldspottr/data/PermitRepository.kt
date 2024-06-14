@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data
 
+import app.cash.sqldelight.coroutines.asFlow
 import dev.zacsweers.fieldspottr.DbArea
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
@@ -24,6 +25,9 @@ import io.ktor.utils.io.core.readBytes
 import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -37,7 +41,6 @@ import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
 import kotlinx.datetime.toInstant
-import kotlinx.datetime.toLocalDateTime
 import okio.Path
 import okio.buffer
 import okio.use
@@ -73,7 +76,6 @@ data class Field(val name: String, val displayName: String, val group: String)
 class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
-  private val logger: (String) -> Unit = {},
 ) {
   private val client = HttpClient(CIO)
 
@@ -88,101 +90,73 @@ class PermitRepository(
       }
   }
 
-  // TODO return a flow emitting log updates?
-  suspend fun populateDb(forceRefresh: Boolean) {
+  suspend fun populateDb(forceRefresh: Boolean): Boolean {
     val db = db()
+    // TODO could parallelize this
     for (area in Area.entries) {
-      db.populateDbFrom(area, forceRefresh)
+      val successful = db.populateDbFrom(area, forceRefresh)
+      if (!successful) {
+        return false
+      }
     }
-
-    val allPermits = db.fsdbQueries.getAllPermits().executeAsList()
-    val uniqueFields = allPermits.distinctBy { hashOf(it.fieldId, it.area) }
-    val earliestPermit = allPermits.minByOrNull { it.start }
-    val latestPermit = allPermits.maxByOrNull { it.end }
-    val message =
-      """
-        Populated database with permits from
-        - ${Area.entries.size} areas
-        - ${uniqueFields.size} unique fields
-        - ${allPermits.size} total permits
-        - Earliest permit: ${earliestPermit?.start}
-        - Latest permit: ${latestPermit?.start}
-        - Earliest permit (local): ${
-          earliestPermit?.start?.let {
-            Instant.fromEpochMilliseconds(it).toLocalDateTime(
-              NYC_TZ
-            )
-          }
-        }
-        - Latest permit (local): ${
-          latestPermit?.start?.let {
-            Instant.fromEpochMilliseconds(it).toLocalDateTime(
-              NYC_TZ
-            )
-          }
-        }
-      """
-        .trimIndent()
-    logger(message)
-    logger(
-      "Unique fields: ${uniqueFields.size}.\n${uniqueFields.joinToString("\n") { it.fieldId }}"
-    )
+    return true
   }
 
-  suspend fun loadPermits(date: LocalDate, group: String): List<DbPermit> =
-    withContext(Dispatchers.IO) {
-      val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
-      val endTime = startTime + 1.days.inWholeMilliseconds
-      logger("Loading permits from DB for $date")
-      logger("Start time is $startTime")
-      logger("End time is $endTime")
-      db().fsdbQueries.getPermits(group, startTime, endTime).executeAsList()
-    }
+  fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
+    val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
+    val endTime = startTime + 1.days.inWholeMilliseconds
+    // TODO kludge
+    return runBlocking { db() }
+      .fsdbQueries
+      .getPermits(group, startTime, endTime)
+      .asFlow()
+      .map { withContext(Dispatchers.IO) { it.executeAsList() } }
+  }
 
-  private suspend fun getOrFetchCsv(area: Area, forceRefresh: Boolean): Pair<Boolean, Path> {
+  private suspend fun getOrFetchCsv(area: Area): Path? {
     val targetPath = appDirs.userCache / "${area.areaName}.csv"
-    // TODO handle offline
     if (appDirs.fs.exists(targetPath)) {
-      if (!forceRefresh && (appDirs.fs.metadata(targetPath).size ?: 0) > 0) {
-        // If less than a week old use it
-        appDirs.fs.metadata(targetPath).lastModifiedAtMillis?.let { lastModifiedAtMillis ->
-          if (lastModifiedAtMillis > System.now().minus(7.days).toEpochMilliseconds()) {
-            return true to targetPath
-          }
-        }
-      }
       appDirs.delete(targetPath)
     }
-
-    // Create the file
     appDirs.touch(targetPath)
 
-    // TODO write to a tmp file first, copy over on success
-    appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
-      client
-        .prepareGet(area.csvUrl) {
-          // Lie and say we're a browser. NYC parks doesn't like bots
-          // TODO use a real user agent?
-          userAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-          )
-        }
-        .execute { httpResponse ->
-          val channel = httpResponse.body<ByteReadChannel>()
-          while (!channel.isClosedForRead) {
-            val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
-            while (!packet.isEmpty) {
-              val bytes = packet.readBytes()
-              sink.write(bytes)
-            }
-          }
-          logger("Saved CSV to $targetPath")
-        }
+    if (!downloadFile(area.csvUrl, targetPath)) {
+      appDirs.delete(targetPath)
+      return null
     }
-    return false to targetPath
+
+    return targetPath
   }
 
-  private suspend fun FSDatabase.populateDbFrom(area: Area, forceRefresh: Boolean) =
+  private suspend fun downloadFile(url: String, targetPath: Path): Boolean {
+    try {
+      appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
+        client
+          .prepareGet(url) {
+            // Lie and say we're a browser. NYC parks doesn't like bots
+            // TODO use a real user agent?
+            userAgent(
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+            )
+          }
+          .execute { httpResponse ->
+            val channel = httpResponse.body<ByteReadChannel>()
+            while (!channel.isClosedForRead) {
+              val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
+              while (!packet.isEmpty) {
+                val bytes = packet.readBytes()
+                sink.write(bytes)
+              }
+            }
+          }
+      }
+    } catch (e: Exception) {
+      return false
+    }
+    return true
+  }
+
+  private suspend fun FSDatabase.populateDbFrom(area: Area, forceRefresh: Boolean): Boolean =
     withContext(Dispatchers.IO) {
       val now = System.now()
       if (!forceRefresh) {
@@ -191,15 +165,14 @@ class PermitRepository(
           fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
         }
         if (lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)) {
-          logger("Skipping ${area.areaName} as it's up to date")
-          return@withContext
+          // Up to date
+          return@withContext true
         }
       }
 
-      logger("Populating DB from ${area.areaName}")
-      val (upToDate, csvFile) = getOrFetchCsv(area, forceRefresh)
-      if (upToDate) return@withContext
-      logger("Deleting existing permits")
+      val csvFile = getOrFetchCsv(area) ?: return@withContext false
+
+      // Clear existing permits if we have new ones
       transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
 
       appDirs.fs.source(csvFile).buffer().useLines { lines ->
@@ -216,7 +189,6 @@ class PermitRepository(
           val startTime = LocalDateTime.parse(start, FORMATTER)
           val endTime = LocalDateTime.parse(end, FORMATTER)
 
-          logger("Adding permit for $field from ${area.areaName} in $group")
           transaction {
             fsdbQueries.addPermit(
               DbPermit(
@@ -237,5 +209,6 @@ class PermitRepository(
       }
       // Log last update time
       transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
+      true
     }
 }

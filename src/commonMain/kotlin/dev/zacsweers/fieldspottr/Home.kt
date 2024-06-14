@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.slack.circuit.overlay.LocalOverlayHost
+import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
@@ -40,6 +41,7 @@ import dev.zacsweers.fieldspottr.data.NYC_TZ
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.Instant
@@ -71,24 +73,29 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
-  var dbLoaded by rememberRetained { mutableStateOf(false) }
+  var populateDb by rememberRetained { mutableStateOf(false) }
   var forceRefresh by rememberRetained { mutableStateOf(false) }
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
-  var permits by rememberRetained { mutableStateOf<PermitState?>(null) }
   var selectedGroup by rememberRetained { mutableStateOf(Area.entries[0].fieldGroups[0].name) }
-  if (!dbLoaded) {
-    LaunchedEffect(Unit) {
-      repository.populateDb(forceRefresh)
-      dbLoaded = true
-      forceRefresh = false
+
+  val permitsFlow =
+    remember(selectedDate, selectedGroup) {
+      repository.permitsFlow(selectedDate, selectedGroup).map { PermitState.fromPermits(it) }
     }
-    loadingMessage = "Populating DB..."
-  } else {
-    LaunchedEffect(selectedDate, selectedGroup) {
-      loadingMessage = "Loading permits..."
-      permits =
-        repository.loadPermits(selectedDate, selectedGroup).let { PermitState.fromPermits(it) }
-      loadingMessage = null
+  val permits by permitsFlow.collectAsRetainedState(null)
+
+  if (populateDb) {
+    LaunchedEffect(Unit) {
+      loadingMessage = "Populating DB..."
+      val successful = repository.populateDb(forceRefresh)
+      loadingMessage =
+        if (successful) {
+          null
+        } else {
+          "Failed to fetch areas. Please check connection and try again."
+        }
+      forceRefresh = false
+      populateDb = false
     }
   }
   return HomeScreen.State(
@@ -99,8 +106,8 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
   ) { event ->
     when (event) {
       is HomeScreen.Event.Refresh -> {
-        dbLoaded = false
         forceRefresh = true
+        populateDb = true
       }
       is HomeScreen.Event.FilterDate -> {
         selectedDate = event.date

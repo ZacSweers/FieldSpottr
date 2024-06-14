@@ -129,6 +129,7 @@ kotlin {
         implementation(libs.kotlinx.datetime)
         implementation(libs.coroutines)
         implementation(libs.sqldelight.async)
+        implementation(libs.sqldelight.coroutines)
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
       }
