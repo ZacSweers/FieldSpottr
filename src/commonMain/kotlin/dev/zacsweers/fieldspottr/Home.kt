@@ -4,10 +4,12 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -68,13 +70,15 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
   var dbLoaded by rememberRetained { mutableStateOf(false) }
+  var forceRefresh by rememberRetained { mutableStateOf(false) }
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
   var permits by rememberRetained { mutableStateOf<PermitState?>(null) }
   var selectedGroup by rememberRetained { mutableStateOf(Area.entries[0].fieldGroups[0].name) }
   if (!dbLoaded) {
     LaunchedEffect(Unit) {
-      repository.populateDb()
+      repository.populateDb(forceRefresh)
       dbLoaded = true
+      forceRefresh = false
     }
     loadingMessage = "Populating DB..."
   } else {
@@ -94,6 +98,7 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
     when (event) {
       is HomeScreen.Event.Refresh -> {
         dbLoaded = false
+        forceRefresh = true
       }
       is HomeScreen.Event.FilterDate -> {
         selectedDate = event.date
@@ -115,7 +120,19 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   }
   Scaffold(
     modifier = modifier,
-    topBar = { CenterAlignedTopAppBar(title = { Text("Field Spottr") }) },
+    topBar = {
+      CenterAlignedTopAppBar(
+        title = { Text("Field Spottr") },
+        actions = {
+          IconButton(onClick = { state.eventSink(HomeScreen.Event.Refresh) }) {
+            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+          }
+        },
+      )
+    },
+    floatingActionButton = {
+      DateSelector(state.date) { newDate -> state.eventSink(HomeScreen.Event.FilterDate(newDate)) }
+    },
     snackbarHost = {
       SnackbarHost(hostState = snackbarHostState) { snackbarData ->
         Snackbar(snackbarData = snackbarData)
@@ -123,20 +140,11 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     },
   ) { innerPadding ->
     Column(Modifier.padding(innerPadding), verticalArrangement = spacedBy(16.dp)) {
-      Row(
-        horizontalArrangement = spacedBy(16.dp),
+      GroupSelector(
+        state.selectedGroup,
         modifier = Modifier.align(CenterHorizontally).padding(horizontal = 16.dp),
-      ) {
-        DateSelector(state.date) { newDate ->
-          state.eventSink(HomeScreen.Event.FilterDate(newDate))
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        // TODO why does this take the whole space
-        GroupSelector(state.selectedGroup) { newGroup ->
-          state.eventSink(HomeScreen.Event.ChangeGroup(newGroup))
-        }
+      ) { newGroup ->
+        state.eventSink(HomeScreen.Event.ChangeGroup(newGroup))
       }
 
       if (state.loadingMessage == null && state.permits == null) {

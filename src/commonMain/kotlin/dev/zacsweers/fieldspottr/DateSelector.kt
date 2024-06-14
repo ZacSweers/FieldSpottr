@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -57,5 +60,9 @@ fun DateSelector(
       DatePicker(datePickerState)
     }
   }
-  OutlinedButton(onClick = { showDatePicker = true }) { Text(currentDate.toString()) }
+  ExtendedFloatingActionButton(
+    onClick = { showDatePicker = true },
+    text = { Text(currentDate.toString()) },
+    icon = { Icon(Icons.Default.DateRange, contentDescription = "Select date") },
+  )
 }

@@ -86,10 +86,10 @@ class PermitRepository(
   }
 
   // TODO return a flow emitting log updates?
-  suspend fun populateDb() {
+  suspend fun populateDb(forceRefresh: Boolean) {
     val db = db()
     for (area in Area.entries) {
-      db.populateDbFrom(area)
+      db.populateDbFrom(area, forceRefresh)
     }
 
     val allPermits = db.fsdbQueries.getAllPermits().executeAsList()
@@ -136,10 +136,10 @@ class PermitRepository(
       db().fsdbQueries.getPermits(group, startTime, endTime).executeAsList()
     }
 
-  private suspend fun getOrFetchCsv(area: Area): Pair<Boolean, Path> {
+  private suspend fun getOrFetchCsv(area: Area, forceRefresh: Boolean): Pair<Boolean, Path> {
     val targetPath = appDirs.userCache / "${area.areaName}.csv"
     if (appDirs.fs.exists(targetPath)) {
-      if ((appDirs.fs.metadata(targetPath).size ?: 0) > 0) {
+      if (!forceRefresh && (appDirs.fs.metadata(targetPath).size ?: 0) > 0) {
         // If less than a week old use it
         appDirs.fs.metadata(targetPath).lastModifiedAtMillis?.let { lastModifiedAtMillis ->
           if (lastModifiedAtMillis > System.now().minus(7.days).toEpochMilliseconds()) {
@@ -184,20 +184,22 @@ class PermitRepository(
     use { body(lines) }
   }
 
-  private suspend fun FSDatabase.populateDbFrom(area: Area) =
+  private suspend fun FSDatabase.populateDbFrom(area: Area, forceRefresh: Boolean) =
     withContext(Dispatchers.IO) {
-      // Check area last update in the DB. If it's less than a week old, skip it
-      val lastUpdate = transactionWithResult {
-        fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
-      }
-      val now = System.now().minus(7.days)
-      if (lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)) {
-        logger("Skipping ${area.areaName} as it's up to date")
-        return@withContext
+      val now = System.now()
+      if (!forceRefresh) {
+        // Check area last update in the DB. If it's less than a week old, skip it
+        val lastUpdate = transactionWithResult {
+          fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
+        }
+        if (lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)) {
+          logger("Skipping ${area.areaName} as it's up to date")
+          return@withContext
+        }
       }
 
       logger("Populating DB from ${area.areaName}")
-      val (upToDate, csvFile) = getOrFetchCsv(area)
+      val (upToDate, csvFile) = getOrFetchCsv(area, forceRefresh)
       if (upToDate) return@withContext
       logger("Deleting existing permits")
       transaction { fsdbQueries.deleteAreaPermits(area.areaName) }

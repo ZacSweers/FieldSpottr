@@ -26,7 +26,6 @@ import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Alignment.Companion.TopStart
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -114,7 +113,6 @@ fun PermitGrid(
                 end = end,
                 section = section,
                 event = it,
-                color = Color.Red,
                 onEventClick = { onEventClick(event) },
               )
             }
@@ -154,7 +152,6 @@ val EventTimeFormatter =
 @Composable
 fun PermitEvent(
   event: DbPermit,
-  color: Color,
   start: String,
   end: String,
   section: EventSection,
@@ -168,7 +165,7 @@ fun PermitEvent(
         .padding(top = section.topPadding, bottom = section.bottomPadding, start = 2.dp, end = 2.dp)
         .clipToBounds()
         .background(
-          color,
+          MaterialTheme.colorScheme.primaryContainer,
           shape =
             RoundedCornerShape(
               topStart = section.topCornerPadding,
@@ -186,6 +183,7 @@ fun PermitEvent(
         style = MaterialTheme.typography.bodySmall,
         maxLines = 1,
         overflow = TextOverflow.Clip,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
       )
 
       Text(
@@ -193,6 +191,7 @@ fun PermitEvent(
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
         overflow = TextOverflow.Ellipsis,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
       )
     }
   }

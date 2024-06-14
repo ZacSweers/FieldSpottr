@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -32,7 +31,7 @@ fun GroupSelector(
   ) {
     OutlinedTextField(
       value = selectedGroup,
-      modifier = Modifier.menuAnchor().wrapContentWidth(),
+      modifier = Modifier.menuAnchor(),
       textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End),
       onValueChange = {},
       readOnly = true,
