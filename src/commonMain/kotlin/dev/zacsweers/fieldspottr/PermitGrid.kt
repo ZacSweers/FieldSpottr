@@ -16,13 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment.Companion.BottomCenter
-import androidx.compose.ui.Alignment.Companion.CenterEnd
-import androidx.compose.ui.Alignment.Companion.CenterStart
-import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Alignment.Companion.TopStart
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -53,10 +49,10 @@ fun PermitGrid(
     items(25 * numColumns) { index ->
       val rowNumber = index / numColumns
       val columnNumber = index % numColumns
-      Box(Modifier.aspectRatio(4f / 3)) {
-        if (columnNumber == 0 && rowNumber == 0) {
-          // Do nothing
-        } else if (columnNumber == 0) {
+      if (columnNumber == 0 && rowNumber == 0) {
+        // Do nothing
+      } else if (columnNumber == 0) {
+        Box {
           val adjustedTime = ((rowNumber - 1) % 12).let { if (it == 0) 12 else it }
           val amPm = if (rowNumber <= 12) "AM" else "PM"
           Text(
@@ -66,63 +62,54 @@ fun PermitGrid(
             modifier = Modifier.align(TopStart).fillMaxWidth(),
             style = MaterialTheme.typography.labelSmall,
           )
-          HorizontalDivider(
-            modifier = Modifier.align(TopEnd).fillMaxWidth(0.25f),
-            thickness = Dp.Hairline,
-          )
-        } else if (rowNumber == 0) {
-          // Name of the field as a header
-          Text(
-            fields[columnNumber - 1].displayName,
-            textAlign = TextAlign.Center,
-            fontWeight = FontWeight.Bold,
-          )
-          HorizontalDivider(modifier = Modifier.align(BottomCenter), thickness = Dp.Hairline)
-        } else {
-          val event = getEvent(state, fields, columnNumber, rowNumber)
-          val eventBefore = getEvent(state, fields, columnNumber, rowNumber - 1)
-          val eventAfter = getEvent(state, fields, columnNumber, rowNumber + 1)
+        }
+      } else if (rowNumber == 0) {
+        // Name of the field as a header
+        Text(
+          fields[columnNumber - 1].displayName,
+          textAlign = TextAlign.Center,
+          fontWeight = FontWeight.Bold,
+        )
+      } else {
+        val event = getEvent(state, fields, columnNumber, rowNumber)
+        val eventBefore = getEvent(state, fields, columnNumber, rowNumber - 1)
+        val eventAfter = getEvent(state, fields, columnNumber, rowNumber + 1)
 
-          val hasEventBefore = eventBefore != null && eventBefore == event
-          val hasEventAfter = eventAfter != null && eventAfter == event
+        val hasEventBefore = eventBefore != null && eventBefore == event
+        val hasEventAfter = eventAfter != null && eventAfter == event
 
-          Box {
-            event?.let {
-              val start =
-                remember(event.start) {
-                  EventTimeFormatter.format(
-                    Instant.fromEpochMilliseconds(event.start).toLocalDateTime(NYC_TZ)
-                  )
-                }
-              val end =
-                remember(event.end) {
-                  EventTimeFormatter.format(
-                    Instant.fromEpochMilliseconds(event.end).toLocalDateTime(NYC_TZ)
-                  )
-                }
-              val section =
-                when {
-                  !hasEventBefore && !hasEventAfter -> Single
-                  !hasEventBefore -> EventSection.Start
-                  !hasEventAfter -> EventSection.End
-                  else -> EventSection.Middle
-                }
-              PermitEvent(
-                modifier = Modifier.animateItemPlacement(),
-                start = start,
-                end = end,
-                section = section,
-                event = it,
-                onEventClick = { onEventClick(event) },
-              )
-            }
-            if (columnNumber == 1 && !hasEventAfter) {
-              VerticalDivider(thickness = Dp.Hairline, modifier = Modifier.align(CenterStart))
-            }
-            VerticalDivider(thickness = Dp.Hairline, modifier = Modifier.align(CenterEnd))
-            if (!hasEventAfter) {
-              HorizontalDivider(thickness = Dp.Hairline, modifier = Modifier.align(BottomCenter))
-            }
+        Box(Modifier.aspectRatio(4f / 3)) {
+          event?.let {
+            val start =
+              remember(event.start) {
+                EventTimeFormatter.format(
+                  Instant.fromEpochMilliseconds(event.start).toLocalDateTime(NYC_TZ)
+                )
+              }
+            val end =
+              remember(event.end) {
+                EventTimeFormatter.format(
+                  Instant.fromEpochMilliseconds(event.end).toLocalDateTime(NYC_TZ)
+                )
+              }
+            val section =
+              when {
+                !hasEventBefore && !hasEventAfter -> Single
+                !hasEventBefore -> EventSection.Start
+                !hasEventAfter -> EventSection.End
+                else -> EventSection.Middle
+              }
+            PermitEvent(
+              modifier = Modifier.animateItemPlacement(),
+              start = start,
+              end = end,
+              section = section,
+              event = it,
+              onEventClick = { onEventClick(event) },
+            )
+          }
+          if (!hasEventAfter) {
+            HorizontalDivider(thickness = Dp.Hairline, modifier = Modifier.align(BottomCenter))
           }
         }
       }
@@ -137,9 +124,7 @@ private fun getEvent(
   rowNumber: Int,
 ): DbPermit? {
   return state.permits?.let {
-    it.fields[fields[columnNumber - 1].displayName]?.permits?.let { permits ->
-      permits[rowNumber - 1]
-    }
+    it.fields[fields[columnNumber - 1].name]?.permits?.let { permits -> permits[rowNumber - 1] }
   }
 }
 
@@ -165,7 +150,7 @@ fun PermitEvent(
         .padding(top = section.topPadding, bottom = section.bottomPadding, start = 2.dp, end = 2.dp)
         .clipToBounds()
         .background(
-          MaterialTheme.colorScheme.primaryContainer,
+          MaterialTheme.colorScheme.tertiaryContainer,
           shape =
             RoundedCornerShape(
               topStart = section.topCornerPadding,
@@ -183,7 +168,7 @@ fun PermitEvent(
         style = MaterialTheme.typography.bodySmall,
         maxLines = 1,
         overflow = TextOverflow.Clip,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        color = MaterialTheme.colorScheme.onTertiaryContainer,
       )
 
       Text(
@@ -191,7 +176,7 @@ fun PermitEvent(
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
         overflow = TextOverflow.Ellipsis,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        color = MaterialTheme.colorScheme.onTertiaryContainer,
       )
     }
   }

@@ -34,6 +34,7 @@ import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuitx.overlays.alertDialogOverlay
 import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.data.NYC_TZ
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
@@ -140,7 +141,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     },
   ) { innerPadding ->
     Column(Modifier.padding(innerPadding), verticalArrangement = spacedBy(16.dp)) {
-      GroupSelector(
+      GroupSelector2(
         state.selectedGroup,
         modifier = Modifier.align(CenterHorizontally).padding(horizontal = 16.dp),
       ) { newGroup ->
@@ -194,7 +195,7 @@ data class PermitState(val fields: Map<String, FieldState>) {
       val fields =
         permits
           .groupBy { areasByName.getValue(it.area).fieldMappings.getValue(it.fieldId) }
-          .mapKeys { it.key.displayName }
+          .mapKeys { it.key.name }
           .mapValues { (_, permits) -> FieldState.fromPermits(permits) }
       return PermitState(fields)
     }

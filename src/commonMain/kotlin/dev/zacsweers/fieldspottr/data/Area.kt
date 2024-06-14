@@ -14,35 +14,35 @@ internal enum class Area(
       FieldGroup(
         "Track",
         listOf(
-          Field("Soccer-01A East 6th Street", "Track Field 1", "Track"),
-          Field("Soccer-01 East 6th Street", "Track Field 2", "Track"),
-          Field("Soccer-01B East 6th Street", "Track Field 3", "Track"),
+          Field("Soccer-01A East 6th Street", "Field 1", "Track"),
+          Field("Soccer-01 East 6th Street", "Field 2", "Track"),
+          Field("Soccer-01B East 6th Street", "Field 3", "Track"),
         ),
         "ERP",
       ),
       FieldGroup(
         "Field 6",
         listOf(
-          Field("Baseball-06", "Field 6 (Baseball)", "Field 6"),
-          Field("Softball-05", "Field 6 (Baseball)", "Field 6"),
-          Field("Soccer-03 Houston St & FDR", "Field 6 (Outfield)", "Field 6"),
+          Field("Baseball-06", "Baseball 6", "Field 6"),
+          Field("Softball-05", "Baseball 5", "Field 6"),
+          Field("Soccer-03 Houston St & FDR", "Outfield", "Field 6"),
         ),
         "ERP",
       ),
       FieldGroup(
         "Grand Street",
         listOf(
-          Field("Soccer-02 Grand Street", "Grand Street", "Grand Street"),
-          Field("Grand Street Mini Field-Soccer-03", "Grand Street Mini Field", "Grand Street"),
+          Field("Soccer-02 Grand Street", "Field", "Grand Street"),
+          Field("Grand Street Mini Field-Soccer-03", "Mini Field", "Grand Street"),
         ),
         "ERP",
       ),
-      FieldGroup("Pier 42", listOf(Field("Pier 42 - Soccer-01", "Pier 42", "Pier 42")), "ERP"),
+      FieldGroup("Pier 42", listOf(Field("Pier 42 - Soccer-01", "Field", "Pier 42")), "ERP"),
       FieldGroup(
         "Corlears Hook",
         listOf(
-          Field("Corlears Hook Park - Soccer-01", "Corlears Hook (Soccer)", "Corlears Hook"),
-          Field("Corlears Hook Park - Softball-01", "Corlears Hook (Softball)", "Corlears Hook"),
+          Field("Corlears Hook Park - Soccer-01", "Soccer", "Corlears Hook"),
+          Field("Corlears Hook Park - Softball-01", "Softball", "Corlears Hook"),
         ),
         "ERP",
       ),
@@ -55,10 +55,10 @@ internal enum class Area(
       FieldGroup(
         "Baruch",
         listOf(
-          Field("Softball-01", "Softball Field 1", "Baruch"),
-          Field("Football-01", "Soccer Field 1", "Baruch"),
-          Field("Football-02", "Soccer Field 2", "Baruch"),
-          Field("Softball-02", "Softball Field 2", "Baruch"),
+          Field("Softball-01", "Softball 1", "Baruch"),
+          Field("Football-01", "Soccer 1", "Baruch"),
+          Field("Football-02", "Soccer 2", "Baruch"),
+          Field("Softball-02", "Softball 2", "Baruch"),
         ),
         "Baruch",
       )
@@ -71,8 +71,8 @@ internal enum class Area(
       FieldGroup(
         "Peter's Field",
         listOf(
-          Field("Soccer-01", "Peter's Field (Soccer)", "Peter's Field"),
-          Field("Softball-01", "Peter's Field (Softball)", "Peter's Field"),
+          Field("Soccer-01", "Soccer", "Peter's Field"),
+          Field("Softball-01", "Softball", "Peter's Field"),
         ),
         "Peter's Field",
       )
