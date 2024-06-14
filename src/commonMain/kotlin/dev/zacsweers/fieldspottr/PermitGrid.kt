@@ -61,7 +61,7 @@ fun PermitGrid(
     val earliestPermit = state.permits.fields.values.flatMap { it.permits.keys }.minOrNull() ?: 8
     listState.scrollToItem(earliestPermit, 0)
   }
-  val isScrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+  val isScrolled by remember { derivedStateOf { listState.firstVisibleItemScrollOffset > 0 } }
 
   // Names of the fields as a header
   Column(modifier) {
