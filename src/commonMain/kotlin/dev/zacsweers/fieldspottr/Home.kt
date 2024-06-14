@@ -34,7 +34,6 @@ import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuitx.overlays.alertDialogOverlay
 import dev.zacsweers.fieldspottr.data.Area
-import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.data.NYC_TZ
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
