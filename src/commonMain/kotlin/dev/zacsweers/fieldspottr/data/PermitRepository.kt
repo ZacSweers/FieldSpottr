@@ -13,6 +13,7 @@ import dev.zacsweers.fieldspottr.touch
 import dev.zacsweers.fieldspottr.util.component6
 import dev.zacsweers.fieldspottr.util.component7
 import dev.zacsweers.fieldspottr.util.hashOf
+import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.useLines
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -91,13 +92,16 @@ class PermitRepository(
   }
 
   suspend fun populateDb(forceRefresh: Boolean): Boolean {
-    val db = db()
-    // TODO could parallelize this
-    for (area in Area.entries) {
-      val successful = db.populateDbFrom(area, forceRefresh)
-      if (!successful) {
-        return false
+    // Parallelize, but unfortunately we can't escape the try/catch here
+    try {
+      Area.entries.parallelForEach(parallelism = Area.entries.size) { area ->
+        val successful = db().populateDbFrom(area, forceRefresh)
+        if (!successful) {
+          throw Exception()
+        }
       }
+    } catch (e: Exception) {
+      return false
     }
     return true
   }
