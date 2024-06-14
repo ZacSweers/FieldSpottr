@@ -7,6 +7,12 @@ import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.SqlDriverFactory
+import dev.zacsweers.fieldspottr.delete
+import dev.zacsweers.fieldspottr.touch
+import dev.zacsweers.fieldspottr.util.component6
+import dev.zacsweers.fieldspottr.util.component7
+import dev.zacsweers.fieldspottr.util.hashOf
+import dev.zacsweers.fieldspottr.util.useLines
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
@@ -32,10 +38,7 @@ import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
-import okio.BufferedSource
-import okio.FileSystem
 import okio.Path
-import okio.SYSTEM
 import okio.buffer
 import okio.use
 
@@ -138,6 +141,7 @@ class PermitRepository(
 
   private suspend fun getOrFetchCsv(area: Area, forceRefresh: Boolean): Pair<Boolean, Path> {
     val targetPath = appDirs.userCache / "${area.areaName}.csv"
+    // TODO handle offline
     if (appDirs.fs.exists(targetPath)) {
       if (!forceRefresh && (appDirs.fs.metadata(targetPath).size ?: 0) > 0) {
         // If less than a week old use it
@@ -147,12 +151,13 @@ class PermitRepository(
           }
         }
       }
-      appDirs.fs.delete(targetPath)
+      appDirs.delete(targetPath)
     }
 
     // Create the file
-    appDirs.fs.touch(targetPath)
+    appDirs.touch(targetPath)
 
+    // TODO write to a tmp file first, copy over on success
     appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
       client
         .prepareGet(area.csvUrl) {
@@ -177,13 +182,6 @@ class PermitRepository(
     return false to targetPath
   }
 
-  private val BufferedSource.lines: Sequence<String>
-    get() = generateSequence(::readUtf8Line)
-
-  private inline fun BufferedSource.useLines(body: (Sequence<String>) -> Unit) {
-    use { body(lines) }
-  }
-
   private suspend fun FSDatabase.populateDbFrom(area: Area, forceRefresh: Boolean) =
     withContext(Dispatchers.IO) {
       val now = System.now()
@@ -204,7 +202,7 @@ class PermitRepository(
       logger("Deleting existing permits")
       transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
 
-      FileSystem.SYSTEM.source(csvFile).buffer().useLines { lines ->
+      appDirs.fs.source(csvFile).buffer().useLines { lines ->
         lines.drop(1).forEach { line ->
           val (start, end, field, type, name, org, status) =
             line.split(",").map { it.removeSurrounding("\"") }
@@ -240,26 +238,4 @@ class PermitRepository(
       // Log last update time
       transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
     }
-}
-
-private operator fun <E> List<E>.component6(): E {
-  return this[5]
-}
-
-private operator fun <E> List<E>.component7(): E {
-  return this[6]
-}
-
-private fun FileSystem.touch(path: Path) {
-  path.parent?.let { createDirectories(it) }
-  sink(path).buffer().use {}
-}
-
-private fun hashOf(vararg inputs: Any): Int {
-  var hash = 0
-  for (v in inputs) {
-    hash += v.hashCode()
-    hash *= 31
-  }
-  return hash
 }
