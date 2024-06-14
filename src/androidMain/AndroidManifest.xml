@@ -5,7 +5,9 @@
 
   <application
       android:enableOnBackInvokedCallback="true"
+      android:icon="@mipmap/ic_launcher"
       android:label="FieldSpottr"
+      android:roundIcon="@mipmap/ic_launcher"
       android:theme="@style/Theme.AppCompat.Light.NoActionBar">
     <activity
         android:name="dev.zacsweers.fieldspottr.MainActivity"
