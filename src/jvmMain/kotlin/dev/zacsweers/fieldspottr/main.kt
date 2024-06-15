@@ -13,12 +13,11 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import dev.zacsweers.fieldspottr.data.PermitRepository
-import okio.FileSystem
+import dev.zacsweers.fieldspottr.di.FSComponent
+import dev.zacsweers.fieldspottr.di.JvmSharedPlatformFSComponent
 
 fun main() {
-  val appDirs = DesktopFSAppDirs(FileSystem.SYSTEM)
-  val petRepository = PermitRepository(SqlDriverFactory(appDirs), appDirs)
+  val component = FSComponent(JvmSharedPlatformFSComponent())
   application {
     val windowState =
       rememberWindowState(
@@ -43,7 +42,7 @@ fun main() {
         }
       },
     ) {
-      FieldSpottrApp(petRepository, ::exitApplication)
+      FieldSpottrApp(component, ::exitApplication)
     }
   }
 }

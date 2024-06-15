@@ -87,6 +87,34 @@ internal enum class Area(
         "Peter's Field",
       )
     ),
+  ),
+  MCCARREN(
+    "McCarren",
+    "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
+    listOf(
+      FieldGroup(
+        "McCarren Track",
+        listOf(
+          Field("Soccer-01", "Soccer", "McCarren"),
+        ),
+        "McCarren",
+      )
+    ),
+  ),
+  BIP(
+    "Bushwick Inlet Park",
+    "https://www.nycgovparks.org/permits/field-and-court/issued/B529/csv",
+    listOf(
+      FieldGroup(
+        "Bushwick Inlet Park",
+        listOf(
+          Field("Soccer-01A", "West Half", "Bushwick Inlet Park"),
+          Field("Soccer-01", "Whole Field", "Bushwick Inlet Park"),
+          Field("Soccer-01B", "East Half", "Bushwick Inlet Park"),
+        ),
+        "Bushwick Inlet Park",
+      )
+    ),
   );
 
   val fieldMappings: Map<String, Field> by lazy {

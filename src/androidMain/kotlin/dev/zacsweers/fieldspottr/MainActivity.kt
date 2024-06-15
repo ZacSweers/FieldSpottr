@@ -3,20 +3,21 @@
 package dev.zacsweers.fieldspottr
 
 import android.os.Bundle
+import android.os.StrictMode
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import dev.zacsweers.fieldspottr.data.PermitRepository
-import okio.FileSystem
+import dev.zacsweers.fieldspottr.di.AndroidSharedPlatformFSComponent
+import dev.zacsweers.fieldspottr.di.FSComponent
 
 class MainActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    StrictMode.enableDefaults()
 
-    val appDirs = ContextFSAppDirs(this, FileSystem.SYSTEM)
-    val permitRepository = PermitRepository(SqlDriverFactory(this), appDirs)
-    setContent { FieldSpottrApp(permitRepository, onRootPop = ::finish) }
+    val component = FSComponent(AndroidSharedPlatformFSComponent(applicationContext))
+    setContent { FieldSpottrApp(component, onRootPop = ::finish) }
   }
 }

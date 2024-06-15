@@ -7,7 +7,7 @@ import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
 
-class DesktopFSAppDirs(override val fs: FileSystem) : FSAppDirs {
+class DesktopFSAppDirs(override val fs: FileSystem = FileSystem.SYSTEM) : FSAppDirs {
 
   private val appDirs = AppDirsFactory.getInstance()
 

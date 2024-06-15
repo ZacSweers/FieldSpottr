@@ -104,7 +104,7 @@ kotlin {
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
   listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
-    it.binaries.framework { baseName = "fieldspottr" }
+    it.binaries.framework { baseName = "FieldSpottrKt" }
   }
 
   compilerOptions {
