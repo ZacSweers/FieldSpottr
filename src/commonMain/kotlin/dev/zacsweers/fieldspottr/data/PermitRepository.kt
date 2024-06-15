@@ -27,8 +27,10 @@ import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -109,12 +111,16 @@ class PermitRepository(
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
-    // TODO kludge
-    return runBlocking { db() }
-      .fsdbQueries
-      .getPermits(group, startTime, endTime)
-      .asFlow()
-      .map { withContext(Dispatchers.IO) { it.executeAsList() } }
+    return flow {
+        val db = db()
+        emitAll(
+          db.fsdbQueries.getPermits(group, startTime, endTime).asFlow().map { query ->
+            db.transactionWithResult { query.executeAsList() }
+          }
+        )
+      }
+      // Adhere to Flow invariant
+      .flowOn(Dispatchers.IO)
   }
 
   private suspend fun getOrFetchCsv(area: Area): Path? {

@@ -80,7 +80,7 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
 
   val permitsFlow =
     remember(selectedDate, selectedGroup) {
-      repository.permitsFlow(selectedDate, selectedGroup).map { PermitState.fromPermits(it) }
+      repository.permitsFlow(selectedDate, selectedGroup).map(PermitState::fromPermits)
     }
   val permits by permitsFlow.collectAsRetainedState(null)
 
