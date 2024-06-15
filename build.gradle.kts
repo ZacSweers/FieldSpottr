@@ -124,7 +124,6 @@ kotlin {
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
         implementation(libs.ktor.client)
-        implementation(libs.ktor.client.engine.cio)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
@@ -140,6 +139,7 @@ kotlin {
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.coroutines.android)
         implementation(libs.sqldelight.driver.android)
+        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.androidx.appCompat)
         implementation(libs.androidx.compose.integration.activity)
       }
@@ -149,10 +149,12 @@ kotlin {
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.sqldelight.driver.jdbc)
         implementation(compose.desktop.currentOs)
+        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.appDirs)
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
+    iosMain { dependencies { implementation(libs.ktor.client.engine.darwin) } }
   }
 }
 

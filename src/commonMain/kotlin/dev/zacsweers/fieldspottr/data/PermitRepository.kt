@@ -18,7 +18,6 @@ import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.useLines
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.prepareGet
 import io.ktor.http.userAgent
 import io.ktor.utils.io.ByteReadChannel
@@ -79,7 +78,7 @@ class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
 ) {
-  private val client = lazySuspend { HttpClient(CIO) }
+  private val client = lazySuspend { HttpClient() }
 
   private val db = lazySuspend {
     val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
@@ -153,6 +152,7 @@ class PermitRepository(
           }
       }
     } catch (e: Exception) {
+      println("Failed to download CSV file:\n${e.stackTraceToString()}")
       return false
     }
     return true
