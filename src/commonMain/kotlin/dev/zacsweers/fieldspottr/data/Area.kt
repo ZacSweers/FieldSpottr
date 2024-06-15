@@ -92,13 +92,7 @@ internal enum class Area(
     "McCarren",
     "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
     listOf(
-      FieldGroup(
-        "McCarren Track",
-        listOf(
-          Field("Soccer-01", "Soccer", "McCarren"),
-        ),
-        "McCarren",
-      )
+      FieldGroup("McCarren Track", listOf(Field("Soccer-01", "Soccer", "McCarren")), "McCarren")
     ),
   ),
   BIP(

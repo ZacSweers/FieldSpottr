@@ -1,3 +1,5 @@
+// Copyright (C) 2024 Zac Sweers
+// SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.di
 
 import androidx.compose.runtime.Immutable
@@ -15,7 +17,8 @@ interface SharedPlatformFSComponent {
 }
 
 @Immutable
-class FSComponent(private val shared: SharedPlatformFSComponent): SharedPlatformFSComponent by shared {
+class FSComponent(private val shared: SharedPlatformFSComponent) :
+  SharedPlatformFSComponent by shared {
   fun providePermitRepository(): PermitRepository =
     PermitRepository(SqlDriverFactory(), provideFSAppDirs())
 
