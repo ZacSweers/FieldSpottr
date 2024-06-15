@@ -13,6 +13,7 @@ import dev.zacsweers.fieldspottr.touch
 import dev.zacsweers.fieldspottr.util.component6
 import dev.zacsweers.fieldspottr.util.component7
 import dev.zacsweers.fieldspottr.util.hashOf
+import dev.zacsweers.fieldspottr.util.lazySuspend
 import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.useLines
 import io.ktor.client.HttpClient
@@ -29,10 +30,7 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.Instant
@@ -80,17 +78,11 @@ class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
 ) {
-  private val client = HttpClient(CIO)
+  private val client = lazySuspend { HttpClient(CIO) }
 
-  private val _db: FSDatabase? = null
-  private val dbInitMutex = Mutex()
-
-  private suspend fun db(): FSDatabase {
-    return _db
-      ?: dbInitMutex.withLock {
-        val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
-        FSDatabase(driver)
-      }
+  private val db = lazySuspend {
+    val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
+    FSDatabase(driver)
   }
 
   suspend fun populateDb(forceRefresh: Boolean): Boolean {
@@ -103,6 +95,7 @@ class PermitRepository(
         }
       }
     } catch (e: Exception) {
+      println("Failed to populate DB:\n${e.stackTraceToString()}")
       return false
     }
     return true
@@ -112,15 +105,12 @@ class PermitRepository(
     val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
     return flow {
-        val db = db()
-        emitAll(
-          db.fsdbQueries.getPermits(group, startTime, endTime).asFlow().map { query ->
-            db.transactionWithResult { query.executeAsList() }
-          }
-        )
-      }
-      // Adhere to Flow invariant
-      .flowOn(Dispatchers.IO)
+      emitAll(
+        db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().map { query ->
+          db().transactionWithResult { query.executeAsList() }
+        }
+      )
+    }
   }
 
   private suspend fun getOrFetchCsv(area: Area): Path? {
@@ -141,7 +131,7 @@ class PermitRepository(
   private suspend fun downloadFile(url: String, targetPath: Path): Boolean {
     try {
       appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
-        client
+        client()
           .prepareGet(url) {
             // Lie and say we're a browser. NYC parks doesn't like bots
             // TODO use a real user agent?
