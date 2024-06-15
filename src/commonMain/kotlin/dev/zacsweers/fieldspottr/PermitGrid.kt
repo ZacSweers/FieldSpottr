@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -86,7 +85,10 @@ fun PermitGrid(
         }
       }
     }
-    LazyColumn(modifier = Modifier.padding(16.dp), state = listState) {
+    LazyColumn(
+      modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+      state = listState,
+    ) {
       for (rowNumber in 0..<24) {
         item(key = rowNumber) {
           Row(Modifier.animateItemPlacement()) {
