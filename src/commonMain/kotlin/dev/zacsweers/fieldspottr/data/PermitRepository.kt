@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data
 
 import app.cash.sqldelight.coroutines.asFlow
+import app.cash.sqldelight.coroutines.mapToList
 import dev.zacsweers.fieldspottr.DbArea
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
@@ -106,9 +107,7 @@ class PermitRepository(
     val endTime = startTime + 1.days.inWholeMilliseconds
     return flow {
         emitAll(
-          db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().map { query ->
-            db().transactionWithResult { query.executeAsList() }
-          }
+          db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
         )
       }
       .flowOn(Dispatchers.IO)
