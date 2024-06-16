@@ -131,7 +131,8 @@ class PermitRepository(
         client()
           .prepareGet(url) {
             // Lie and say we're a browser. NYC parks doesn't like bots
-            // TODO use a real user agent?
+            // Can't really easily get a "real" UA without spinning up UI and doing async JS calls
+            // on iOS.
             userAgent(
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
             )
