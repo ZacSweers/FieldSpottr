@@ -142,6 +142,8 @@ kotlin {
         implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.androidx.appCompat)
         implementation(libs.androidx.compose.integration.activity)
+        implementation(libs.compose.ui.tooling)
+        implementation(libs.compose.ui.tooling.preview)
       }
     }
     jvmMain {

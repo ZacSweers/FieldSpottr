@@ -34,6 +34,10 @@ circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = 
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }
 compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version.ref = "compose-jb" }
 compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-jb" }
+# Tooling support (Previews, etc.)
+compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-jb" }
+compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data", version.ref = "compose-jb" }
+compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-jb" }
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.0.4"
