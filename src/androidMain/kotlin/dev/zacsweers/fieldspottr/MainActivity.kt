@@ -36,33 +36,33 @@ private fun GridPreview() {
       PermitGrid(
         selectedGroup = MCCARREN.fieldGroups[0].name,
         permits =
-        PermitState(
-          fields =
-          mapOf(
-            MCCARREN.fieldGroups[0].fields[0].name to
-              listOf(
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Reserved(7, 11, "12-4", "Title", "Description"),
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
-                FieldState.Free,
+          PermitState(
+            fields =
+              mapOf(
+                MCCARREN.fieldGroups[0].fields[0].name to
+                  listOf(
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Reserved(7, 11, "12-4", "Title", "Description"),
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                    FieldState.Free,
+                  )
               )
-          )
-        ),
+          ),
       )
     }
   }
