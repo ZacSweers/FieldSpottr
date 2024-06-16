@@ -8,12 +8,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,53 +24,61 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment.Companion.BottomCenter
-import androidx.compose.ui.Alignment.Companion.Top
+import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import dev.zacsweers.fieldspottr.EventSection.Single
+import androidx.compose.ui.unit.times
+import dev.zacsweers.fieldspottr.PermitState.FieldState
+import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
+import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
-import dev.zacsweers.fieldspottr.data.Field
-import dev.zacsweers.fieldspottr.data.NYC_TZ
-import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.format.Padding
-import kotlinx.datetime.toLocalDateTime
+
+const val TIME_COLUMN_WEIGHT = 0.15f
 
 @Composable
 fun PermitGrid(
-  state: HomeScreen.State,
+  selectedGroup: String,
+  permits: PermitState?,
   modifier: Modifier = Modifier,
-  onEventClick: (DbPermit, String) -> Unit,
+  onEventClick: (Reserved) -> Unit = {},
 ) {
-  val group = Area.groups.getValue(state.selectedGroup)
-  val fields = group.fields
-  val numColumns = fields.size
-  val timeColumnWeight = 0.15f
-  val columnWeight = (1f - timeColumnWeight) / numColumns
-  // Start at the earliest available permit or 9am because permits aren't possible before that
-  // anyway
-  val listState = rememberLazyListState(initialFirstVisibleItemIndex = 8)
-  LaunchedEffect(state.permits) {
-    if (state.permits == null) return@LaunchedEffect
-    val earliestPermit = state.permits.fields.values.flatMap { it.permits.keys }.minOrNull() ?: 8
-    listState.scrollToItem(earliestPermit, 0)
+  val group = Area.groups.getValue(selectedGroup)
+  val numColumns = group.fields.size
+
+  val columnWeight = (1f - TIME_COLUMN_WEIGHT) / numColumns
+  val itemHeight = 50.dp
+
+  // Start at the earliest available permit or 9am because permits aren't possible before
+  // that anyway
+  val scrollState = rememberScrollState()
+  val density = LocalDensity.current
+  LaunchedEffect(permits) {
+    if (permits == null) return@LaunchedEffect
+    val earliestPermit =
+      permits.fields.values
+        .flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
+        .minOrNull() ?: 8
+    scrollState.animateScrollTo(density.run { (earliestPermit * itemHeight).roundToPx() })
   }
-  val isScrolled by remember { derivedStateOf { listState.firstVisibleItemScrollOffset > 0 } }
+  val isScrolled by remember { derivedStateOf { scrollState.value > 0 } }
 
   // Names of the fields as a header
   Column(modifier) {
     Surface {
       Box {
         Row(modifier = Modifier.padding(16.dp)) {
-          Spacer(Modifier.weight(timeColumnWeight))
+          Spacer(Modifier.weight(TIME_COLUMN_WEIGHT))
           for (columnNumber in 0..<numColumns) {
             Text(
-              fields[columnNumber].displayName,
+              group.fields[columnNumber].displayName,
               textAlign = TextAlign.Center,
               fontWeight = FontWeight.Bold,
               modifier = Modifier.weight(columnWeight),
@@ -85,13 +93,15 @@ fun PermitGrid(
         }
       }
     }
-    LazyColumn(
-      modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-      state = listState,
+
+    Row(
+      modifier =
+        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp).verticalScroll(scrollState)
     ) {
-      for (rowNumber in 0..<24) {
-        item(key = rowNumber) {
-          Row(Modifier.animateItemPlacement()) {
+      // Time column
+      Column(Modifier.weight(TIME_COLUMN_WEIGHT)) {
+        for (rowNumber in 0..<24) {
+          Box(Modifier.height(itemHeight)) {
             // Time marker
             val adjustedTime = ((rowNumber) % 12).let { if (it == 0) 12 else it }
             val amPm = if (rowNumber < 12) "AM" else "PM"
@@ -99,72 +109,34 @@ fun PermitGrid(
               "$adjustedTime $amPm",
               textAlign = TextAlign.Center,
               fontWeight = FontWeight.Bold,
-              modifier = Modifier.align(Top).weight(timeColumnWeight).padding(4.dp),
+              modifier = Modifier.align(TopEnd).padding(4.dp),
               style = MaterialTheme.typography.labelSmall,
               maxLines = 1,
             )
+          }
+        }
+      }
 
-            for (columnNumber in 0..<numColumns) {
-              val event = getEvent(state, fields, columnNumber, rowNumber)
-              val eventBefore = getEvent(state, fields, columnNumber, rowNumber - 1)
-              val eventAfter = getEvent(state, fields, columnNumber, rowNumber + 1)
-
-              val hasEventBefore = eventBefore != null && eventBefore == event
-              val hasEventAfter = eventAfter != null && eventAfter == event
-
-              Box(Modifier.aspectRatio(4f / 2).weight(columnWeight)) {
-                event?.let {
-                  val start =
-                    remember(event.start) {
-                      EventTimeFormatter.format(
-                        Instant.fromEpochMilliseconds(event.start).toLocalDateTime(NYC_TZ)
-                      )
-                    }
-                  val end =
-                    remember(event.end) {
-                      EventTimeFormatter.format(
-                        Instant.fromEpochMilliseconds(event.end).toLocalDateTime(NYC_TZ)
-                      )
-                    }
-                  val section =
-                    when {
-                      !hasEventBefore && !hasEventAfter -> Single
-                      !hasEventBefore -> EventSection.Start
-                      !hasEventAfter -> EventSection.End
-                      else -> EventSection.Middle
-                    }
-                  val duration = "$start - $end"
-                  PermitEvent(
-                    modifier = Modifier.animateItemPlacement(),
-                    duration = duration,
-                    section = section,
-                    event = it,
-                    onEventClick = { onEventClick(event, duration) },
-                  )
-                }
-                if (!hasEventAfter) {
-                  HorizontalDivider(
-                    thickness = Dp.Hairline,
-                    modifier = Modifier.align(BottomCenter),
-                  )
-                }
+      val fields = permits?.fields ?: PermitState.EMPTY.fields
+      for (field in group.fields) {
+        val fieldStates = fields[field.name] ?: FieldState.EMPTY
+        Column(Modifier.weight(columnWeight)) {
+          for (fieldState in fieldStates) {
+            val height =
+              when (fieldState) {
+                Free -> itemHeight
+                is Reserved -> itemHeight * fieldState.duration
               }
+            Box(Modifier.height(height)) {
+              if (fieldState is Reserved) {
+                PermitEvent(event = fieldState, onEventClick = { onEventClick(fieldState) })
+              }
+              HorizontalDivider(thickness = Dp.Hairline, modifier = Modifier.align(BottomCenter))
             }
           }
         }
       }
     }
-  }
-}
-
-private fun getEvent(
-  state: HomeScreen.State,
-  fields: List<Field>,
-  columnNumber: Int,
-  rowNumber: Int,
-): DbPermit? {
-  return state.permits?.let {
-    it.fields[fields[columnNumber].name]?.permits?.let { permits -> permits[rowNumber] }
   }
 }
 
@@ -176,59 +148,35 @@ val EventTimeFormatter =
 
 @Composable
 fun PermitEvent(
-  event: DbPermit,
-  duration: String,
-  section: EventSection,
+  event: Reserved,
   modifier: Modifier = Modifier,
-  onEventClick: ((DbPermit) -> Unit)? = null,
+  onEventClick: ((Reserved) -> Unit)? = null,
 ) {
   Column(
     modifier =
       modifier
         .fillMaxSize()
-        .padding(top = section.topPadding, bottom = section.bottomPadding, start = 2.dp, end = 2.dp)
+        .padding(top = 2.dp, bottom = 2.dp, start = 2.dp, end = 2.dp)
         .clipToBounds()
-        .background(
-          MaterialTheme.colorScheme.tertiaryContainer,
-          shape =
-            RoundedCornerShape(
-              topStart = section.topCornerPadding,
-              topEnd = section.topCornerPadding,
-              bottomStart = section.bottomCornerPadding,
-              bottomEnd = section.bottomCornerPadding,
-            ),
-        )
-        .padding(2.dp)
         .clickable(enabled = onEventClick != null) { onEventClick!!(event) }
+        .background(MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(4.dp))
+        .padding(2.dp)
   ) {
-    if (section == Single || section == EventSection.Start) {
-      Text(
-        text = duration,
-        style = MaterialTheme.typography.bodySmall,
-        maxLines = 1,
-        overflow = TextOverflow.Clip,
-        color = MaterialTheme.colorScheme.onTertiaryContainer,
-      )
+    Text(
+      text = event.timeRange,
+      style = MaterialTheme.typography.bodySmall,
+      maxLines = 1,
+      overflow = TextOverflow.Clip,
+      color = MaterialTheme.colorScheme.onTertiaryContainer,
+    )
 
-      Text(
-        text = event.name,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Bold,
-        overflow = TextOverflow.Ellipsis,
-        color = MaterialTheme.colorScheme.onTertiaryContainer,
-      )
-    }
+    Text(
+      text = event.title,
+      style = MaterialTheme.typography.labelLarge,
+      fontWeight = FontWeight.Bold,
+      overflow = TextOverflow.Ellipsis,
+      color = MaterialTheme.colorScheme.onTertiaryContainer,
+    )
+    // TODO org
   }
-}
-
-enum class EventSection(
-  val topCornerPadding: Dp,
-  val bottomCornerPadding: Dp,
-  val topPadding: Dp,
-  val bottomPadding: Dp,
-) {
-  Single(4.dp, 4.dp, 2.dp, 2.dp),
-  Start(4.dp, 0.dp, 2.dp, 0.dp),
-  Middle(0.dp, 0.dp, 0.dp, 0.dp),
-  End(0.dp, 4.dp, 0.dp, 2.dp),
 }

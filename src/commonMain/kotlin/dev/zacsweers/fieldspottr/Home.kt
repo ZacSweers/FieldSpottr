@@ -18,6 +18,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -41,6 +42,9 @@ import dev.zacsweers.fieldspottr.data.NYC_TZ
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock.System
@@ -79,8 +83,11 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
   var selectedGroup by rememberRetained { mutableStateOf(Area.entries[0].fieldGroups[0].name) }
 
   val permitsFlow =
-    remember(selectedDate, selectedGroup) {
-      repository.permitsFlow(selectedDate, selectedGroup).map(PermitState::fromPermits)
+    rememberRetained(selectedDate, selectedGroup) {
+      repository
+        .permitsFlow(selectedDate, selectedGroup)
+        .map(PermitState::fromPermits)
+        .flowOn(Dispatchers.IO)
     }
   val permits by permitsFlow.collectAsRetainedState(null)
 
@@ -158,26 +165,18 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         state.eventSink(HomeScreen.Event.ChangeGroup(newGroup))
       }
 
-      if (state.loadingMessage == null && state.permits == null) {
-        Text("No permits found for today: ${state.date}")
-      }
       val overlayHost = LocalOverlayHost.current
       val scope = rememberCoroutineScope()
-      PermitGrid(state, modifier = Modifier.align(CenterHorizontally)) { event, duration ->
+      PermitGrid(
+        state.selectedGroup,
+        state.permits,
+        modifier = Modifier.align(CenterHorizontally),
+      ) { event ->
         scope.launch {
           overlayHost.show(
             alertDialogOverlay(
-              title = { Text(event.name) },
-              text = {
-                Text(
-                  """
-                    $duration
-                    Org: ${event.org}
-                    Status: ${event.status}
-                  """
-                    .trimIndent()
-                )
-              },
+              title = { Text(event.title) },
+              text = { Text(event.description) },
               confirmButton = { onClick -> TextButton(onClick) { Text("Done") } },
               dismissButton = null,
             )
@@ -189,26 +188,85 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
 }
 
 @Stable
-data class PermitState(val fields: Map<String, FieldState>) {
-  @Stable
-  data class FieldState(val permits: Map<Int, DbPermit>) {
+data class PermitState(val fields: Map<String, List<FieldState>>) {
+  @Immutable
+  sealed interface FieldState {
+    data object Free : FieldState
+
+    data class Reserved(
+      val start: Int,
+      val end: Int,
+      val timeRange: String,
+      val title: String,
+      val description: String,
+    ) : FieldState {
+      val duration = end - start
+    }
+
     companion object {
-      fun fromPermits(permits: List<DbPermit>): FieldState {
-        val timeMappings: Map<Int, DbPermit> = buildMap {
-          for (permit in permits.sortedBy { it.start }) {
-            val durationHours = (permit.end - permit.start).milliseconds.inWholeHours
-            val startHour = Instant.fromEpochMilliseconds(permit.start).toLocalDateTime(NYC_TZ).hour
-            for (hour in startHour until startHour + durationHours) {
-              put(hour.toInt(), permit)
+      val EMPTY = List(24) { Free }
+
+      fun fromPermits(permits: List<DbPermit>): List<FieldState> {
+        if (permits.isEmpty()) {
+          return EMPTY
+        }
+
+        val sortedPermits = permits.sortedBy { it.start }
+
+        val elements = mutableListOf<FieldState>()
+        var currentPermitIndex = 0
+        var hour = 0
+        while (hour < 24) {
+          val permit = sortedPermits[currentPermitIndex]
+          val startDateTime = Instant.fromEpochMilliseconds(permit.start).toLocalDateTime(NYC_TZ)
+          val startHour = startDateTime.hour
+          if (startHour == hour) {
+            val durationHours = (permit.end - permit.start).milliseconds.inWholeHours.toInt()
+            val endTime = startHour + durationHours
+            val startTimeString = EventTimeFormatter.format(startDateTime)
+            val endTimeString =
+              EventTimeFormatter.format(
+                Instant.fromEpochMilliseconds(permit.end).toLocalDateTime(NYC_TZ)
+              )
+            val timeRange = "$startTimeString - $endTimeString"
+            elements +=
+              Reserved(
+                start = startHour,
+                end = endTime,
+                timeRange = timeRange,
+                title = permit.name,
+                description =
+                  """
+                    $timeRange
+                    Org: ${permit.org}
+                    Status: ${permit.status}
+                  """
+                    .trimIndent(),
+              )
+            hour += durationHours
+            if (currentPermitIndex == sortedPermits.lastIndex) {
+              // Exhaust and break
+              repeat(24 - endTime) { elements += Free }
+              break
+            } else {
+              currentPermitIndex++
+            }
+          } else {
+            // Pad free slots until next permit start
+            repeat(startHour - hour) {
+              elements += Free
+              hour++
             }
           }
         }
-        return FieldState(timeMappings)
+        return elements
       }
     }
   }
 
   companion object {
+    val EMPTY = fromPermits(emptyList())
+
     fun fromPermits(permits: List<DbPermit>): PermitState {
       val areasByName = Area.entries.associateBy { it.areaName }
       val fields =
