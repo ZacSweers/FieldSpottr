@@ -160,16 +160,8 @@ fun PermitEvent(
         .clipToBounds()
         .clickable(enabled = onEventClick != null) { onEventClick!!(event) }
         .background(MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(4.dp))
-        .padding(2.dp)
+        .padding(4.dp)
   ) {
-    Text(
-      text = event.timeRange,
-      style = MaterialTheme.typography.bodySmall,
-      maxLines = 1,
-      overflow = TextOverflow.Clip,
-      color = MaterialTheme.colorScheme.onTertiaryContainer,
-    )
-
     Text(
       text = event.title,
       style = MaterialTheme.typography.labelLarge,
@@ -177,6 +169,13 @@ fun PermitEvent(
       overflow = TextOverflow.Ellipsis,
       color = MaterialTheme.colorScheme.onTertiaryContainer,
     )
-    // TODO org
+
+    Text(
+      text = event.org,
+      style = MaterialTheme.typography.bodySmall,
+      fontWeight = FontWeight.Medium,
+      overflow = TextOverflow.Ellipsis,
+      color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.5f),
+    )
   }
 }

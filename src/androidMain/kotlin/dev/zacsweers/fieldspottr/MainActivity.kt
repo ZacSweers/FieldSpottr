@@ -48,7 +48,7 @@ private fun GridPreview() {
                     FieldState.Free,
                     FieldState.Free,
                     FieldState.Free,
-                    FieldState.Reserved(7, 11, "12-4", "Title", "Description"),
+                    FieldState.Reserved(7, 11, "12-4", "Title", "Org", "Approved", "Description"),
                     FieldState.Free,
                     FieldState.Free,
                     FieldState.Free,

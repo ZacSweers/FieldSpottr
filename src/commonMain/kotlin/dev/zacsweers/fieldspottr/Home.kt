@@ -198,6 +198,8 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
       val end: Int,
       val timeRange: String,
       val title: String,
+      val org: String,
+      val status: String,
       val description: String,
     ) : FieldState {
       val duration = end - start
@@ -235,6 +237,8 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
                 end = endTime,
                 timeRange = timeRange,
                 title = permit.name,
+                org = permit.org,
+                status = permit.status,
                 description =
                   """
                     $timeRange
