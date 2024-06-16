@@ -14,6 +14,7 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 
 interface SharedPlatformFSComponent {
   fun provideFSAppDirs(): FSAppDirs
+
   fun provideSqlDriverFactory(): SqlDriverFactory
 }
 

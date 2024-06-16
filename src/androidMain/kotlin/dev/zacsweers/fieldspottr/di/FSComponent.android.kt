@@ -5,8 +5,6 @@ package dev.zacsweers.fieldspottr.di
 import android.content.Context
 import dev.zacsweers.fieldspottr.AndroidSqlDriverFactory
 import dev.zacsweers.fieldspottr.ContextFSAppDirs
-import dev.zacsweers.fieldspottr.FSAppDirs
-import dev.zacsweers.fieldspottr.SqlDriverFactory
 
 class AndroidSharedPlatformFSComponent(private val appContext: Context) :
   SharedPlatformFSComponent {
