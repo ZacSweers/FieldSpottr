@@ -10,8 +10,8 @@ import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlin.io.path.absolutePathString
 
 @Stable
-actual class SqlDriverFactory(private val appDirs: FSAppDirs) {
-  actual suspend fun create(
+class JvmSqlDriverFactory(private val appDirs: FSAppDirs) : SqlDriverFactory {
+  override suspend fun create(
     schema: SqlSchema<QueryResult.AsyncValue<Unit>>,
     name: String,
   ): SqlDriver {

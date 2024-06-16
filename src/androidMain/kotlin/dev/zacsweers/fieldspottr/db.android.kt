@@ -11,11 +11,9 @@ import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 
 @Stable
-actual class SqlDriverFactory(private val context: Context) {
-  actual suspend fun create(
+class AndroidSqlDriverFactory(private val context: Context): SqlDriverFactory {
+  override suspend fun create(
     schema: SqlSchema<QueryResult.AsyncValue<Unit>>,
     name: String,
-  ): SqlDriver {
-    return AndroidSqliteDriver(schema.synchronous(), context, name)
-  }
+  ) = AndroidSqliteDriver(schema.synchronous(), context, name)
 }

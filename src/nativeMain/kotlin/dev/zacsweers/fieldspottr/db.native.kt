@@ -10,8 +10,8 @@ import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.native.NativeSqliteDriver
 
 @Stable
-actual class SqlDriverFactory {
-  actual suspend fun create(schema: SqlSchema<AsyncValue<Unit>>, name: String): SqlDriver {
+class NativeSqlDriverFactory : SqlDriverFactory {
+  override suspend fun create(schema: SqlSchema<AsyncValue<Unit>>, name: String): SqlDriver {
     return NativeSqliteDriver(schema.synchronous(), name)
   }
 }

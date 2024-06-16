@@ -4,9 +4,13 @@ package dev.zacsweers.fieldspottr.di
 
 import dev.zacsweers.fieldspottr.DesktopFSAppDirs
 import dev.zacsweers.fieldspottr.FSAppDirs
+import dev.zacsweers.fieldspottr.JvmSqlDriverFactory
+import dev.zacsweers.fieldspottr.SqlDriverFactory
 
 class JvmSharedPlatformFSComponent : SharedPlatformFSComponent {
-  override fun provideFSAppDirs(): FSAppDirs {
-    return DesktopFSAppDirs()
+  private val appDirs = DesktopFSAppDirs()
+  override fun provideFSAppDirs() = appDirs
+  override fun provideSqlDriverFactory(): SqlDriverFactory {
+    return JvmSqlDriverFactory(appDirs)
   }
 }

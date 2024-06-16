@@ -14,13 +14,14 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 
 interface SharedPlatformFSComponent {
   fun provideFSAppDirs(): FSAppDirs
+  fun provideSqlDriverFactory(): SqlDriverFactory
 }
 
 @Immutable
 class FSComponent(private val shared: SharedPlatformFSComponent) :
   SharedPlatformFSComponent by shared {
   fun providePermitRepository(): PermitRepository =
-    PermitRepository(SqlDriverFactory(), provideFSAppDirs())
+    PermitRepository(provideSqlDriverFactory(), provideFSAppDirs())
 
   fun provideCircuit(): Circuit {
     return Circuit.Builder()
