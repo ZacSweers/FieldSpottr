@@ -30,7 +30,6 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock.System
@@ -106,11 +105,10 @@ class PermitRepository(
     val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
     return flow {
-        emitAll(
-          db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
-        )
-      }
-      .flowOn(Dispatchers.IO)
+      emitAll(
+        db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
+      )
+    }
   }
 
   private suspend fun getOrFetchCsv(area: Area): Path? {
