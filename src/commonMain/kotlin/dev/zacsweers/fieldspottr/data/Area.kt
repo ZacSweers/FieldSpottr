@@ -24,7 +24,6 @@ internal enum class Area(
         "Field 6",
         listOf(
           Field("Baseball-06", "Baseball 6", "Field 6"),
-          Field("Softball-05", "Baseball 5", "Field 6"),
           Field("Soccer-03 Houston St & FDR", "Outfield", "Field 6"),
         ),
         "ERP",
