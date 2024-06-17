@@ -11,11 +11,13 @@ import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.delete
 import dev.zacsweers.fieldspottr.touch
+import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.component6
 import dev.zacsweers.fieldspottr.util.component7
 import dev.zacsweers.fieldspottr.util.hashOf
 import dev.zacsweers.fieldspottr.util.lazySuspend
 import dev.zacsweers.fieldspottr.util.parallelForEach
+import dev.zacsweers.fieldspottr.util.toNyInstant
 import dev.zacsweers.fieldspottr.util.useLines
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -30,17 +32,15 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
-import kotlinx.datetime.toInstant
 import okio.Path
 import okio.buffer
 import okio.use
@@ -66,8 +66,6 @@ private val FORMATTER =
       }
     )
   }
-
-internal val NYC_TZ = TimeZone.of("America/New_York")
 
 data class FieldGroup(val name: String, val fields: List<Field>, val area: String)
 
@@ -101,7 +99,7 @@ class PermitRepository(
   }
 
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
-    val startTime = date.atStartOfDayIn(NYC_TZ).toEpochMilliseconds()
+    val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
     // TODO strict mode says this leaks... somehow
     return flow {
@@ -195,8 +193,8 @@ class PermitRepository(
                 recordId = recordId.toLong(),
                 area = area.areaName,
                 groupName = group,
-                start = startTime.toInstant(NYC_TZ).toEpochMilliseconds(),
-                end = endTime.toInstant(NYC_TZ).toEpochMilliseconds(),
+                start = startTime.toNyInstant().toEpochMilliseconds(),
+                end = endTime.toNyInstant().toEpochMilliseconds(),
                 fieldId = field,
                 type = type,
                 name = name,
@@ -211,4 +209,17 @@ class PermitRepository(
       transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
       true
     }
+
+  fun permitsByGroup(group: String, org: String, start: LocalDate): Flow<List<DbPermit>> {
+    return flow {
+        emitAll(
+          db()
+            .fsdbQueries
+            .getPermitsByOrg(group, org, start.atStartOfDayInNy().toEpochMilliseconds())
+            .asFlow()
+            .mapToList(Dispatchers.IO)
+        )
+      }
+      .flowOn(Dispatchers.IO)
+  }
 }

@@ -38,8 +38,6 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
-import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.format.Padding
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
@@ -139,12 +137,6 @@ fun PermitGrid(
     }
   }
 }
-
-val EventTimeFormatter =
-  LocalDateTime.Format {
-    amPmHour(padding = Padding.NONE)
-    amPmMarker("am", "pm")
-  }
 
 @Composable
 fun PermitEvent(

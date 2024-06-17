@@ -36,6 +36,9 @@ SELECT * FROM dbPermit WHERE recordId = ?;
 getPermits:
 SELECT * FROM dbPermit WHERE groupName = :groupName AND start > :startTime AND start < :endTime;
 
+getPermitsByOrg:
+SELECT * FROM dbPermit WHERE groupName = :groupName AND org = :org AND start > :startTime ORDER BY start;
+
 deleteAreaPermits:
 DELETE FROM dbPermit WHERE area = ?;
 

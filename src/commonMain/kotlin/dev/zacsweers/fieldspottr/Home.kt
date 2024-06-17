@@ -16,7 +16,6 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,16 +30,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.overlay.LocalOverlayHost
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
-import com.slack.circuitx.overlays.alertDialogOverlay
+import com.slack.circuitx.overlays.BottomSheetOverlay
+import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
-import dev.zacsweers.fieldspottr.data.NYC_TZ
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.fieldspottr.util.formatAmPm
+import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -48,7 +50,6 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock.System
-import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -174,12 +175,11 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       ) { event ->
         scope.launch {
           overlayHost.show(
-            alertDialogOverlay(
-              title = { Text(event.title) },
-              text = { Text(event.description) },
-              confirmButton = { onClick -> TextButton(onClick) { Text("Done") } },
-              dismissButton = null,
-            )
+            BottomSheetOverlay(event, onDismiss = {}) { model, _ ->
+              CircuitContent(
+                PermitDetailsScreen(model.title, model.description, state.selectedGroup, event.org)
+              )
+            }
           )
         }
       }
@@ -220,16 +220,13 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
         var hour = 0
         while (hour < 24) {
           val permit = sortedPermits[currentPermitIndex]
-          val startDateTime = Instant.fromEpochMilliseconds(permit.start).toLocalDateTime(NYC_TZ)
+          val startDateTime = permit.start.toNyLocalDateTime()
           val startHour = startDateTime.hour
           if (startHour == hour) {
             val durationHours = (permit.end - permit.start).milliseconds.inWholeHours.toInt()
             val endTime = startHour + durationHours
-            val startTimeString = EventTimeFormatter.format(startDateTime)
-            val endTimeString =
-              EventTimeFormatter.format(
-                Instant.fromEpochMilliseconds(permit.end).toLocalDateTime(NYC_TZ)
-              )
+            val startTimeString = startDateTime.formatAmPm()
+            val endTimeString = permit.end.toNyLocalDateTime().formatAmPm()
             val timeRange = "$startTimeString - $endTimeString"
             elements +=
               Reserved(

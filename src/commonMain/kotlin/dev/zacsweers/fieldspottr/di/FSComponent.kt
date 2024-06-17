@@ -9,6 +9,9 @@ import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.fieldspottr.Home
 import dev.zacsweers.fieldspottr.HomePresenter
 import dev.zacsweers.fieldspottr.HomeScreen
+import dev.zacsweers.fieldspottr.PermitDetails
+import dev.zacsweers.fieldspottr.PermitDetailsPresenter
+import dev.zacsweers.fieldspottr.PermitDetailsScreen
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.data.PermitRepository
 
@@ -30,6 +33,12 @@ class FSComponent(private val shared: SharedPlatformFSComponent) :
         presenterOf { HomePresenter(providePermitRepository()) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
+      .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->
+        presenterOf { PermitDetailsPresenter(screen, providePermitRepository()) }
+      }
+      .addUi<PermitDetailsScreen, PermitDetailsScreen.State> { state, modifier ->
+        PermitDetails(state, modifier)
+      }
       .build()
   }
 }
