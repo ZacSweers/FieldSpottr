@@ -40,12 +40,12 @@ platform :ios do
     end
   end
 
-  lane :build_app do |options|
+  lane :build_fs do |options|
     setup_ci if ENV['CI']
     # Clear any existing Xcode derived data, so that we're starting from fresh
     clear_derived_data if ENV['CI']
 
-    build_app(
+    build_fs(
       project: "FieldSpottr/FieldSpottr.xcodeproj",
       buildlog_path: "FieldSpottr/build/fastlane-buildlog",
       # We do not have signing setup, so turn off any related settings
@@ -55,7 +55,7 @@ platform :ios do
   end
 
   lane :build do
-    build_app
+    build_fs
   end
 
 end
