@@ -124,6 +124,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
           }
         }
       }
+      Spacer(Modifier.height(16.dp))
     }
   }
 }

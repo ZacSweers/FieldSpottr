@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  # Only run push on main
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+  # Always run on PRs
+  pull_request:
+    branches: [ main ]
+  merge_group:
+
+concurrency:
+  group: 'ci-${{ github.event.merge_group.head_ref || github.head_ref }}-${{ github.workflow }}'
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build and run checks
+        id: gradle-build
+        run: |
+          ./gradlew --quiet --continue --no-configuration-cache \
+              check \
+              assembleRelease \
+              jvmJar
+
+      - name: (Fail-only) Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-build
+          path: |
+            **/build/reports/**
+
+  build-ios:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: 'true'
+
+      - name: Install JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+          ruby-version: '3.2.2'
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - run: brew install swiftlint
+
+      - name: Build iOS app
+        run: bundle exec fastlane ios build
