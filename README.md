@@ -1,4 +1,4 @@
-🏞️ FieldSpottr
+⚽️ FieldSpottr
 ==============
 
 A toy app for checking field permit status from nycgovparks.org.
