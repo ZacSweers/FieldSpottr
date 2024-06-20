@@ -3,6 +3,7 @@ androidx-activity = "1.9.0"
 androidx-appcompat = "1.7.0"
 agp = "8.5.0"
 circuit = "0.22.2"
+compose-cupertino = "0.1.0-alpha04"
 compose-jb = "1.6.11"
 jdk = "21"
 jvmTarget = "11"
@@ -32,6 +33,8 @@ appDirs = "net.harawata:appdirs:1.2.2"
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }
+compose-cupertino-adaptive = { module = "io.github.alexzhirkevich:cupertino-adaptive", version.ref = "compose-cupertino" }
+compose-cupertino-native = { module = "io.github.alexzhirkevich:cupertino-native", version.ref = "compose-cupertino" }
 compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version.ref = "compose-jb" }
 compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-jb" }
 # Tooling support (Previews, etc.)

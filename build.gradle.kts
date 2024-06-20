@@ -132,6 +132,8 @@ kotlin {
         implementation(libs.sqldelight.coroutines)
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
+        implementation(libs.compose.cupertino.adaptive)
+        implementation(libs.compose.cupertino.native)
       }
     }
     androidMain {

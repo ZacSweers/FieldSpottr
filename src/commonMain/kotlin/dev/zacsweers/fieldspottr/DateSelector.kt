@@ -4,13 +4,11 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -19,12 +17,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import io.github.alexzhirkevich.cupertino.ExperimentalCupertinoApi
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveDatePicker
+import io.github.alexzhirkevich.cupertino.adaptive.ExperimentalAdaptiveApi
+import io.github.alexzhirkevich.cupertino.rememberCupertinoDatePickerState
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
 
+@OptIn(ExperimentalAdaptiveApi::class, ExperimentalCupertinoApi::class)
 @Composable
 fun DateSelector(
   currentDate: LocalDate,
@@ -34,8 +37,10 @@ fun DateSelector(
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
   if (showDatePicker) {
     val current = currentDate.atStartOfDayIn(UTC).toEpochMilliseconds()
-    val datePickerState = rememberDatePickerState(current)
-    val confirmEnabled by remember { derivedStateOf { datePickerState.selectedDateMillis != null } }
+    val datePickerState = rememberCupertinoDatePickerState(current)
+    val confirmEnabled by remember {
+      derivedStateOf { datePickerState.selectedDateMillis != current }
+    }
 
     DatePickerDialog(
       modifier = modifier,
@@ -45,7 +50,7 @@ fun DateSelector(
           onClick = {
             showDatePicker = false
             val selected =
-              Instant.fromEpochMilliseconds(datePickerState.selectedDateMillis!!)
+              Instant.fromEpochMilliseconds(datePickerState.selectedDateMillis)
                 .toLocalDateTime(UTC)
                 .date
             onDateSelected(selected)
@@ -57,7 +62,7 @@ fun DateSelector(
       },
       dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
     ) {
-      DatePicker(datePickerState)
+      AdaptiveDatePicker(datePickerState)
     }
   }
   ExtendedFloatingActionButton(
