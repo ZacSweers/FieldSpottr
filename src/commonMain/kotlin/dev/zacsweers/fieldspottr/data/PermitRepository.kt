@@ -176,7 +176,7 @@ class PermitRepository(
       appDirs.fs.source(csvFile).buffer().useLines { lines ->
         lines.drop(1).forEach { line ->
           val (start, end, field, type, name, org, status) =
-            line.split(",").map { it.removeSurrounding("\"") }
+            line.split(",").map { it.removeSurrounding("\"").trim() }
           if (field !in area.fieldMappings) {
             // Irrelevant field
             return@forEach
