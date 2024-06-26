@@ -33,8 +33,8 @@ class FSComponent(private val shared: SharedPlatformFSComponent) :
         presenterOf { HomePresenter(providePermitRepository()) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
-      .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->
-        presenterOf { PermitDetailsPresenter(screen, providePermitRepository()) }
+      .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, navigator, _ ->
+        presenterOf { PermitDetailsPresenter(screen, providePermitRepository(), navigator) }
       }
       .addUi<PermitDetailsScreen, PermitDetailsScreen.State> { state, modifier ->
         PermitDetails(state, modifier)

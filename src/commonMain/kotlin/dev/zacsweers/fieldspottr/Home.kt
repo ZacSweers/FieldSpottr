@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.slack.circuit.foundation.CircuitContent
+import com.slack.circuit.foundation.NavEvent.Pop
 import com.slack.circuit.overlay.LocalOverlayHost
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
@@ -169,9 +170,17 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       ) { event ->
         scope.launch {
           overlayHost.show(
-            BottomSheetOverlay(event, onDismiss = {}) { model, _ ->
+            BottomSheetOverlay(event, onDismiss = {}) { model, overlayNavigator ->
               CircuitContent(
-                PermitDetailsScreen(model.title, model.description, state.selectedGroup, event.org)
+                PermitDetailsScreen(model.title, model.description, state.selectedGroup, event.org),
+                onNavEvent = { navEvent ->
+                  if (navEvent is Pop) {
+                    (navEvent.result as? GoToDateResult)?.let {
+                      overlayNavigator.finish(Unit)
+                      state.eventSink(HomeScreen.Event.FilterDate(it.toLocalDate()))
+                    }
+                  }
+                }
               )
             }
           )

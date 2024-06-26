@@ -16,9 +16,11 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import dev.zacsweers.fieldspottr.util.Wigglable
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
@@ -60,9 +62,12 @@ fun DateSelector(
       DatePicker(datePickerState)
     }
   }
-  ExtendedFloatingActionButton(
-    onClick = { showDatePicker = true },
-    text = { Text(currentDate.toString()) },
-    icon = { Icon(Icons.Default.DateRange, contentDescription = "Select date") },
-  )
+  val currentDate by rememberUpdatedState(currentDate)
+  Wigglable(currentDate) {
+    ExtendedFloatingActionButton(
+      onClick = { showDatePicker = true },
+      text = { Text(currentDate.toString()) },
+      icon = { Icon(Icons.Default.DateRange, contentDescription = "Select date") },
+    )
+  }
 }

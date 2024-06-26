@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -25,9 +30,12 @@ import androidx.compose.ui.unit.dp
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
+import com.slack.circuit.runtime.Navigator
+import com.slack.circuit.runtime.screen.PopResult
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +43,7 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock.System
+import kotlinx.datetime.LocalDate
 
 @CommonParcelize
 data class PermitDetailsScreen(
@@ -47,15 +56,22 @@ data class PermitDetailsScreen(
     val name: String,
     val description: String,
     val otherPermits: List<OtherPermit>?,
+    val onNavigateTo: (LocalDate) -> Unit,
   ) : CircuitUiState
 }
 
-@Immutable data class OtherPermit(val name: String, val date: String, val timeRange: String)
+@Immutable data class OtherPermit(val name: String, val date: String, val rawDate: LocalDate, val timeRange: String)
+
+@CommonParcelize
+data class GoToDateResult(val date: Long) : PopResult {
+  fun toLocalDate(): LocalDate = date.toNyLocalDateTime().date
+}
 
 @Composable
 fun PermitDetailsPresenter(
   screen: PermitDetailsScreen,
   repository: PermitRepository,
+  navigator: Navigator,
 ): PermitDetailsScreen.State {
   val today = rememberRetained { System.now().toNyLocalDateTime().date }
   val permitsFlow = rememberRetained {
@@ -68,6 +84,7 @@ fun PermitDetailsPresenter(
           OtherPermit(
             name = dbPermit.name,
             date = "${start.date.monthNumber}/${start.date.dayOfMonth}",
+            rawDate = start.date,
             timeRange = "${start.formatAmPm()}-${end.formatAmPm()}",
           )
         }
@@ -75,24 +92,27 @@ fun PermitDetailsPresenter(
       .flowOn(Dispatchers.IO)
   }
   val permits by permitsFlow.collectAsRetainedState(null)
-  return PermitDetailsScreen.State(screen.name, screen.description, otherPermits = permits)
+  return PermitDetailsScreen.State(screen.name, screen.description, otherPermits = permits) {
+    navigator.pop(GoToDateResult(it.atStartOfDayInNy().toEpochMilliseconds()))
+  }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) {
-  Column(modifier.padding(16.dp)) {
-    Text(
-      text = state.name,
-      style = MaterialTheme.typography.titleLarge,
-      fontWeight = FontWeight.Bold,
-      overflow = TextOverflow.Ellipsis,
-    )
+  Column(modifier) {
+    Column(Modifier.padding(16.dp)) {
+      Text(
+        text = state.name,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        overflow = TextOverflow.Ellipsis,
+      )
 
-    Spacer(Modifier.height(16.dp))
+      Spacer(Modifier.height(16.dp))
 
-    Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-
-    Spacer(Modifier.height(16.dp))
+      Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
+    }
 
     if (state.otherPermits == null) {
       CircularProgressIndicator(Modifier.padding(16.dp).align(Alignment.CenterHorizontally))
@@ -100,7 +120,8 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
       HorizontalDivider()
       LazyColumn {
         items(state.otherPermits) { permit ->
-          Column(Modifier.padding(top = 16.dp)) {
+          Column(Modifier.clickable { state.onNavigateTo(permit.rawDate) }.fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row {
               Text(
                 permit.date,
@@ -124,7 +145,6 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
           }
         }
       }
-      Spacer(Modifier.height(16.dp))
     }
   }
 }
