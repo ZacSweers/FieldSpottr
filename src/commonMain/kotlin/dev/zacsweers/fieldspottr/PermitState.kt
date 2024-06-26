@@ -23,6 +23,8 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
       val org: String,
       val status: String,
       val description: String,
+      /** Indicates this is a city permit block. Field is likely unusable. */
+      val isBlocked: Boolean,
     ) : FieldState {
       val duration = end - start
     }
@@ -35,48 +37,61 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
           return EMPTY
         }
 
-        val sortedPermits = permits.sortedBy { it.start }
+        return permits.asSequence().map { it.toReserved() }.padFreeSlots()
+      }
+
+      private fun DbPermit.toReserved(): Reserved {
+        val permit = this
+        val startDateTime = permit.start.toNyLocalDateTime()
+        val startHour = startDateTime.hour
+        val durationHours = (permit.end - permit.start).milliseconds.inWholeHours.toInt()
+        val endTime = startHour + durationHours
+        val startTimeString = startDateTime.formatAmPm()
+        val endTimeString = permit.end.toNyLocalDateTime().formatAmPm()
+        val timeRange = "$startTimeString - $endTimeString"
+        return Reserved(
+          start = startHour,
+          end = endTime,
+          timeRange = timeRange,
+          title = permit.name,
+          org = permit.org,
+          status = permit.status,
+          description =
+            """
+            $timeRange
+            Org: ${permit.org}
+            Status: ${permit.status}
+          """
+              .trimIndent(),
+          isBlocked = permit.isBlocked,
+        )
+      }
+
+      /** Given an input sequence of reserved permits, pad the [Free] slots between them. */
+      fun Sequence<Reserved>.padFreeSlots(): List<FieldState> {
+        // Don't use Sequence.sortedBy to avoid unnecessary intermediate list
+        val sortedPermits = toMutableList().apply { sortBy { it.start } }
+
+        if (sortedPermits.isEmpty()) return EMPTY
 
         val elements = mutableListOf<FieldState>()
         var currentPermitIndex = 0
         var hour = 0
         while (hour < 24) {
           val permit = sortedPermits[currentPermitIndex]
-          val startDateTime = permit.start.toNyLocalDateTime()
-          val startHour = startDateTime.hour
-          if (startHour == hour) {
-            val durationHours = (permit.end - permit.start).milliseconds.inWholeHours.toInt()
-            val endTime = startHour + durationHours
-            val startTimeString = startDateTime.formatAmPm()
-            val endTimeString = permit.end.toNyLocalDateTime().formatAmPm()
-            val timeRange = "$startTimeString - $endTimeString"
-            elements +=
-              Reserved(
-                start = startHour,
-                end = endTime,
-                timeRange = timeRange,
-                title = permit.name,
-                org = permit.org,
-                status = permit.status,
-                description =
-                  """
-                    $timeRange
-                    Org: ${permit.org}
-                    Status: ${permit.status}
-                  """
-                    .trimIndent(),
-              )
-            hour += durationHours
+          if (permit.start == hour) {
+            elements += permit
+            hour += permit.duration
             if (currentPermitIndex == sortedPermits.lastIndex) {
               // Exhaust and break
-              repeat(24 - endTime) { elements += Free }
+              repeat(24 - permit.end) { elements += Free }
               break
             } else {
               currentPermitIndex++
             }
           } else {
             // Pad free slots until next permit start
-            repeat(startHour - hour) {
+            repeat(permit.start - hour) {
               elements += Free
               hour++
             }
@@ -99,5 +114,8 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
           .mapValues { (_, permits) -> FieldState.fromPermits(permits) }
       return PermitState(fields)
     }
+
+    val DbPermit.isBlocked: Boolean
+      get() = name == "Permit Block" && org == "NYC Parks and Recreation"
   }
 }

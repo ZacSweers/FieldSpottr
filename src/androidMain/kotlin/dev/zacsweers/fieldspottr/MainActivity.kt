@@ -11,6 +11,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import dev.zacsweers.fieldspottr.PermitState.FieldState
+import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
 import dev.zacsweers.fieldspottr.data.Area.MCCARREN
 import dev.zacsweers.fieldspottr.di.AndroidSharedPlatformFSComponent
 import dev.zacsweers.fieldspottr.di.FSComponent
@@ -40,27 +41,19 @@ private fun GridPreview() {
             fields =
               mapOf(
                 MCCARREN.fieldGroups[0].fields[0].name to
-                  listOf(
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Reserved(7, 11, "12-4", "Title", "Org", "Approved", "Description"),
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                    FieldState.Free,
-                  )
+                  sequenceOf(
+                      FieldState.Reserved(
+                        7,
+                        11,
+                        "12-4",
+                        "Title",
+                        "Org",
+                        "Approved",
+                        "Description",
+                        false,
+                      )
+                    )
+                    .padFreeSlots()
               )
           ),
       )
