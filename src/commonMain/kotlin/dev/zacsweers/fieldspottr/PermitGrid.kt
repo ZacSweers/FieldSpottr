@@ -144,6 +144,12 @@ fun PermitEvent(
   modifier: Modifier = Modifier,
   onEventClick: ((Reserved) -> Unit)? = null,
 ) {
+  val containerColor =
+    if (event.isBlocked) {
+      MaterialTheme.colorScheme.errorContainer
+    } else {
+      MaterialTheme.colorScheme.tertiaryContainer
+    }
   Column(
     modifier =
       modifier
@@ -151,15 +157,21 @@ fun PermitEvent(
         .padding(top = 2.dp, bottom = 2.dp, start = 2.dp, end = 2.dp)
         .clipToBounds()
         .clickable(enabled = onEventClick != null) { onEventClick!!(event) }
-        .background(MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(4.dp))
+        .background(containerColor, shape = RoundedCornerShape(4.dp))
         .padding(4.dp)
   ) {
+    val textColor =
+      if (event.isBlocked) {
+        MaterialTheme.colorScheme.onErrorContainer
+      } else {
+        MaterialTheme.colorScheme.onTertiaryContainer
+      }
     Text(
       text = event.title,
       style = MaterialTheme.typography.labelLarge,
       fontWeight = FontWeight.Bold,
       overflow = TextOverflow.Ellipsis,
-      color = MaterialTheme.colorScheme.onTertiaryContainer,
+      color = textColor,
     )
 
     Text(
@@ -167,7 +179,7 @@ fun PermitEvent(
       style = MaterialTheme.typography.bodySmall,
       fontWeight = FontWeight.Medium,
       overflow = TextOverflow.Ellipsis,
-      color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.5f),
+      color = textColor.copy(alpha = 0.5f),
     )
   }
 }

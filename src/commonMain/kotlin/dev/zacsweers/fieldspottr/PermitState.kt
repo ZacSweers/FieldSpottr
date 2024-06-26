@@ -23,6 +23,8 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
       val org: String,
       val status: String,
       val description: String,
+      /** Indicates this is a city permit block. Field is likely unusable. */
+      val isBlocked: Boolean,
     ) : FieldState {
       val duration = end - start
     }
@@ -65,6 +67,7 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
                     Status: ${permit.status}
                   """
                     .trimIndent(),
+                isBlocked = permit.isBlocked,
               )
             hour += durationHours
             if (currentPermitIndex == sortedPermits.lastIndex) {
@@ -99,5 +102,8 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
           .mapValues { (_, permits) -> FieldState.fromPermits(permits) }
       return PermitState(fields)
     }
+
+    val DbPermit.isBlocked: Boolean
+      get() = name == "Permit Block" && org == "NYC Parks and Recreation"
   }
 }
