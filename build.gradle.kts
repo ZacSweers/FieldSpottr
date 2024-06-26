@@ -3,6 +3,7 @@
 import com.diffplug.spotless.LineEnding
 import kotlin.math.pow
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
 
@@ -14,6 +15,7 @@ plugins {
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
   alias(libs.plugins.sqldelight)
+  alias(libs.plugins.licensee)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -59,6 +61,7 @@ spotless {
   }
 }
 
+@OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
   androidTarget {
     compilerOptions {
@@ -120,6 +123,7 @@ kotlin {
     commonMain {
       dependencies {
         implementation(project.dependencies.platform(libs.kotlin.bom))
+        implementation(compose.components.resources)
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
@@ -216,6 +220,10 @@ android {
 }
 
 compose {
+  resources {
+    packageOfResClass = "dev.zacsweers.fieldspottr"
+    generateResClass = always
+  }
   desktop {
     application {
       mainClass = "dev.zacsweers.fieldspottr.MainKt"
@@ -249,3 +257,8 @@ tasks
     dependsOn("jvmJar")
     classpath("jvmJar")
   }
+
+licensee {
+  allow("Apache-2.0")
+  allow("MIT")
+}

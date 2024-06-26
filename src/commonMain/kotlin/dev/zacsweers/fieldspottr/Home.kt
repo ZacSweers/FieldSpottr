@@ -3,18 +3,25 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.Arrangement.spacedBy
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,10 +31,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
+import androidx.compose.ui.Alignment.Companion.TopStart
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.overlay.LocalOverlayHost
 import com.slack.circuit.retained.collectAsRetainedState
@@ -35,6 +44,10 @@ import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuitx.overlays.BottomSheetOverlay
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ChangeGroup
+import dev.zacsweers.fieldspottr.HomeScreen.Event.FilterDate
+import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
@@ -51,6 +64,7 @@ import kotlinx.datetime.toLocalDateTime
 @CommonParcelize
 data object HomeScreen : Screen {
   data class State(
+    val showInfo: Boolean,
     val date: LocalDate,
     val selectedGroup: String,
     val loadingMessage: String?,
@@ -60,6 +74,8 @@ data object HomeScreen : Screen {
 
   sealed interface Event {
     data object Refresh : Event
+
+    data class ShowInfo(val show: Boolean) : Event
 
     data class FilterDate(val date: LocalDate) : Event
 
@@ -72,6 +88,7 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
+  var showInfo by rememberRetained { mutableStateOf(false) }
   var populateDb by rememberRetained { mutableStateOf(false) }
   var forceRefresh by rememberRetained { mutableStateOf(false) }
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
@@ -101,20 +118,24 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
     }
   }
   return HomeScreen.State(
+    showInfo = showInfo,
     date = selectedDate,
     selectedGroup = selectedGroup,
     loadingMessage = loadingMessage,
     permits = permits,
   ) { event ->
     when (event) {
-      is HomeScreen.Event.Refresh -> {
+      is Refresh -> {
         forceRefresh = true
         populateDb = true
       }
-      is HomeScreen.Event.FilterDate -> {
+      is ShowInfo -> {
+        showInfo = event.show
+      }
+      is FilterDate -> {
         selectedDate = event.date
       }
-      is HomeScreen.Event.ChangeGroup -> {
+      is ChangeGroup -> {
         selectedGroup = event.group
       }
     }
@@ -129,6 +150,31 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Indefinite)
     }
   }
+
+  if (state.showInfo) {
+    BasicAlertDialog(
+      onDismissRequest = { state.eventSink(ShowInfo(false)) },
+      properties = DialogProperties(),
+    ) {
+      Surface(modifier = modifier, shape = MaterialTheme.shapes.large) {
+        Box {
+          About()
+          IconButton(
+            onClick = { state.eventSink(ShowInfo(false)) },
+            modifier = Modifier.padding(16.dp).align(TopStart),
+          ) {
+            Icon(
+              Icons.Default.Close,
+              modifier = Modifier.size(32.dp),
+              contentDescription = "Close",
+              tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+          }
+        }
+      }
+    }
+  }
+
   Scaffold(
     modifier = modifier,
     topBar = {
@@ -137,14 +183,17 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
           Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
         },
         actions = {
-          IconButton(onClick = { state.eventSink(HomeScreen.Event.Refresh) }) {
+          IconButton(onClick = { state.eventSink(Refresh) }) {
             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+          }
+          IconButton(onClick = { state.eventSink(ShowInfo(true)) }) {
+            Icon(Icons.Outlined.Info, contentDescription = "Info")
           }
         },
       )
     },
     floatingActionButton = {
-      DateSelector(state.date) { newDate -> state.eventSink(HomeScreen.Event.FilterDate(newDate)) }
+      DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
     },
     snackbarHost = {
       SnackbarHost(hostState = snackbarHostState) { snackbarData ->
@@ -157,7 +206,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         state.selectedGroup,
         modifier = Modifier.align(CenterHorizontally).padding(horizontal = 16.dp),
       ) { newGroup ->
-        state.eventSink(HomeScreen.Event.ChangeGroup(newGroup))
+        state.eventSink(ChangeGroup(newGroup))
       }
 
       val overlayHost = LocalOverlayHost.current
