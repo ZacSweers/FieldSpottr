@@ -5,15 +5,19 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -28,15 +32,39 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import com.mikepenz.aboutlibraries.Libs
+import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
+import org.jetbrains.compose.resources.ExperimentalResourceApi
 import org.jetbrains.compose.resources.painterResource
+
+@OptIn(ExperimentalResourceApi::class)
+@Composable
+fun About(modifier: Modifier = Modifier) {
+  val libs by
+    produceState<Libs?>(null) {
+      val bytes = Res.readBytes("files/aboutlibraries.json")
+      value = Libs.Builder().withJson(bytes.decodeToString()).build()
+    }
+  if (libs == null) {
+    CircularProgressIndicator()
+  } else {
+    LibrariesContainer(
+      libraries = libs,
+      modifier = modifier.fillMaxSize(),
+      showAuthor = false,
+      showVersion = false,
+      header = { item(key = "header") { Header() } },
+    )
+  }
+}
 
 @OptIn(ExperimentalTextApi::class)
 @Composable
-fun About(modifier: Modifier = Modifier) {
+private fun Header(modifier: Modifier = Modifier) {
   Column(
     verticalArrangement = Arrangement.Center,
     horizontalAlignment = CenterHorizontally,
-    modifier = modifier.padding(32.dp),
+    modifier = modifier.padding(start = 32.dp, end = 32.dp, bottom = 16.dp),
   ) {
     Icon(
       modifier = Modifier.size(96.dp),
@@ -80,17 +108,16 @@ fun About(modifier: Modifier = Modifier) {
         append("Zac Sweers")
       }
       pop()
-      appendLine()
-      appendLine()
+      append(" — ")
       pushUrlAnnotation(UrlAnnotation("https://github.com/ZacSweers/FieldSpottr"))
       withStyle(
         style =
           SpanStyle(
-            color = LocalContentColor.current.copy(alpha = 0.5f),
+            color = MaterialTheme.colorScheme.primary,
             textDecoration = TextDecoration.Underline,
           )
       ) {
-        append("Source code + OSS Licenses")
+        append("Source code")
       }
       pop()
     }

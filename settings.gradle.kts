@@ -16,35 +16,24 @@ pluginManagement {
     exclusiveContent {
       forRepository(::gradlePluginPortal)
       filter {
-        includeModule("com.github.gmazzo.buildconfig", "plugin")
-        includeModule(
-          "com.github.gmazzo.buildconfig",
-          "com.github.gmazzo.buildconfig.gradle.plugin",
-        )
-        includeModule("com.github.ben-manes", "gradle-versions-plugin")
-        includeModule(
-          "com.github.ben-manes.versions",
-          "com.github.ben-manes.versions.gradle.plugin",
-        )
-        includeModule("com.gradle", "gradle-enterprise-gradle-plugin")
-        includeModule("com.gradle.enterprise", "com.gradle.enterprise.gradle.plugin")
+        includeGroup("com.github.gmazzo.buildconfig")
+        includeGroup("com.mikepenz.aboutlibraries.plugin")
+        includeGroup("com.gradle")
+        includeModule("com.gradle.develocity", "com.gradle.develocity.gradle.plugin")
         includeModule("com.diffplug.spotless", "com.diffplug.spotless.gradle.plugin")
-        includeModule("io.gitlab.arturbosch.detekt", "io.gitlab.arturbosch.detekt.gradle.plugin")
         includeModule("org.gradle.kotlin.kotlin-dsl", "org.gradle.kotlin.kotlin-dsl.gradle.plugin")
         includeModule("org.gradle.kotlin", "gradle-kotlin-dsl-plugins")
       }
     }
   }
-  plugins { id("com.gradle.enterprise") version "3.15.1" }
 }
 
-plugins { id("com.gradle.enterprise") }
+plugins { id("com.gradle.develocity") version "3.17.5" }
 
-gradleEnterprise {
+develocity {
   buildScan {
-    publishAlways()
-    termsOfServiceUrl = "https://gradle.com/terms-of-service"
-    termsOfServiceAgree = "yes"
+    termsOfUseUrl = "https://gradle.com/terms-of-service"
+    termsOfUseAgree = "yes"
 
     tag(if (System.getenv("CI").isNullOrBlank()) "Local" else "CI")
 
@@ -57,6 +46,3 @@ gradleEnterprise {
 }
 
 rootProject.name = "field-spottr-root"
-
-// https://docs.gradle.org/5.6/userguide/groovy_plugin.html#sec:groovy_compilation_avoidance
-enableFeaturePreview("GROOVY_COMPILATION_AVOIDANCE")

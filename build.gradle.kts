@@ -15,7 +15,7 @@ plugins {
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
   alias(libs.plugins.sqldelight)
-  alias(libs.plugins.licensee)
+  alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
 }
 
@@ -137,6 +137,7 @@ kotlin {
         implementation(libs.sqldelight.coroutines)
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
+        implementation(libs.aboutLicenses)
       }
     }
     androidMain {
@@ -267,7 +268,4 @@ tasks
     classpath("jvmJar")
   }
 
-licensee {
-  allow("Apache-2.0")
-  allow("MIT")
-}
+
