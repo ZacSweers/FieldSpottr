@@ -22,11 +22,12 @@ class MainActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    BuildConfig.BUGSNAG_NOTIFIER_KEY?.takeIf { BuildConfig.IS_RELEASE }?.let {
-      if (!Bugsnag.isStarted()) {
-        Bugsnag.start(this, it)
+    BuildConfig.BUGSNAG_NOTIFIER_KEY?.takeIf { BuildConfig.IS_RELEASE }
+      ?.let {
+        if (!Bugsnag.isStarted()) {
+          Bugsnag.start(this, it)
+        }
       }
-    }
     enableEdgeToEdge()
     StrictMode.enableDefaults()
 

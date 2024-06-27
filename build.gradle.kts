@@ -193,9 +193,7 @@ val code =
     value.toInt() * (2.0.pow(i)).toInt()
   }
 
-val isReleasing = providers.environmentVariable("RELEASING")
-  .map { it.toBoolean() }
-  .orElse(false)
+val isReleasing = providers.environmentVariable("RELEASING").map { it.toBoolean() }.orElse(false)
 
 buildConfig {
   packageName("dev.zacsweers.fieldspottr")
