@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
@@ -23,6 +22,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -165,7 +165,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
           ) {
             Icon(
               Icons.Default.Close,
-              modifier = Modifier.size(32.dp),
+              modifier = Modifier.minimumInteractiveComponentSize(),
               contentDescription = "Close",
               tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
             )
