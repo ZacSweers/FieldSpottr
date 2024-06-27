@@ -193,6 +193,10 @@ val code =
     value.toInt() * (2.0.pow(i)).toInt()
   }
 
+val isReleasing = providers.environmentVariable("RELEASING")
+  .map { it.toBoolean() }
+  .orElse(false)
+
 buildConfig {
   packageName("dev.zacsweers.fieldspottr")
   useKotlinOutput {
@@ -201,6 +205,7 @@ buildConfig {
   }
   buildConfigField("String", "VERSION_NAME", "\"$semVer\"")
   buildConfigField("Int", "VERSION_CODE", code)
+  buildConfigField("Boolean", "IS_RELEASE", isReleasing)
   buildConfigField(
     "String?",
     "BUGSNAG_NOTIFIER_KEY",

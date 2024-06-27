@@ -12,10 +12,12 @@ import FieldSpottrKt
 @main
 struct FieldSpottrApp: App {
     init() {
-        if let key = BuildConfig.shared.BUGSNAG_NOTIFIER_KEY {
-            let config = BugsnagConfiguration(_: key)
-            BugsnagConfigKt.startBugsnag(config: config)
-            BugsnagKotlinKt.enableBugsnag()
+        if BuildConfig.shared.IS_RELEASE {
+            if let key = BuildConfig.shared.BUGSNAG_NOTIFIER_KEY {
+                let config = BugsnagConfiguration(_: key)
+                BugsnagConfigKt.startBugsnag(config: config)
+                BugsnagKotlinKt.enableBugsnag()
+            }
         }
     }
     var body: some Scene {
