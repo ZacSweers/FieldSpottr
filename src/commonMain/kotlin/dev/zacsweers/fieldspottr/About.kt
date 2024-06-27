@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
@@ -18,9 +20,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.UrlAnnotation
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
@@ -42,6 +45,13 @@ fun About(modifier: Modifier = Modifier) {
       tint = Color.Unspecified,
     )
     Spacer(modifier = Modifier.height(16.dp))
+    Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
+    Text(
+      "v${BuildConfig.VERSION_NAME}",
+      style = MaterialTheme.typography.labelSmall,
+      color = LocalContentColor.current.copy(alpha = 0.5f),
+    )
+    Spacer(modifier = Modifier.height(8.dp))
     val text = buildAnnotatedString {
       append("An app for checking field permit status from ")
       pushUrlAnnotation(UrlAnnotation("https://nycgovparks.org"))
@@ -56,10 +66,7 @@ fun About(modifier: Modifier = Modifier) {
       }
       pop()
       append(".")
-      repeat(3) { appendLine() }
-      // TODO
-      //        append(stringResource(R.string.about_version, versionName))
-      //        appendLine()
+      repeat(2) { appendLine() }
       append("By ")
       append(" ")
       pushUrlAnnotation(UrlAnnotation("https://zacsweers.dev"))
@@ -73,16 +80,17 @@ fun About(modifier: Modifier = Modifier) {
         append("Zac Sweers")
       }
       pop()
-      append(" — ")
+      appendLine()
+      appendLine()
       pushUrlAnnotation(UrlAnnotation("https://github.com/ZacSweers/FieldSpottr"))
       withStyle(
         style =
           SpanStyle(
-            color = MaterialTheme.colorScheme.primary,
+            color = LocalContentColor.current.copy(alpha = 0.5f),
             textDecoration = TextDecoration.Underline,
           )
       ) {
-        append("Source code")
+        append("Source code + OSS Licenses")
       }
       pop()
     }
@@ -91,7 +99,11 @@ fun About(modifier: Modifier = Modifier) {
     ClickableText(
       text,
       modifier = Modifier.align(CenterHorizontally),
-      style = TextStyle(textAlign = TextAlign.Center),
+      style =
+        MaterialTheme.typography.bodyMedium.copy(
+          textAlign = TextAlign.Center,
+          color = LocalContentColor.current,
+        ),
     ) { offset ->
       text.getUrlAnnotations(start = offset, end = offset).firstOrNull()?.let { annotation ->
         uriHandler.openUri(annotation.item.url)
