@@ -15,6 +15,7 @@ struct FieldSpottrApp: App {
         if let key = BuildConfig.shared.BUGSNAG_NOTIFIER_KEY {
             let config = BugsnagConfiguration(_: key)
             BugsnagConfigKt.startBugsnag(config: config)
+            BugsnagKotlinKt.enableBugsnag()
         }
     }
     var body: some Scene {
