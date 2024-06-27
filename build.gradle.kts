@@ -16,6 +16,7 @@ plugins {
   alias(libs.plugins.kotlin.plugin.compose)
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.licensee)
+  alias(libs.plugins.buildConfig)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -179,6 +180,14 @@ val code =
   semVer.split(".").asReversed().withIndex().sumOf { (i, value) ->
     value.toInt() * (2.0.pow(i)).toInt()
   }
+
+buildConfig {
+  packageName("dev.zacsweers.fieldspottr")
+  useKotlinOutput { internalVisibility = true }
+  buildConfigField("String", "VERSION_NAME", "\"$semVer\"")
+  buildConfigField("Int", "VERSION_CODE", code)
+  generateAtSync = true
+}
 
 android {
   namespace = appId
