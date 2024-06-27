@@ -17,6 +17,7 @@ plugins {
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
+  alias(libs.plugins.bugsnag)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -150,6 +151,7 @@ kotlin {
         implementation(libs.androidx.compose.integration.activity)
         implementation(libs.compose.ui.tooling)
         implementation(libs.compose.ui.tooling.preview)
+        implementation(libs.bugsnag.android)
       }
     }
     jvmMain {
@@ -187,6 +189,11 @@ buildConfig {
   useKotlinOutput { internalVisibility = true }
   buildConfigField("String", "VERSION_NAME", "\"$semVer\"")
   buildConfigField("Int", "VERSION_CODE", code)
+  buildConfigField(
+    "String?",
+    "BUGSNAG_NOTIFIER_KEY",
+    providers.gradleProperty("fs_bugsnag_key").orNull,
+  )
   generateAtSync = true
 }
 
@@ -267,5 +274,3 @@ tasks
     dependsOn("jvmJar")
     classpath("jvmJar")
   }
-
-
