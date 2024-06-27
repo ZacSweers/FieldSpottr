@@ -5,6 +5,7 @@ androidx-appcompat = "1.7.0"
 agp = "8.5.0"
 circuit = "0.22.2"
 compose-jb = "1.6.11"
+crashKios = "0.8.6"
 jdk = "21"
 jvmTarget = "11"
 kotlin = "2.0.0"
@@ -21,6 +22,7 @@ agp-application = { id = "com.android.application", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.1.0" }
 buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.3.5" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
+crashKiosBugsnag = { id = "co.touchlab.crashkios.bugsnaglink", version.ref = "crashKios" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-plugin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }
@@ -46,6 +48,7 @@ compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data",
 compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-jb" }
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+crashKios = { module = "co.touchlab.crashkios:bugsnag", version.ref = "crashKios" }
 desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.0.4"
 kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.6.0"
 kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.7"

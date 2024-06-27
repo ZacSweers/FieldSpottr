@@ -18,6 +18,7 @@ plugins {
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
   alias(libs.plugins.bugsnag)
+  alias(libs.plugins.crashKiosBugsnag)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -109,7 +110,10 @@ kotlin {
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
   listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
-    it.binaries.framework { baseName = "FieldSpottrKt" }
+    it.binaries.framework {
+      baseName = "FieldSpottrKt" 
+      export(libs.crashKios)
+    }
   }
 
   compilerOptions {
@@ -164,7 +168,12 @@ kotlin {
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
-    iosMain { dependencies { implementation(libs.ktor.client.engine.darwin) } }
+    iosMain {
+      dependencies {
+        api(libs.crashKios)
+        implementation(libs.ktor.client.engine.darwin)
+      }
+    }
   }
 }
 
@@ -186,7 +195,10 @@ val code =
 
 buildConfig {
   packageName("dev.zacsweers.fieldspottr")
-  useKotlinOutput { internalVisibility = true }
+  useKotlinOutput {
+    // internal isn't visible to iOS sources
+    internalVisibility = false
+  }
   buildConfigField("String", "VERSION_NAME", "\"$semVer\"")
   buildConfigField("Int", "VERSION_CODE", code)
   buildConfigField(
