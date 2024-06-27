@@ -13,8 +13,7 @@ import FieldSpottrKt
 struct FieldSpottrApp: App {
     init() {
         if let key = BuildConfig.shared.BUGSNAG_NOTIFIER_KEY {
-            Bugsnag.start(withApiKey: key)
-            let config = BugsnagConfiguration.loadConfig()
+            let config = BugsnagConfiguration(_: key)
             BugsnagConfigKt.startBugsnag(config: config)
         }
     }
