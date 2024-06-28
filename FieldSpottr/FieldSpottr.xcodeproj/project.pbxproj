@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EA56E1202C2DE71500F7AE8A /* Bugsnag in Frameworks */ = {isa = PBXBuildFile; productRef = EA56E11F2C2DE71500F7AE8A /* Bugsnag */; };
+		EA56E1222C2DE71500F7AE8A /* BugsnagNetworkRequestPlugin in Frameworks */ = {isa = PBXBuildFile; productRef = EA56E1212C2DE71500F7AE8A /* BugsnagNetworkRequestPlugin */; };
 		EA78CA642C1B78D30092A5DA /* FieldSpottrApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA78CA632C1B78D30092A5DA /* FieldSpottrApp.swift */; };
 		EA78CA662C1B78D30092A5DA /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA78CA652C1B78D30092A5DA /* ContentView.swift */; };
 		EA78CA682C1B78D30092A5DA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EA78CA672C1B78D30092A5DA /* Assets.xcassets */; };
@@ -27,6 +29,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EA56E1222C2DE71500F7AE8A /* BugsnagNetworkRequestPlugin in Frameworks */,
+				EA56E1202C2DE71500F7AE8A /* Bugsnag in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -86,6 +90,10 @@
 			dependencies = (
 			);
 			name = FieldSpottr;
+			packageProductDependencies = (
+				EA56E11F2C2DE71500F7AE8A /* Bugsnag */,
+				EA56E1212C2DE71500F7AE8A /* BugsnagNetworkRequestPlugin */,
+			);
 			productName = FieldSpottr;
 			productReference = EA78CA602C1B78D30092A5DA /* FieldSpottr.app */;
 			productType = "com.apple.product-type.application";
@@ -114,6 +122,9 @@
 				Base,
 			);
 			mainGroup = EA78CA572C1B78D30092A5DA;
+			packageReferences = (
+				EA56E11E2C2DE71500F7AE8A /* XCRemoteSwiftPackageReference "bugsnag-cocoa" */,
+			);
 			productRefGroup = EA78CA612C1B78D30092A5DA /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -369,6 +380,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		EA56E11E2C2DE71500F7AE8A /* XCRemoteSwiftPackageReference "bugsnag-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/bugsnag/bugsnag-cocoa";
+			requirement = {
+				kind = exactVersion;
+				version = 6.29.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		EA56E11F2C2DE71500F7AE8A /* Bugsnag */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EA56E11E2C2DE71500F7AE8A /* XCRemoteSwiftPackageReference "bugsnag-cocoa" */;
+			productName = Bugsnag;
+		};
+		EA56E1212C2DE71500F7AE8A /* BugsnagNetworkRequestPlugin */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EA56E11E2C2DE71500F7AE8A /* XCRemoteSwiftPackageReference "bugsnag-cocoa" */;
+			productName = BugsnagNetworkRequestPlugin;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = EA78CA582C1B78D30092A5DA /* Project object */;
 }

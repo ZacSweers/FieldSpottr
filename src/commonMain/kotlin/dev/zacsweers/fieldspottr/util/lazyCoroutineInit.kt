@@ -13,6 +13,6 @@ private class LazySuspend<T>(private val initializer: suspend () -> T) : suspend
   private var _value: T? = null
 
   override suspend fun invoke(): T {
-    return _value ?: mutex.withLock { initializer().also { _value = it } }
+    return mutex.withLock { _value ?: initializer().also { _value = it } }
   }
 }

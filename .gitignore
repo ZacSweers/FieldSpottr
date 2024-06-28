@@ -17,6 +17,9 @@ node_modules
 reports
 .cxx
 
+release/*.jks
+release/*.json
+
 # IDE-generated dir
 out/
 

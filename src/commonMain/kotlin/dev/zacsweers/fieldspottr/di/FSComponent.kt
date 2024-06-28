@@ -24,17 +24,19 @@ interface SharedPlatformFSComponent {
 @Immutable
 class FSComponent(private val shared: SharedPlatformFSComponent) :
   SharedPlatformFSComponent by shared {
-  fun providePermitRepository(): PermitRepository =
-    PermitRepository(provideSqlDriverFactory(), provideFSAppDirs())
 
-  fun provideCircuit(): Circuit {
-    return Circuit.Builder()
+  private val permitRepository: PermitRepository by lazy {
+    PermitRepository(provideSqlDriverFactory(), provideFSAppDirs())
+  }
+
+  val circuit: Circuit by lazy {
+    Circuit.Builder()
       .addPresenter<HomeScreen, HomeScreen.State> { _, _, _ ->
-        presenterOf { HomePresenter(providePermitRepository()) }
+        presenterOf { HomePresenter(permitRepository) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
       .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->
-        presenterOf { PermitDetailsPresenter(screen, providePermitRepository()) }
+        presenterOf { PermitDetailsPresenter(screen, permitRepository) }
       }
       .addUi<PermitDetailsScreen, PermitDetailsScreen.State> { state, modifier ->
         PermitDetails(state, modifier)

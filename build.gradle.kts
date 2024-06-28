@@ -1,8 +1,8 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
 import com.diffplug.spotless.LineEnding
-import kotlin.math.pow
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
 
@@ -14,6 +14,10 @@ plugins {
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
   alias(libs.plugins.sqldelight)
+  alias(libs.plugins.aboutLicenses)
+  alias(libs.plugins.buildConfig)
+  alias(libs.plugins.bugsnag)
+  alias(libs.plugins.crashKiosBugsnag)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -59,6 +63,7 @@ spotless {
   }
 }
 
+@OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
   androidTarget {
     compilerOptions {
@@ -104,7 +109,10 @@ kotlin {
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
   listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
-    it.binaries.framework { baseName = "FieldSpottrKt" }
+    it.binaries.framework {
+      baseName = "FieldSpottrKt"
+      export(libs.crashKios)
+    }
   }
 
   compilerOptions {
@@ -120,6 +128,7 @@ kotlin {
     commonMain {
       dependencies {
         implementation(project.dependencies.platform(libs.kotlin.bom))
+        implementation(compose.components.resources)
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
@@ -132,31 +141,39 @@ kotlin {
         implementation(libs.sqldelight.coroutines)
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
+        implementation(libs.aboutLicenses)
       }
     }
     androidMain {
       dependencies {
-        implementation(project.dependencies.platform(libs.kotlin.bom))
-        implementation(libs.coroutines.android)
-        implementation(libs.sqldelight.driver.android)
-        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.androidx.appCompat)
         implementation(libs.androidx.compose.integration.activity)
+        implementation(libs.androidx.splash)
+        implementation(libs.bugsnag.android)
         implementation(libs.compose.ui.tooling)
         implementation(libs.compose.ui.tooling.preview)
+        implementation(libs.coroutines.android)
+        implementation(libs.ktor.client.engine.okhttp)
+        implementation(libs.sqldelight.driver.android)
+        implementation(project.dependencies.platform(libs.kotlin.bom))
       }
     }
     jvmMain {
       dependencies {
-        implementation(project.dependencies.platform(libs.kotlin.bom))
-        implementation(libs.sqldelight.driver.jdbc)
         implementation(compose.desktop.currentOs)
-        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.appDirs)
+        implementation(libs.ktor.client.engine.okhttp)
+        implementation(libs.sqldelight.driver.jdbc)
+        implementation(project.dependencies.platform(libs.kotlin.bom))
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
-    iosMain { dependencies { implementation(libs.ktor.client.engine.darwin) } }
+    iosMain {
+      dependencies {
+        api(libs.crashKios)
+        implementation(libs.ktor.client.engine.darwin)
+      }
+    }
   }
 }
 
@@ -169,22 +186,39 @@ dependencies.modules {
 
 val appId = "dev.zacsweers.fieldspottr"
 
-val semVer = "1.0.0"
-// convert the version name to a binary number that grows with each release
-val code =
-  semVer.split(".").asReversed().withIndex().sumOf { (i, value) ->
-    value.toInt() * (2.0.pow(i)).toInt()
+val fsVersionCode = providers.gradleProperty("fs_versioncode").map { it.toLong() }.get()
+val fsVersionName = "1.0.0"
+
+val isReleasing = providers.environmentVariable("RELEASING").map { it.toBoolean() }.orElse(false)
+
+buildConfig {
+  packageName("dev.zacsweers.fieldspottr")
+  useKotlinOutput {
+    // internal isn't visible to iOS sources
+    internalVisibility = false
   }
+  buildConfigField("String", "VERSION_NAME", "\"$fsVersionName - $fsVersionCode\"")
+  buildConfigField("Long", "VERSION_CODE", fsVersionCode)
+  buildConfigField("Boolean", "IS_RELEASE", isReleasing)
+  buildConfigField(
+    "String?",
+    "BUGSNAG_NOTIFIER_KEY",
+    providers.gradleProperty("fs_bugsnag_key").orNull,
+  )
+  generateAtSync = true
+}
 
 android {
   namespace = appId
   compileSdk = 34
 
   defaultConfig {
-    versionCode = code
-    versionName = semVer
+    versionCode = fsVersionCode.toInt()
+    versionName = fsVersionName
     minSdk = 29
     targetSdk = 34
+    // Here because Bugsnag requires it in manifests for some reason
+    manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
   }
 
   buildFeatures { compose = true }
@@ -195,8 +229,21 @@ android {
   }
 
   lint { checkTestSources = true }
+
+  signingConfigs {
+    if (rootProject.file("release/app-release.jks").exists()) {
+      create("release") {
+        storeFile = rootProject.file("release/app-release.jks")
+        storePassword = providers.gradleProperty("fs_release_keystore_pwd").orNull
+        keyAlias = "zacsweers-fieldspottr"
+        keyPassword = providers.gradleProperty("fs_release_key_pwd").orNull
+      }
+    }
+  }
+
   buildTypes {
     maybeCreate("debug").apply {
+      versionNameSuffix = "-dev"
       applicationIdSuffix = ".debug"
       matchingFallbacks += listOf("release")
     }
@@ -205,9 +252,12 @@ android {
       isMinifyEnabled = true
       matchingFallbacks += listOf("release")
       proguardFiles("proguardrules.pro")
+      signingConfig = signingConfigs.findByName("release") ?: signingConfigs["debug"]
     }
   }
+
   bundle {}
+
   compileOptions { isCoreLibraryDesugaringEnabled = true }
   dependencies {
     add("coreLibraryDesugaring", libs.desugarJdkLibs)
@@ -215,14 +265,20 @@ android {
   }
 }
 
+bugsnag { enabled = !providers.gradleProperty("fs_bugsnag_key").orNull.isNullOrBlank() }
+
 compose {
+  resources {
+    packageOfResClass = "dev.zacsweers.fieldspottr"
+    generateResClass = always
+  }
   desktop {
     application {
       mainClass = "dev.zacsweers.fieldspottr.MainKt"
       nativeDistributions {
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
         packageName = appId
-        packageVersion = semVer
+        packageVersion = fsVersionName
       }
     }
   }

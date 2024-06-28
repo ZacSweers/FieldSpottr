@@ -4,11 +4,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
   <application
+      android:name="dev.zacsweers.fieldspottr.FieldSpottrApplication"
       android:enableOnBackInvokedCallback="true"
       android:icon="@mipmap/ic_launcher"
       android:label="FieldSpottr"
       android:roundIcon="@mipmap/ic_launcher"
-      android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+      android:theme="@style/Theme.App.Starting">
     <activity
         android:name="dev.zacsweers.fieldspottr.MainActivity"
         android:configChanges="colorMode|density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
@@ -25,7 +26,9 @@
       </intent-filter>
     </activity>
 
-
+    <meta-data
+        android:name="com.bugsnag.android.API_KEY"
+        android:value="${bugsnagApiKey}" />
   </application>
 
   <uses-permission android:name="android.permission.INTERNET" />
