@@ -52,7 +52,7 @@ fun About(modifier: Modifier = Modifier) {
     LibrariesContainer(
       libraries = libs,
       modifier = modifier.fillMaxSize(),
-      showAuthor = false,
+      showAuthor = true,
       showVersion = false,
       header = { item(key = "header") { Header(Modifier.fillMaxWidth()) } },
     )
