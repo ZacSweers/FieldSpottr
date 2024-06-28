@@ -197,7 +197,7 @@ buildConfig {
     // internal isn't visible to iOS sources
     internalVisibility = false
   }
-  buildConfigField("String", "VERSION_NAME", "\"$fsVersionName\"")
+  buildConfigField("String", "VERSION_NAME", "\"$fsVersionName - $fsVersionCode\"")
   buildConfigField("Long", "VERSION_CODE", fsVersionCode)
   buildConfigField("Boolean", "IS_RELEASE", isReleasing)
   buildConfigField(

@@ -76,7 +76,7 @@ private fun Header(modifier: Modifier = Modifier) {
     Spacer(modifier = Modifier.height(16.dp))
     Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
     Text(
-      "v${BuildConfig.VERSION_NAME} - ${BuildConfig.VERSION_CODE}",
+      "v${BuildConfig.VERSION_NAME}",
       style = MaterialTheme.typography.labelSmall,
       color = LocalContentColor.current.copy(alpha = 0.5f),
     )
