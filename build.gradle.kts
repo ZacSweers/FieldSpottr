@@ -197,7 +197,7 @@ buildConfig {
     internalVisibility = false
   }
   buildConfigField("String", "VERSION_NAME", "\"$fsVersionName\"")
-  buildConfigField("Int", "VERSION_CODE", fsVersionCode)
+  buildConfigField("Long", "VERSION_CODE", fsVersionCode)
   buildConfigField("Boolean", "IS_RELEASE", isReleasing)
   buildConfigField(
     "String?",
@@ -217,7 +217,7 @@ android {
     minSdk = 29
     targetSdk = 34
     // Here because Bugsnag requires it in manifests for some reason
-    resValue("string", "bugsnag_key", providers.gradleProperty("fs_bugsnag_key").getOrElse(""))
+    manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
   }
 
   buildFeatures { compose = true }
@@ -228,8 +228,21 @@ android {
   }
 
   lint { checkTestSources = true }
+
+  signingConfigs {
+    create("release") {
+      if (rootProject.file("release/app-release.jks").exists()) {
+        storeFile = rootProject.file("release/app-release.jks")
+        storePassword = providers.gradleProperty("fs_release_keystore_pwd").orNull
+        keyAlias = "zacsweers-fieldspottr"
+        keyPassword = providers.gradleProperty("fs_release_key_pwd").orNull
+      }
+    }
+  }
+
   buildTypes {
     maybeCreate("debug").apply {
+      versionNameSuffix = "-dev"
       applicationIdSuffix = ".debug"
       matchingFallbacks += listOf("release")
     }
@@ -238,9 +251,12 @@ android {
       isMinifyEnabled = true
       matchingFallbacks += listOf("release")
       proguardFiles("proguardrules.pro")
+      signingConfig = signingConfigs.findByName("release") ?: signingConfigs["debug"]
     }
   }
+
   bundle {}
+
   compileOptions { isCoreLibraryDesugaringEnabled = true }
   dependencies {
     add("coreLibraryDesugaring", libs.desugarJdkLibs)
@@ -261,7 +277,7 @@ compose {
       nativeDistributions {
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
         packageName = appId
-        packageVersion = "$fsVersionName-$fsVersionCode"
+        packageVersion = fsVersionName
       }
     }
   }

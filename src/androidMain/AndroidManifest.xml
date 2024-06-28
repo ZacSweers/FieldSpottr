@@ -26,7 +26,7 @@
     </activity>
 
     <meta-data android:name="com.bugsnag.android.API_KEY"
-        android:value="@string/bugsnag_key"/>
+        android:value="${bugsnagApiKey}"/>
   </application>
 
   <uses-permission android:name="android.permission.INTERNET" />
