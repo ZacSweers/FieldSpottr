@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,7 +54,7 @@ fun About(modifier: Modifier = Modifier) {
       modifier = modifier.fillMaxSize(),
       showAuthor = false,
       showVersion = false,
-      header = { item(key = "header") { Header() } },
+      header = { item(key = "header") { Header(Modifier.fillMaxWidth()) } },
     )
   }
 }
