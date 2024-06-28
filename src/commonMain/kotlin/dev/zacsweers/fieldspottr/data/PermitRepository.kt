@@ -200,6 +200,13 @@ class PermitRepository(
           val startTime = LocalDateTime.parse(start, FORMATTER)
           val endTime = LocalDateTime.parse(end, FORMATTER)
 
+          if (startTime == endTime) {
+            // It's... unclear how this happens, but they do exist. Probably mistakes. Toss them
+            // out.
+            println("Skipping zero-duration permit: $line")
+            return@forEach
+          }
+
           fsdbQueries.addPermit(
             DbPermit(
               recordId = recordId.toLong(),
