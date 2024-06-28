@@ -33,6 +33,7 @@ sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 aboutLicenses = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutLicenses" }
 androidx-appCompat = { module = "androidx.appcompat:appcompat", version.ref = "androidx-appcompat" }
 androidx-compose-integration-activity = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-splash = "androidx.core:core-splashscreen:1.0.1"
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.2.2"

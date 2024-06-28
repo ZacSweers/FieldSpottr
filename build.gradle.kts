@@ -146,24 +146,25 @@ kotlin {
     }
     androidMain {
       dependencies {
-        implementation(project.dependencies.platform(libs.kotlin.bom))
-        implementation(libs.coroutines.android)
-        implementation(libs.sqldelight.driver.android)
-        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.androidx.appCompat)
         implementation(libs.androidx.compose.integration.activity)
+        implementation(libs.androidx.splash)
+        implementation(libs.bugsnag.android)
         implementation(libs.compose.ui.tooling)
         implementation(libs.compose.ui.tooling.preview)
-        implementation(libs.bugsnag.android)
+        implementation(libs.coroutines.android)
+        implementation(libs.ktor.client.engine.okhttp)
+        implementation(libs.sqldelight.driver.android)
+        implementation(project.dependencies.platform(libs.kotlin.bom))
       }
     }
     jvmMain {
       dependencies {
-        implementation(project.dependencies.platform(libs.kotlin.bom))
-        implementation(libs.sqldelight.driver.jdbc)
         implementation(compose.desktop.currentOs)
-        implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.appDirs)
+        implementation(libs.ktor.client.engine.okhttp)
+        implementation(libs.sqldelight.driver.jdbc)
+        implementation(project.dependencies.platform(libs.kotlin.bom))
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
