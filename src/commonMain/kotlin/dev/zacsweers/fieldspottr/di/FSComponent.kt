@@ -25,7 +25,7 @@ interface SharedPlatformFSComponent {
 class FSComponent(private val shared: SharedPlatformFSComponent) :
   SharedPlatformFSComponent by shared {
 
-  private val permitRepository: PermitRepository by lazy {
+  val permitRepository: PermitRepository by lazy {
     PermitRepository(provideSqlDriverFactory(), provideFSAppDirs())
   }
 
