@@ -221,6 +221,8 @@ android {
     versionName = semVer
     minSdk = 29
     targetSdk = 34
+    // Here because Bugsnag requires it in manifests for some reason
+    resValue("string", "bugsnag_key", providers.gradleProperty("fs_bugsnag_key").getOrElse(""))
   }
 
   buildFeatures { compose = true }
