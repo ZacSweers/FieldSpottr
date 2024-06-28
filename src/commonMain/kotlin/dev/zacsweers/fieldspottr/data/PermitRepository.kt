@@ -82,21 +82,34 @@ class PermitRepository(
     FSDatabase(driver)
   }
 
-  suspend fun populateDb(forceRefresh: Boolean): Boolean {
-    // Parallelize, but unfortunately we can't escape the try/catch here
-    try {
-      Area.entries.parallelForEach(parallelism = Area.entries.size) { area ->
-        val successful = db().populateDbFrom(area, forceRefresh)
-        if (!successful) {
-          throw Exception()
+  suspend fun populateDb(forceRefresh: Boolean, log: (String) -> Unit): Boolean =
+    withContext(Dispatchers.IO) {
+      val outdated =
+        if (forceRefresh) {
+          Area.entries
+        } else {
+          Area.entries.filterNot { db().isAreaUpToDate(it) }
         }
+      if (outdated.isEmpty()) {
+        return@withContext true
+      } else {
+        log("Populating DB...")
       }
-    } catch (e: Exception) {
-      println("Failed to populate DB:\n${e.stackTraceToString()}")
-      return false
+
+      // Parallelize, but unfortunately we can't escape the try/catch here
+      try {
+        outdated.parallelForEach(parallelism = Area.entries.size) { area ->
+          val successful = db().populateDbFrom(area)
+          if (!successful) {
+            throw Exception()
+          }
+        }
+      } catch (e: Exception) {
+        println("Failed to populate DB:\n${e.stackTraceToString()}")
+        return@withContext false
+      }
+      return@withContext true
     }
-    return true
-  }
 
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
@@ -154,61 +167,58 @@ class PermitRepository(
     return true
   }
 
-  private suspend fun FSDatabase.populateDbFrom(area: Area, forceRefresh: Boolean): Boolean =
-    withContext(Dispatchers.IO) {
-      val now = System.now()
-      if (!forceRefresh) {
-        // Check area last update in the DB. If it's less than a week old, skip it
-        val lastUpdate = transactionWithResult {
-          fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
-        }
-        if (lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)) {
-          // Up to date
-          return@withContext true
-        }
-      }
-
-      val csvFile = getOrFetchCsv(area) ?: return@withContext false
-
-      // Clear existing permits if we have new ones
-      transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
-
-      appDirs.fs.source(csvFile).buffer().useLines { lines ->
-        lines.drop(1).forEach { line ->
-          val (start, end, field, type, name, org, status) =
-            line.split(",").map { it.removeSurrounding("\"").trim() }
-          if (field !in area.fieldMappings) {
-            // Irrelevant field
-            return@forEach
-          }
-          val group = area.fieldMappings.getValue(field).group
-          val recordId = hashOf(area.areaName, group, start, end, field)
-
-          val startTime = LocalDateTime.parse(start, FORMATTER)
-          val endTime = LocalDateTime.parse(end, FORMATTER)
-
-          transaction {
-            fsdbQueries.addPermit(
-              DbPermit(
-                recordId = recordId.toLong(),
-                area = area.areaName,
-                groupName = group,
-                start = startTime.toNyInstant().toEpochMilliseconds(),
-                end = endTime.toNyInstant().toEpochMilliseconds(),
-                fieldId = field,
-                type = type,
-                name = name,
-                org = org,
-                status = status,
-              )
-            )
-          }
-        }
-      }
-      // Log last update time
-      transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
-      true
+  private suspend fun FSDatabase.isAreaUpToDate(area: Area, now: Instant = System.now()): Boolean {
+    // Check area last update in the DB. If it's less than a week old, skip it
+    val lastUpdate = transactionWithResult {
+      fsdbQueries.lastAreaUpdate(area.areaName).executeAsOneOrNull()
     }
+    return lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)
+  }
+
+  private suspend fun FSDatabase.populateDbFrom(area: Area): Boolean {
+    val now = System.now()
+
+    val csvFile = getOrFetchCsv(area) ?: return false
+
+    // Clear existing permits if we have new ones
+    transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
+
+    appDirs.fs.source(csvFile).buffer().useLines { lines ->
+      lines.drop(1).forEach { line ->
+        val (start, end, field, type, name, org, status) =
+          line.split(",").map { it.removeSurrounding("\"").trim() }
+        if (field !in area.fieldMappings) {
+          // Irrelevant field
+          return@forEach
+        }
+        val group = area.fieldMappings.getValue(field).group
+        val recordId = hashOf(area.areaName, group, start, end, field)
+
+        val startTime = LocalDateTime.parse(start, FORMATTER)
+        val endTime = LocalDateTime.parse(end, FORMATTER)
+
+        transaction {
+          fsdbQueries.addPermit(
+            DbPermit(
+              recordId = recordId.toLong(),
+              area = area.areaName,
+              groupName = group,
+              start = startTime.toNyInstant().toEpochMilliseconds(),
+              end = endTime.toNyInstant().toEpochMilliseconds(),
+              fieldId = field,
+              type = type,
+              name = name,
+              org = org,
+              status = status,
+            )
+          )
+        }
+      }
+    }
+    // Log last update time
+    transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
+    return true
+  }
 
   fun permitsByGroup(group: String, org: String, start: LocalDate): Flow<List<DbPermit>> {
     return flow {

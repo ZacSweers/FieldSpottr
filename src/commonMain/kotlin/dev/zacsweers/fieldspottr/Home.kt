@@ -87,7 +87,7 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
   var showInfo by rememberRetained { mutableStateOf(false) }
-  var populateDb by rememberRetained { mutableStateOf(false) }
+  var populateDb by rememberRetained { mutableStateOf(true) }
   var forceRefresh by rememberRetained { mutableStateOf(false) }
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
   var selectedGroup by rememberRetained { mutableStateOf(Area.entries[0].fieldGroups[0].name) }
@@ -104,8 +104,7 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
 
   if (populateDb) {
     LaunchedEffect(Unit) {
-      loadingMessage = "Populating DB..."
-      val successful = repository.populateDb(forceRefresh)
+      val successful = repository.populateDb(forceRefresh) { loadingMessage = it }
       loadingMessage =
         if (successful) {
           null
