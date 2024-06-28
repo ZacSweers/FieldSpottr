@@ -231,8 +231,8 @@ android {
   lint { checkTestSources = true }
 
   signingConfigs {
-    create("release") {
-      if (rootProject.file("release/app-release.jks").exists()) {
+    if (rootProject.file("release/app-release.jks").exists()) {
+      create("release") {
         storeFile = rootProject.file("release/app-release.jks")
         storePassword = providers.gradleProperty("fs_release_keystore_pwd").orNull
         keyAlias = "zacsweers-fieldspottr"
