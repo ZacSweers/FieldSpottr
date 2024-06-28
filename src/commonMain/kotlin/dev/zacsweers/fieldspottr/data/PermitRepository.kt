@@ -180,24 +180,26 @@ class PermitRepository(
 
     val csvFile = getOrFetchCsv(area) ?: return false
 
-    // Clear existing permits if we have new ones
-    transaction { fsdbQueries.deleteAreaPermits(area.areaName) }
+    // One single transaction for all ops so it's atomic
+    transaction {
+      // Clear existing permits if we have new ones
+      fsdbQueries.deleteAreaPermits(area.areaName)
 
-    appDirs.fs.source(csvFile).buffer().useLines { lines ->
-      lines.drop(1).forEach { line ->
-        val (start, end, field, type, name, org, status) =
-          line.split(",").map { it.removeSurrounding("\"").trim() }
-        if (field !in area.fieldMappings) {
-          // Irrelevant field
-          return@forEach
-        }
-        val group = area.fieldMappings.getValue(field).group
-        val recordId = hashOf(area.areaName, group, start, end, field)
+      // Insert the new entries
+      appDirs.fs.source(csvFile).buffer().useLines { lines ->
+        lines.drop(1).forEach { line ->
+          val (start, end, field, type, name, org, status) =
+            line.split(",").map { it.removeSurrounding("\"").trim() }
+          if (field !in area.fieldMappings) {
+            // Irrelevant field
+            return@forEach
+          }
+          val group = area.fieldMappings.getValue(field).group
+          val recordId = hashOf(area.areaName, group, start, end, field)
 
-        val startTime = LocalDateTime.parse(start, FORMATTER)
-        val endTime = LocalDateTime.parse(end, FORMATTER)
+          val startTime = LocalDateTime.parse(start, FORMATTER)
+          val endTime = LocalDateTime.parse(end, FORMATTER)
 
-        transaction {
           fsdbQueries.addPermit(
             DbPermit(
               recordId = recordId.toLong(),
@@ -214,9 +216,10 @@ class PermitRepository(
           )
         }
       }
+
+      // Log last update time
+      fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds()))
     }
-    // Log last update time
-    transaction { fsdbQueries.updateAreaOp(DbArea(area.areaName, now.toEpochMilliseconds())) }
     return true
   }
 
