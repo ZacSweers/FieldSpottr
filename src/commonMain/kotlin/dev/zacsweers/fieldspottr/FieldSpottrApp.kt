@@ -5,7 +5,6 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import com.slack.circuit.backstack.rememberSaveableBackStack
 import com.slack.circuit.foundation.CircuitCompositionLocals
 import com.slack.circuit.foundation.NavigableCircuitContent
@@ -18,10 +17,9 @@ import dev.zacsweers.fieldspottr.theme.FSTheme
 fun FieldSpottrApp(component: FSComponent, onRootPop: () -> Unit) {
   FSTheme {
     Surface(color = MaterialTheme.colorScheme.background) {
-      val circuit = remember { component.provideCircuit() }
       val backStack = rememberSaveableBackStack(HomeScreen)
       val navigator = rememberCircuitNavigator(backStack) { onRootPop() }
-      CircuitCompositionLocals(circuit) {
+      CircuitCompositionLocals(component.circuit) {
         ContentWithOverlays {
           NavigableCircuitContent(navigator = navigator, backStack = backStack)
         }

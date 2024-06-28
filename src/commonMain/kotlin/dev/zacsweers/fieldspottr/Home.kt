@@ -45,9 +45,6 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.LocalDate
@@ -95,10 +92,7 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
 
   val permitsFlow =
     rememberRetained(selectedDate, selectedGroup) {
-      repository
-        .permitsFlow(selectedDate, selectedGroup)
-        .map(PermitState::fromPermits)
-        .flowOn(Dispatchers.IO)
+      repository.permitsFlow(selectedDate, selectedGroup).map(PermitState::fromPermits)
     }
   val permits by permitsFlow.collectAsRetainedState(null)
 

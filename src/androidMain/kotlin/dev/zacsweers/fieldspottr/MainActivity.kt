@@ -3,35 +3,23 @@
 package dev.zacsweers.fieldspottr
 
 import android.os.Bundle
-import android.os.StrictMode
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
-import com.bugsnag.android.Bugsnag
 import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
 import dev.zacsweers.fieldspottr.data.Area.MCCARREN
-import dev.zacsweers.fieldspottr.di.AndroidSharedPlatformFSComponent
-import dev.zacsweers.fieldspottr.di.FSComponent
 import dev.zacsweers.fieldspottr.theme.FSTheme
 
 class MainActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    BuildConfig.BUGSNAG_NOTIFIER_KEY?.takeIf { BuildConfig.IS_RELEASE }
-      ?.let {
-        if (!Bugsnag.isStarted()) {
-          Bugsnag.start(this, it)
-        }
-      }
     enableEdgeToEdge()
-    StrictMode.enableDefaults()
-
-    val component = FSComponent(AndroidSharedPlatformFSComponent(applicationContext))
+    val component = (application as FieldSpottrApplication).fsComponent
     setContent { FieldSpottrApp(component, onRootPop = ::finish) }
   }
 }
