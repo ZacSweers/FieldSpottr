@@ -1,7 +1,6 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
 import com.diffplug.spotless.LineEnding
-import kotlin.math.pow
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 
@@ -186,12 +185,8 @@ dependencies.modules {
 
 val appId = "dev.zacsweers.fieldspottr"
 
-val semVer = "1.0.0"
-// convert the version name to a binary number that grows with each release
-val code =
-  semVer.split(".").asReversed().withIndex().sumOf { (i, value) ->
-    value.toInt() * (2.0.pow(i)).toInt()
-  }
+val fsVersionCode = providers.gradleProperty("fs_versioncode").map { it.toLong() }.get()
+val fsVersionName = "1.0.0"
 
 val isReleasing = providers.environmentVariable("RELEASING").map { it.toBoolean() }.orElse(false)
 
@@ -201,8 +196,8 @@ buildConfig {
     // internal isn't visible to iOS sources
     internalVisibility = false
   }
-  buildConfigField("String", "VERSION_NAME", "\"$semVer\"")
-  buildConfigField("Int", "VERSION_CODE", code)
+  buildConfigField("String", "VERSION_NAME", "\"$fsVersionName\"")
+  buildConfigField("Int", "VERSION_CODE", fsVersionCode)
   buildConfigField("Boolean", "IS_RELEASE", isReleasing)
   buildConfigField(
     "String?",
@@ -217,8 +212,8 @@ android {
   compileSdk = 34
 
   defaultConfig {
-    versionCode = code
-    versionName = semVer
+    versionCode = fsVersionCode.toInt()
+    versionName = fsVersionName
     minSdk = 29
     targetSdk = 34
     // Here because Bugsnag requires it in manifests for some reason
@@ -266,7 +261,7 @@ compose {
       nativeDistributions {
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
         packageName = appId
-        packageVersion = semVer
+        packageVersion = "$fsVersionName-$fsVersionCode"
       }
     }
   }
