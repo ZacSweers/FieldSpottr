@@ -253,6 +253,8 @@ android {
   }
 }
 
+bugsnag { enabled = !providers.gradleProperty("fs_bugsnag_key").orNull.isNullOrBlank() }
+
 compose {
   resources {
     packageOfResClass = "dev.zacsweers.fieldspottr"
