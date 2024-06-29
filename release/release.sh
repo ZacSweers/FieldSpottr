@@ -24,27 +24,27 @@ increment_version() {
 
 # Update libraries
 echo "Updating library definitions"
-./gradlew exportLibraryDefinitions -PaboutLibraries.exportPath=src/commonMain/composeResources/files
+./gradlew exportLibraryDefinitions -PaboutLibraries.exportPath=src/commonMain/composeResources/files --quiet
 
 # Increment version
 echo "Incrementing version"
 NEW_VERSION=$(increment_version gradle.properties)
-
-# Commit and tag
-echo "Tagging"
-git commit -am "Prepare for release $NEW_VERSION."
-git tag -a "$NEW_VERSION" -m "Version $NEW_VERSION"
 
 export RELEASING=true
 export FS_BUILD_NUMBER=$NEW_VERSION
 
 # Build Android release
 echo "Building Android"
-./gradlew :bundleRelease
+./gradlew :bundleRelease --quiet
 
 # Build iOS release
 echo "Building iOS"
 bundle exec fastlane ios build_prod
+
+# Commit and tag. Don't do it until we know builds were successful
+echo "Tagging"
+git commit -am "Prepare for release $NEW_VERSION."
+git tag -a "$NEW_VERSION" -m "Version $NEW_VERSION"
 
 # TODO publish to stores
 
