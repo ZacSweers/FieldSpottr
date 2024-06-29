@@ -44,7 +44,7 @@ bundle exec fastlane ios build_prod
 # Commit and tag. Don't do it until we know builds were successful
 echo "Tagging"
 git commit -am "Prepare for release $NEW_VERSION."
-git tag -a "$NEW_VERSION" -m "Version $NEW_VERSION"
+git tag -a "v$NEW_VERSION" -m "Version $NEW_VERSION"
 
 # TODO publish to stores
 
