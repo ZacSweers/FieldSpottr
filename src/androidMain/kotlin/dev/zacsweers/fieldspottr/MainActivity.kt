@@ -16,7 +16,6 @@ import dev.zacsweers.fieldspottr.data.Area.MCCARREN
 import dev.zacsweers.fieldspottr.theme.FSTheme
 
 class MainActivity : AppCompatActivity() {
-
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
     super.onCreate(savedInstanceState)

@@ -79,21 +79,37 @@ data class PermitState(val fields: Map<String, List<FieldState>>) {
         var hour = 0
         while (hour < 24) {
           val permit = sortedPermits[currentPermitIndex]
-          if (permit.start == hour) {
-            elements += permit
-            hour += permit.duration
-            if (currentPermitIndex == sortedPermits.lastIndex) {
-              // Exhaust and break
-              repeat(24 - permit.end) { elements += Free }
-              break
-            } else {
-              currentPermitIndex++
+          when {
+            permit.start == hour -> {
+              elements += permit
+              hour += permit.duration
+              if (currentPermitIndex == sortedPermits.lastIndex) {
+                // Exhaust and break
+                repeat(24 - permit.end) { elements += Free }
+                break
+              } else {
+                currentPermitIndex++
+              }
             }
-          } else {
-            // Pad free slots until next permit start
-            repeat(permit.start - hour) {
-              elements += Free
-              hour++
+            permit.start > hour -> {
+              // Pad free slots until next permit start
+              repeat(permit.start - hour) {
+                elements += Free
+                hour++
+              }
+            }
+            else -> {
+              // Overlapping permits. Unclear how this happens tbh, probably a mistake on their
+              // side. Skip it.
+              println(
+                """
+                  Overlapping permits:
+                  - Previous: ${sortedPermits[currentPermitIndex - 1].run { "$timeRange: $title" }}
+                  - Next:  ${permit.timeRange}: ${permit.title}
+                """
+                  .trimIndent()
+              )
+              currentPermitIndex++
             }
           }
         }

@@ -17,6 +17,35 @@ end
 platform :ios do
   projects = ["FieldSpottr"]
 
+  before_all do |lane|
+    cleanup_ci_keychain if is_ci
+    xcodes(select_for_current_build_only: true)
+  end
+
+  after_all do |lane|
+    cleanup_ci_keychain if is_ci
+  end
+
+  error do |lane, exception|
+    cleanup_ci_keychain if is_ci
+  end
+
+  lane :certs do |options|
+    app_store_connect_api_key
+    match(app_identifier: ios_bundle_ids)
+  end
+
+  lane :recreate_certs do |options|
+    app_store_connect_api_key
+
+    match_nuke(
+      app_identifier: ios_bundle_ids,
+      type: "appstore"
+    )
+
+    match(app_identifier: ios_bundle_ids)
+  end
+
   lane :lint do
     for project in projects
       swiftlint(
@@ -54,22 +83,50 @@ platform :ios do
     end
   end
 
-  lane :build_app do |options|
-    setup_ci if ENV['CI']
-    # Clear any existing Xcode derived data, so that we're starting from fresh
-    clear_derived_data if ENV['CI']
+  private_lane :build_fs do |options|
+    setup_ci if is_ci
 
-    gym(
+    skip_certs = env_nil_or_blank('MATCH_PASSWORD')
+
+    certs(type: 'appstore') unless skip_certs
+
+    increment_build_number(
+      xcodeproj: "FieldSpottr/FieldSpottr.xcodeproj",
+      build_number: ENV['FS_BUILD_NUMBER']
+    ) unless env_nil_or_blank('FS_BUILD_NUMBER')
+
+    build_app(
       project: "FieldSpottr/FieldSpottr.xcodeproj",
-      buildlog_path: "FieldSpottr/build/fastlane-buildlog",
-      # We do not have signing setup, so turn off any related settings
-      skip_package_ipa: true,
-      skip_codesigning: true,
+      scheme: options[:scheme],
+      buildlog_path: "build/fastlane-buildlog",
+      skip_package_ipa: skip_certs,
+      skip_codesigning: skip_certs
     )
   end
 
-  lane :build do
-    build_app
+  lane :build_prod do
+    build_fs(scheme: "FieldSpottr")
   end
 
+  lane :publish_prod do
+    app_store_connect_api_key
+    upload_to_testflight(app_identifier: "dev.zacsweers.fieldspottr")
+  end
+
+  lane :build do
+    build_prod
+  end
+end
+
+def cleanup_ci_keychain(name = "fastlane_tmp_keychain")
+  if File.exist? File.expand_path("~/Library/Keychains/#{name}-db")
+    puts "CI keychain exists. Deleting it and restoring the default keychain"
+    delete_keychain(name: name)
+    sh("security default-keychain -s ~/Library/Keychains/login.keychain-db")
+  end
+end
+
+def env_nil_or_blank(name)
+  value = ENV[name]
+  return value.nil? || value.empty?
 end
