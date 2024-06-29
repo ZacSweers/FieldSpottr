@@ -258,6 +258,7 @@ val unspecified_scheme =
 expect fun FSTheme(
   useDarkTheme: Boolean = isSystemInDarkTheme(),
   // Dynamic color is available on Android 12+
+  // TODO do we ever actually want to use this?
   dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
 )
