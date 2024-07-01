@@ -6,21 +6,20 @@
 //
 
 import SwiftUI
-// import Bugsnag
+import Bugsnag
 import FieldSpottrKt
 
 @main
 struct FieldSpottrApp: App {
-    // TODO disabled for now because Bugsnag isn't getting linked correctly in release builds
-//    init() {
-//        if BuildConfig.shared.IS_RELEASE {
-//            if let key = BuildConfig.shared.BUGSNAG_NOTIFIER_KEY {
-//                let config = BugsnagConfiguration(_: key)
-//                BugsnagConfigKt.startBugsnag(config: config)
-//                BugsnagKotlinKt.enableBugsnag()
-//            }
-//        }
-//    }
+    init() {
+        if BuildConfig.shared.IS_RELEASE {
+            if let key = BuildConfig.shared.BUGSNAG_NOTIFIER_KEY {
+                let config = BugsnagConfiguration(_: key)
+                BugsnagConfigKt.startBugsnag(config: config)
+                BugsnagKotlinKt.enableBugsnag()
+            }
+        }
+    }
     var body: some Scene {
         WindowGroup {
             ContentView()
