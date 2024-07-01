@@ -5,8 +5,8 @@ platform :android do
   lane :publish_prod do
     upload_to_play_store(
       package_name: "dev.zacsweers.fieldspottr",
-      track: "alpha",
-      aab: "build/outputs/bundle/release/app-release.aab",
+      track: "beta", # Open testing
+      aab: "build/outputs/bundle/release/field-spottr-root-release.aab",
       mapping: "build/outputs/mapping/release/mapping.txt",
       json_key: "release/play-account.json"
     )

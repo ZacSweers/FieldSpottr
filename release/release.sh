@@ -48,7 +48,7 @@ git tag -a "v${NEW_VERSION}" -m "Version ${NEW_VERSION}"
 
 # Publish binaries
 bundle exec fastlane ios publish_prod
-# TODO publish to Play
+bundle exec fastlane android publish_prod
 # TODO publish to GitHub?
 
 # TODO Upload mapping/dSYM files
