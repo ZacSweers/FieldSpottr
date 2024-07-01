@@ -17,7 +17,6 @@ plugins {
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
   alias(libs.plugins.bugsnag)
-  alias(libs.plugins.crashKiosBugsnag)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -109,10 +108,7 @@ kotlin {
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
   listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
-    it.binaries.framework {
-      baseName = "FieldSpottrKt"
-      export(libs.crashKios)
-    }
+    it.binaries.framework { baseName = "FieldSpottrKt" }
   }
 
   compilerOptions {
@@ -168,12 +164,7 @@ kotlin {
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
-    iosMain {
-      dependencies {
-        api(libs.crashKios)
-        implementation(libs.ktor.client.engine.darwin)
-      }
-    }
+    iosMain { dependencies { implementation(libs.ktor.client.engine.darwin) } }
   }
 }
 
