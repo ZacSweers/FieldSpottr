@@ -88,8 +88,7 @@ platform :ios do
       scheme: options[:scheme],
       buildlog_path: "build/fastlane-buildlog",
       skip_package_ipa: skip_certs,
-      skip_codesigning: skip_certs,
-      xcargs: "FRAMEWORK_SEARCH_PATHS='$(inherited) @executable_path/Frameworks' LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks'"
+      skip_codesigning: skip_certs
     )
   end
 
