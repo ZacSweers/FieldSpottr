@@ -186,10 +186,10 @@ dependencies.modules {
 
 val appId = "dev.zacsweers.fieldspottr"
 
-val fsVersionCode = providers.gradleProperty("fs_versioncode").map { it.toLong() }.get()
+val fsVersionCode = providers.gradleProperty("fs_versioncode").map(String::toLong).get()
 val fsVersionName = "1.0.0"
 
-val isReleasing = providers.environmentVariable("RELEASING").map { it.toBoolean() }.orElse(false)
+val isReleasing = providers.environmentVariable("RELEASING").map(String::toBoolean).orElse(false)
 
 buildConfig {
   packageName("dev.zacsweers.fieldspottr")
