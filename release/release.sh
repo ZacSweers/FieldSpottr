@@ -43,19 +43,20 @@ bundle exec fastlane ios build_prod
 
 # Commit and tag. Don't do it until we know builds were successful
 echo "Tagging"
-git commit -am "Prepare for release $NEW_VERSION."
-git tag -a "v$NEW_VERSION" -m "Version $NEW_VERSION"
+git commit -am "Prepare for release ${NEW_VERSION}."
+git tag -a "v${NEW_VERSION}" -m "Version ${NEW_VERSION}"
 
 # Publish binaries
 bundle exec fastlane ios publish_prod
 # TODO publish to Play
 # TODO publish to GitHub?
 
-# Upload mapping/dSYM files
-bugsnag-cli upload dsym FieldSpottr/FieldSpottr.xcodeproj
-bugsnag-cli upload android-aab
-bugsnag-cli upload android-proguard
-bugsnag-cli upload android-ndk
+# TODO Upload mapping/dSYM files
+# TODO need API key in a variable
+#bugsnag-cli upload dsym FieldSpottr/FieldSpottr.xcodeproj
+#bugsnag-cli upload android-aab build/outputs/bundle/release/field-spottr-root-release.aab
+#bugsnag-cli upload android-proguard
+#bugsnag-cli upload android-ndk --variant=release
 
 # Finally push
 echo "Pushing"
