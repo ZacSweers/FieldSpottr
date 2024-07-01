@@ -46,7 +46,16 @@ echo "Tagging"
 git commit -am "Prepare for release $NEW_VERSION."
 git tag -a "v$NEW_VERSION" -m "Version $NEW_VERSION"
 
-# TODO publish to stores
+# Publish binaries
+bundle exec fastlane ios publish_prod
+# TODO publish to Play
+# TODO publish to GitHub?
+
+# Upload mapping/dSYM files
+bugsnag-cli upload dsym FieldSpottr/FieldSpottr.xcodeproj
+bugsnag-cli upload android-aab
+bugsnag-cli upload android-proguard
+bugsnag-cli upload android-ndk
 
 # Finally push
 echo "Pushing"
