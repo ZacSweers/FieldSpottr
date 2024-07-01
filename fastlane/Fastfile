@@ -17,6 +17,10 @@ end
 platform :ios do
   projects = ["FieldSpottr"]
 
+  ios_bundle_ids = [
+    "dev.zacsweers.FieldSpottr",
+  ]
+
   before_all do |lane|
     cleanup_ci_keychain if is_ci
     xcodes(select_for_current_build_only: true)
@@ -31,12 +35,18 @@ platform :ios do
   end
 
   lane :certs do |options|
-    app_store_connect_api_key
+    app_store_connect_api_key(
+      is_key_content_base64: true,
+      in_house: false, # if it is enterprise or not
+    )
     match(app_identifier: ios_bundle_ids)
   end
 
   lane :recreate_certs do |options|
-    app_store_connect_api_key
+    app_store_connect_api_key(
+      is_key_content_base64: true,
+      in_house: false, # if it is enterprise or not
+    )
 
     match_nuke(
       app_identifier: ios_bundle_ids,
@@ -47,40 +57,18 @@ platform :ios do
   end
 
   lane :lint do
-    for project in projects
-      swiftlint(
-        mode: :lint,
-        path: project,
-        strict: true,
-        raise_if_swiftlint_error: true,
-        config_file: ".swiftlint.yml"
-      )
-
-      swiftformat(
-        path: project,
-        swiftversion: "5.0",
-        config: ".swiftformat",
-        lint: true
-      )
-    end
+    swiftlint(
+      mode: :lint,
+      raise_if_swiftlint_error: true,
+      config_file: ".swiftlint.yml"
+    )
   end
 
   lane :lint_fix do
-    for project in projects
-      swiftlint(
-        mode: :fix,
-        path: project,
-        strict: true,
-        raise_if_swiftlint_error: true,
-        config_file: ".swiftlint.yml"
-      )
-
-      swiftformat(
-        path: project,
-        swiftversion: "5.0",
-        config: ".swiftformat",
-      )
-    end
+    swiftlint(
+      mode: :fix,
+      config_file: ".swiftlint.yml"
+    )
   end
 
   private_lane :build_fs do |options|
@@ -100,7 +88,11 @@ platform :ios do
       scheme: options[:scheme],
       buildlog_path: "build/fastlane-buildlog",
       skip_package_ipa: skip_certs,
-      skip_codesigning: skip_certs
+      skip_codesigning: skip_certs,
+      xcargs: "EMBEDDED_CONTENT_CONTAINS_SWIFT = YES " +
+              "SWIFT_OBJC_BRIDGING_HEADER = \"FieldSpottr/FieldSpottr-Bridging-Header.h\" " +
+              "FRAMEWORK_SEARCH_PATHS = $(inherited) @executable_path/Frameworks " +
+              "LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/Frameworks"
     )
   end
 
@@ -109,8 +101,11 @@ platform :ios do
   end
 
   lane :publish_prod do
-    app_store_connect_api_key
-    upload_to_testflight(app_identifier: "dev.zacsweers.fieldspottr")
+    app_store_connect_api_key(
+      is_key_content_base64: true,
+      in_house: false, # if it is enterprise or not
+    )
+    upload_to_testflight(app_identifier: "dev.zacsweers.FieldSpottr")
   end
 
   lane :build do
