@@ -54,7 +54,8 @@ data class PermitDetailsScreen(
   ) : CircuitUiState
 }
 
-@Immutable data class OtherPermit(val name: String, val date: String, val timeRange: String)
+@Immutable
+data class OtherPermit(val key: Long, val name: String, val date: String, val timeRange: String)
 
 @Composable
 fun PermitDetailsPresenter(
@@ -70,6 +71,7 @@ fun PermitDetailsPresenter(
           val start = dbPermit.start.toNyLocalDateTime()
           val end = dbPermit.end.toNyLocalDateTime()
           OtherPermit(
+            key = dbPermit.recordId,
             name = dbPermit.name,
             date = "${start.date.monthNumber}/${start.date.dayOfMonth}",
             timeRange = "${start.formatAmPm()}-${end.formatAmPm()}",
@@ -105,7 +107,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
     } else if (state.otherPermits.isNotEmpty()) {
       HorizontalDivider()
       LazyColumn {
-        items(state.otherPermits, key = { it.hashCode() }) { permit ->
+        items(state.otherPermits, key = { it.key }) { permit ->
           Column(Modifier.padding(top = 16.dp).animateItemPlacement()) {
             Row {
               Text(
