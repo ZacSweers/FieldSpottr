@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,7 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.ui.Alignment.Companion.Center
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,7 +54,8 @@ data class PermitDetailsScreen(
   ) : CircuitUiState
 }
 
-@Immutable data class OtherPermit(val name: String, val date: String, val timeRange: String)
+@Immutable
+data class OtherPermit(val key: Long, val name: String, val date: String, val timeRange: String)
 
 @Composable
 fun PermitDetailsPresenter(
@@ -66,6 +71,7 @@ fun PermitDetailsPresenter(
           val start = dbPermit.start.toNyLocalDateTime()
           val end = dbPermit.end.toNyLocalDateTime()
           OtherPermit(
+            key = dbPermit.recordId,
             name = dbPermit.name,
             date = "${start.date.monthNumber}/${start.date.dayOfMonth}",
             timeRange = "${start.formatAmPm()}-${end.formatAmPm()}",
@@ -80,7 +86,7 @@ fun PermitDetailsPresenter(
 
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) {
-  Column(modifier.padding(16.dp)) {
+  Column(modifier.padding(16.dp).animateContentSize()) {
     Text(
       text = state.name,
       style = MaterialTheme.typography.titleLarge,
@@ -95,12 +101,14 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
     Spacer(Modifier.height(16.dp))
 
     if (state.otherPermits == null) {
-      CircularProgressIndicator(Modifier.padding(16.dp).align(Alignment.CenterHorizontally))
+      Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
+        CircularProgressIndicator()
+      }
     } else if (state.otherPermits.isNotEmpty()) {
       HorizontalDivider()
       LazyColumn {
-        items(state.otherPermits) { permit ->
-          Column(Modifier.padding(top = 16.dp)) {
+        items(state.otherPermits, key = { it.key }) { permit ->
+          Column(Modifier.padding(top = 16.dp).animateItemPlacement()) {
             Row {
               Text(
                 permit.date,
