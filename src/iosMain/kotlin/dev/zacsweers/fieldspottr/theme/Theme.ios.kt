@@ -13,6 +13,5 @@ actual fun FSTheme(useDarkTheme: Boolean, dynamicColor: Boolean, content: @Compo
       else -> lightScheme
     }
 
-  // No custom fonts available in Desktop
   MaterialTheme(colorScheme = colorScheme, content = content)
 }
