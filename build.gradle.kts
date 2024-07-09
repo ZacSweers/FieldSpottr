@@ -128,6 +128,7 @@ kotlin {
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
+        implementation(libs.circuitx.gestureNav)
         implementation(libs.ktor.client)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)

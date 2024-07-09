@@ -33,6 +33,7 @@ import com.slack.circuit.overlay.OverlayEffect
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
+import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuitx.overlays.BottomSheetOverlay
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ChangeGroup
@@ -45,6 +46,8 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.fieldspottr.util.CurrentPlatform
+import dev.zacsweers.fieldspottr.util.Platform
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.LocalDate
@@ -78,8 +81,14 @@ data object HomeScreen : Screen {
   }
 }
 
+/**
+ * The CM implementation of ModalBottomSheet on non-android platforms is extremely janky and crashy,
+ * so just make those go to new screens.
+ */
+private val USE_BOTTOM_SHEETS = CurrentPlatform == Platform.Android
+
 @Composable
-fun HomePresenter(repository: PermitRepository): HomeScreen.State {
+fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScreen.State {
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
@@ -123,7 +132,11 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
         populateDb = true
       }
       is ShowInfo -> {
-        showInfo = event.show
+        if (USE_BOTTOM_SHEETS) {
+          showInfo = event.show
+        } else {
+          navigator.goTo(ScaffoldScreen(title = "", contentScreen = AboutScreen))
+        }
       }
       is FilterDate -> {
         selectedDate = event.date
@@ -132,7 +145,24 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
         selectedGroup = event.group
       }
       ClearEventDetail -> currentlyDetailedEvent = null
-      is ShowEventDetail -> currentlyDetailedEvent = event.event
+      is ShowEventDetail -> {
+        if (USE_BOTTOM_SHEETS) {
+          currentlyDetailedEvent = event.event
+        } else {
+          navigator.goTo(
+            ScaffoldScreen(
+              title = "Permit Details",
+              contentScreen =
+                PermitDetailsScreen(
+                  name = event.event.title,
+                  description = event.event.description,
+                  group = selectedGroup,
+                  org = event.event.org,
+                ),
+            )
+          )
+        }
+      }
     }
   }
 }
