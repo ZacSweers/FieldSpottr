@@ -116,6 +116,7 @@ kotlin {
     optIn.addAll(
       "androidx.compose.material3.ExperimentalMaterial3Api",
       "androidx.compose.foundation.ExperimentalFoundationApi",
+      "io.github.alexzhirkevich.cupertino.adaptive.ExperimentalAdaptiveApi",
     )
     freeCompilerArgs.addAll("-Xexpect-actual-classes")
   }
