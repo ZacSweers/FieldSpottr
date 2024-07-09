@@ -10,6 +10,7 @@ import com.slack.circuit.foundation.CircuitCompositionLocals
 import com.slack.circuit.foundation.NavigableCircuitContent
 import com.slack.circuit.foundation.rememberCircuitNavigator
 import com.slack.circuit.overlay.ContentWithOverlays
+import com.slack.circuitx.gesturenavigation.GestureNavigationDecoration
 import dev.zacsweers.fieldspottr.di.FSComponent
 import dev.zacsweers.fieldspottr.theme.FSTheme
 
@@ -21,7 +22,11 @@ fun FieldSpottrApp(component: FSComponent, onRootPop: () -> Unit) {
       val navigator = rememberCircuitNavigator(backStack) { onRootPop() }
       CircuitCompositionLocals(component.circuit) {
         ContentWithOverlays {
-          NavigableCircuitContent(navigator = navigator, backStack = backStack)
+          NavigableCircuitContent(
+            navigator = navigator,
+            backStack = backStack,
+            decoration = GestureNavigationDecoration(onBackInvoked = navigator::pop),
+          )
         }
       }
     }

@@ -38,11 +38,15 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
+import com.slack.circuit.runtime.screen.StaticScreen
+import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.ExperimentalResourceApi
 import org.jetbrains.compose.resources.painterResource
+
+@CommonParcelize data object AboutScreen : StaticScreen
 
 @OptIn(ExperimentalResourceApi::class)
 @Composable
