@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,10 @@ import androidx.compose.ui.Alignment.Companion.BottomCenter
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,6 +43,12 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
+import io.github.alexzhirkevich.LocalContentColor
+import io.github.alexzhirkevich.cupertino.CupertinoSurface
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveHorizontalDivider
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveSurface
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveWidget
+import io.github.alexzhirkevich.cupertino.theme.CupertinoTheme
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
@@ -70,7 +81,7 @@ fun PermitGrid(
 
   // Names of the fields as a header
   Column(modifier) {
-    Surface {
+    AdaptiveSurface {
       Box {
         Row(modifier = Modifier.padding(16.dp)) {
           Spacer(Modifier.weight(TIME_COLUMN_WEIGHT))
@@ -87,7 +98,7 @@ fun PermitGrid(
           visible = isScrolled,
           modifier = Modifier.align(BottomCenter),
         ) {
-          HorizontalDivider()
+          AdaptiveHorizontalDivider()
         }
       }
     }
@@ -129,7 +140,7 @@ fun PermitGrid(
               if (fieldState is Reserved) {
                 PermitEvent(event = fieldState, onEventClick = { onEventClick(fieldState) })
               }
-              HorizontalDivider(thickness = Dp.Hairline, modifier = Modifier.align(BottomCenter))
+              AdaptiveHorizontalDivider(modifier = Modifier.align(BottomCenter))
             }
           }
         }
@@ -150,36 +161,92 @@ fun PermitEvent(
     } else {
       MaterialTheme.colorScheme.tertiaryContainer
     }
-  Column(
-    modifier =
-      modifier
-        .fillMaxSize()
-        .padding(top = 2.dp, bottom = 2.dp, start = 2.dp, end = 2.dp)
-        .clipToBounds()
-        .clickable(enabled = onEventClick != null) { onEventClick!!(event) }
-        .background(containerColor, shape = RoundedCornerShape(4.dp))
-        .padding(4.dp)
+  AdaptiveClickableSurface(
+    clickableEnabled = onEventClick != null,
+    onClick = { onEventClick!!(event) },
+    modifier = modifier
+      .fillMaxSize()
+      .padding(4.dp)
+      .clipToBounds(),
+    color = containerColor,
+    shape = RoundedCornerShape(4.dp),
   ) {
-    val textColor =
-      if (event.isBlocked) {
-        MaterialTheme.colorScheme.onErrorContainer
-      } else {
-        MaterialTheme.colorScheme.onTertiaryContainer
-      }
-    Text(
-      text = event.title,
-      style = MaterialTheme.typography.labelLarge,
-      fontWeight = FontWeight.Bold,
-      overflow = TextOverflow.Ellipsis,
-      color = textColor,
-    )
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .padding(4.dp)
+    ) {
+      val textColor =
+        if (event.isBlocked) {
+          MaterialTheme.colorScheme.onErrorContainer
+        } else {
+          MaterialTheme.colorScheme.onTertiaryContainer
+        }
+      Text(
+        text = event.title,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        overflow = TextOverflow.Ellipsis,
+        color = textColor,
+      )
 
-    Text(
-      text = event.org,
-      style = MaterialTheme.typography.bodySmall,
-      fontWeight = FontWeight.Medium,
-      overflow = TextOverflow.Ellipsis,
-      color = textColor.copy(alpha = 0.5f),
+      Text(
+        text = event.org,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        overflow = TextOverflow.Ellipsis,
+        color = textColor.copy(alpha = 0.5f),
+      )
+    }
+  }
+}
+
+@Composable
+private fun AdaptiveClickableSurface(
+  clickableEnabled: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  shape: Shape = RectangleShape,
+  color: Color = Color.Unspecified,
+  contentColor: Color = Color.Unspecified,
+  shadowElevation : Dp = 0.dp,
+  content: @Composable () -> Unit
+) {
+  if (!clickableEnabled) {
+    AdaptiveSurface(modifier, shape, color, contentColor, shadowElevation, content)
+  } else {
+    AdaptiveWidget(
+      material = {
+        Surface(
+          onClick = onClick,
+          modifier = modifier,
+          shape = shape,
+          color = color.takeOrElse {
+            MaterialTheme.colorScheme.surface
+          },
+          contentColor = contentColor.takeOrElse {
+            MaterialTheme.colorScheme.onSurface
+          },
+          shadowElevation = shadowElevation,
+          content = content
+        )
+      },
+      cupertino = {
+        CupertinoSurface(
+          onClick = onClick,
+          modifier = modifier,
+          shape = shape,
+          color = color.takeOrElse {
+            CupertinoTheme.colorScheme.systemBackground
+          },
+          contentColor = contentColor.takeOrElse {
+            LocalContentColor.current
+          },
+  //        shadowElevation = shadowElevation,
+          content = content
+        )
+      }
     )
   }
 }

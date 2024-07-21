@@ -140,7 +140,6 @@ kotlin {
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
         implementation(libs.compose.cupertino.adaptive)
-        implementation(libs.compose.cupertino.native)
         implementation(libs.aboutLicenses)
       }
     }
@@ -168,7 +167,12 @@ kotlin {
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
-    iosMain { dependencies { implementation(libs.ktor.client.engine.darwin) } }
+    iosMain {
+      dependencies {
+        implementation(libs.ktor.client.engine.darwin)
+        implementation(libs.compose.cupertino.native)
+      }
+    }
   }
 }
 
