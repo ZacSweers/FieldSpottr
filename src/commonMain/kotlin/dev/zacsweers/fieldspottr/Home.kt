@@ -5,13 +5,8 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -52,7 +47,6 @@ import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveIconButton
 import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveScaffold
 import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveTopAppBar
 import io.github.alexzhirkevich.cupertino.adaptive.icons.AdaptiveIcons
-import io.github.alexzhirkevich.cupertino.adaptive.icons.Close
 import io.github.alexzhirkevich.cupertino.adaptive.icons.Info
 import io.github.alexzhirkevich.cupertino.adaptive.icons.Refresh
 import kotlinx.coroutines.flow.map
@@ -209,7 +203,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   AdaptiveScaffold(
     modifier = modifier,
     topBar = {
-      AdaptiveTopAppBar(
+      CenterAlignedTopAppBar(
         title = {
           Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
         },

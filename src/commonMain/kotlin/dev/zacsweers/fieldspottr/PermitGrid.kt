@@ -91,6 +91,7 @@ fun PermitGrid(
               textAlign = TextAlign.Center,
               fontWeight = FontWeight.Bold,
               modifier = Modifier.weight(columnWeight),
+              style = MaterialTheme.typography.titleSmall
             )
           }
         }
