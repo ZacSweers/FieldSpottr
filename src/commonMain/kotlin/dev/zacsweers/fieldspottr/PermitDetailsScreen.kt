@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -86,7 +85,7 @@ fun PermitDetailsPresenter(
 
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) {
-  Column(modifier.padding(16.dp).animateContentSize()) {
+  Column(modifier.padding(16.dp)) {
     Text(
       text = state.name,
       style = MaterialTheme.typography.titleLarge,
@@ -108,7 +107,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
       HorizontalDivider()
       LazyColumn {
         items(state.otherPermits, key = { it.key }) { permit ->
-          Column(Modifier.padding(top = 16.dp).animateItemPlacement()) {
+          Column(Modifier.padding(top = 16.dp).animateItemPlacement().fillMaxWidth()) {
             Row {
               Text(
                 permit.date,
