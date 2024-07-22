@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,6 +32,7 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveCircularProgressIndicator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
@@ -86,7 +85,7 @@ fun PermitDetailsPresenter(
 
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) {
-  Column(modifier.padding(16.dp).animateContentSize()) {
+  Column(modifier.padding(16.dp)) {
     Text(
       text = state.name,
       style = MaterialTheme.typography.titleLarge,
@@ -102,13 +101,13 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
 
     if (state.otherPermits == null) {
       Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
-        CircularProgressIndicator()
+        AdaptiveCircularProgressIndicator()
       }
     } else if (state.otherPermits.isNotEmpty()) {
       HorizontalDivider()
       LazyColumn {
         items(state.otherPermits, key = { it.key }) { permit ->
-          Column(Modifier.padding(top = 16.dp).animateItemPlacement()) {
+          Column(Modifier.padding(top = 16.dp).animateItemPlacement().fillMaxWidth()) {
             Row {
               Text(
                 permit.date,

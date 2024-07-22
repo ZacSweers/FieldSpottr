@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.ClickableText
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +39,7 @@ import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
 import com.slack.circuit.runtime.screen.StaticScreen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveCircularProgressIndicator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -61,7 +61,7 @@ fun About(modifier: Modifier = Modifier) {
     }
   if (libs == null) {
     Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
-      CircularProgressIndicator()
+      AdaptiveCircularProgressIndicator()
     }
   } else {
     LibrariesContainer(

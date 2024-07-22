@@ -5,10 +5,10 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -19,6 +19,11 @@ import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveIconButton
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveScaffold
+import io.github.alexzhirkevich.cupertino.adaptive.icons.AdaptiveIcons
+import io.github.alexzhirkevich.cupertino.icons.CupertinoIcons
+import io.github.alexzhirkevich.cupertino.icons.outlined.ChevronBackward
 
 @CommonParcelize
 data class ScaffoldScreen(val title: String = "Field Spottr", val contentScreen: Screen) : Screen {
@@ -33,15 +38,14 @@ fun ScaffoldPresenter(screen: ScaffoldScreen, navigator: Navigator): ScaffoldScr
 
 @Composable
 fun ScaffoldScreenContent(state: ScaffoldScreen.State, modifier: Modifier = Modifier) {
-  Scaffold(
+  AdaptiveScaffold(
     modifier = modifier,
     topBar = {
       CenterAlignedTopAppBar(
         title = { Text(state.title, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic) },
         navigationIcon = {
-          // TODO platform-default back button?
-          IconButton(onClick = { state.onBackPressed() }) {
-            Icon(Icons.AutoMirrored.Default.ArrowBack, contentDescription = "Close")
+          AdaptiveIconButton(onClick = { state.onBackPressed() }) {
+            Icon(AdaptiveIcons.Outlined.ArrowBack, contentDescription = "Back")
           }
         },
       )
@@ -50,3 +54,12 @@ fun ScaffoldScreenContent(state: ScaffoldScreen.State, modifier: Modifier = Modi
     CircuitContent(state.contentScreen, modifier = Modifier.padding(innerPadding))
   }
 }
+
+@Suppress("UnusedReceiverParameter")
+private val AdaptiveIcons.Outlined.ArrowBack
+  @Composable
+  get() =
+    AdaptiveIcons.vector(
+      material = { Icons.AutoMirrored.Outlined.ArrowBack },
+      cupertino = { CupertinoIcons.Outlined.ChevronBackward },
+    )

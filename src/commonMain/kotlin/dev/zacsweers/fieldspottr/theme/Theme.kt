@@ -3,14 +3,23 @@
 package dev.zacsweers.fieldspottr.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.darkColorScheme as m3DarkColorScheme
+import androidx.compose.material3.lightColorScheme as m3LightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveTheme
+import io.github.alexzhirkevich.cupertino.adaptive.CupertinoThemeSpec
+import io.github.alexzhirkevich.cupertino.adaptive.MaterialThemeSpec
+import io.github.alexzhirkevich.cupertino.theme.ColorScheme as CupertinoColorScheme
+import io.github.alexzhirkevich.cupertino.theme.CupertinoTheme.shapes
+import io.github.alexzhirkevich.cupertino.theme.Shapes as CuptertinoShapes
+import io.github.alexzhirkevich.cupertino.theme.darkColorScheme as cupertinoDarkColorScheme
+import io.github.alexzhirkevich.cupertino.theme.lightColorScheme as cupertinoLightColorScheme
 
 internal val lightScheme =
-  lightColorScheme(
+  m3LightColorScheme(
     primary = primaryLight,
     onPrimary = onPrimaryLight,
     primaryContainer = primaryContainerLight,
@@ -49,7 +58,7 @@ internal val lightScheme =
   )
 
 internal val darkScheme =
-  darkColorScheme(
+  m3DarkColorScheme(
     primary = primaryDark,
     onPrimary = onPrimaryDark,
     primaryContainer = primaryContainerDark,
@@ -88,7 +97,7 @@ internal val darkScheme =
   )
 
 private val mediumContrastLightColorScheme =
-  lightColorScheme(
+  m3LightColorScheme(
     primary = primaryLightMediumContrast,
     onPrimary = onPrimaryLightMediumContrast,
     primaryContainer = primaryContainerLightMediumContrast,
@@ -127,7 +136,7 @@ private val mediumContrastLightColorScheme =
   )
 
 private val highContrastLightColorScheme =
-  lightColorScheme(
+  m3LightColorScheme(
     primary = primaryLightHighContrast,
     onPrimary = onPrimaryLightHighContrast,
     primaryContainer = primaryContainerLightHighContrast,
@@ -166,7 +175,7 @@ private val highContrastLightColorScheme =
   )
 
 private val mediumContrastDarkColorScheme =
-  darkColorScheme(
+  m3DarkColorScheme(
     primary = primaryDarkMediumContrast,
     onPrimary = onPrimaryDarkMediumContrast,
     primaryContainer = primaryContainerDarkMediumContrast,
@@ -205,7 +214,7 @@ private val mediumContrastDarkColorScheme =
   )
 
 private val highContrastDarkColorScheme =
-  darkColorScheme(
+  m3DarkColorScheme(
     primary = primaryDarkHighContrast,
     onPrimary = onPrimaryDarkHighContrast,
     primaryContainer = primaryContainerDarkHighContrast,
@@ -255,10 +264,71 @@ val unspecified_scheme =
   ColorFamily(Color.Unspecified, Color.Unspecified, Color.Unspecified, Color.Unspecified)
 
 @Composable
-expect fun FSTheme(
+expect fun platformSpecificMaterialColorScheme(
+  useDarkTheme: Boolean,
+  dynamicColor: Boolean,
+): ColorScheme?
+
+@Composable expect fun PlatformSpecificThemeSideEffects()
+
+@Composable
+fun FSTheme(
   useDarkTheme: Boolean = isSystemInDarkTheme(),
   // Dynamic color is available on Android 12+
   // TODO do we ever actually want to use this?
   dynamicColor: Boolean = false,
   content: @Composable () -> Unit,
-)
+) {
+  val colorScheme =
+    platformSpecificMaterialColorScheme(useDarkTheme, dynamicColor)
+      ?: run { if (useDarkTheme) darkScheme else lightScheme }
+
+  PlatformSpecificThemeSideEffects()
+
+  AdaptiveTheme(
+    material = MaterialThemeSpec(colorScheme = colorScheme, typography = AppTypography),
+    cupertino =
+      CupertinoThemeSpec.Default(
+        colorScheme = colorScheme.toCupertinoThemeSpec(useDarkTheme),
+        shapes =
+          CuptertinoShapes(
+            extraSmall = shapes.extraSmall,
+            small = shapes.small,
+            medium = shapes.medium,
+            large = shapes.large,
+            extraLarge = shapes.extraLarge,
+          ),
+        // TODO typography on iOS still uses MaterialTheme in places, probably not ideal
+      ),
+    content = content,
+  )
+}
+
+fun ColorScheme.toCupertinoThemeSpec(useDarkTheme: Boolean): CupertinoColorScheme {
+  val colors = this
+
+  val colorSchemeCreator =
+    if (useDarkTheme) ::cupertinoDarkColorScheme else ::cupertinoLightColorScheme
+
+  return colorSchemeCreator(
+    /* accent = */ colors.primary,
+    /* label = */ colors.onSurface,
+    /* secondaryLabel = */ colors.secondary,
+    /* tertiaryLabel = */ colors.tertiary,
+    /* quaternaryLabel = */ colors.tertiary, // ???
+    /* systemFill = */ colors.surface,
+    /* secondarySystemFill = */ colors.surfaceVariant,
+    /* tertiarySystemFill = */ colors.surfaceBright,
+    /* quaternarySystemFill = */ colors.surfaceDim,
+    /* placeholderText = */ colors.onPrimary.copy(alpha = 0.5f),
+    /* separator = */ colors.outline,
+    /* opaqueSeparator = */ colors.outline.copy(alpha = 1f),
+    /* link = */ colors.primary,
+    /* systemGroupedBackground = */ colors.background,
+    /* secondarySystemGroupedBackground = */ colors.surfaceContainer,
+    /* tertiarySystemGroupedBackground = */ colors.primaryContainer,
+    /* systemBackground = */ colors.surface,
+    /* secondarySystemBackground = */ colors.surfaceVariant,
+    /* tertiarySystemBackground = */ colors.surfaceContainer,
+  )
+}

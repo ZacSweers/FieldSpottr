@@ -4,7 +4,7 @@ package dev.zacsweers.fieldspottr.theme
 
 import android.app.Activity
 import android.os.Build
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
@@ -15,21 +15,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 
 @Composable
-actual fun FSTheme(
+actual fun platformSpecificMaterialColorScheme(
   useDarkTheme: Boolean,
-  // Dynamic color is available on Android 12+
   dynamicColor: Boolean,
-  content: @Composable () -> Unit,
-) {
-  val colorScheme =
-    when {
-      dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        val context = LocalContext.current
-        if (useDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-      }
-      useDarkTheme -> darkScheme
-      else -> lightScheme
-    }
+): ColorScheme? {
+  return if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val context = LocalContext.current
+    if (useDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+  } else {
+    null
+  }
+}
+
+@Composable
+actual fun PlatformSpecificThemeSideEffects() {
   val view = LocalView.current
   if (!view.isInEditMode) {
     SideEffect {
@@ -38,6 +37,4 @@ actual fun FSTheme(
       window.navigationBarColor = Color.Transparent.toArgb()
     }
   }
-
-  MaterialTheme(colorScheme = colorScheme, typography = AppTypography, content = content)
 }
