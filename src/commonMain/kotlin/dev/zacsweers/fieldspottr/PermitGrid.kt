@@ -36,7 +36,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextAlign.Companion
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -205,7 +204,7 @@ fun PermitEvent(
           fontStyle = FontStyle.Italic,
           fontWeight = FontWeight.Medium,
           color = LocalContentColor.current.copy(ContentAlpha.high),
-          textAlign = TextAlign.Center
+          textAlign = TextAlign.Center,
         )
       } else {
         Text(

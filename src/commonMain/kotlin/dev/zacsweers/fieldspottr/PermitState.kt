@@ -28,7 +28,10 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       val description: String,
       /** Indicates this is a city permit block. Field is likely unusable. */
       val isBlocked: Boolean,
-      /** If true, indicates this is blocked because it overlaps with another permit on the same field. */
+      /**
+       * If true, indicates this is blocked because it overlaps with another permit on the same
+       * field.
+       */
       val isOverlap: Boolean,
     ) : FieldState {
       val duration = end - start
@@ -75,30 +78,36 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
 
       fun List<Reserved>.withOverlapsFrom(
         field: Field,
-        fields: Map<Field, List<Reserved>>
+        fields: Map<Field, List<Reserved>>,
       ): List<Reserved> {
-        val allOverlappingFieldPermits = fields.filterKeys {
-          it != field &&
-            it.group == field.group &&
-            it.overlapsWith(field)
-        }
-          .flatMap { it.value }
-          .sortedBy { it.start }
-          .ifEmpty { return this@withOverlapsFrom }
+        val allOverlappingFieldPermits =
+          fields
+            .filterKeys { it != field && it.group == field.group && it.overlapsWith(field) }
+            .flatMap { it.value }
+            .sortedBy { it.start }
+            .ifEmpty {
+              return this@withOverlapsFrom
+            }
 
-        // return a new list with the original fields + merged in overlapping fields that don't overlap with any current elements
+        // return a new list with the original fields + merged in overlapping fields that don't
+        // overlap with any current elements
         var currentPermitsIndex = 0
         var currentOverlappingPermitsIndex = 0
         val newPermits = mutableListOf<Reserved>()
-        while (currentPermitsIndex != size || currentOverlappingPermitsIndex != allOverlappingFieldPermits.size) {
+        while (
+          currentPermitsIndex != size ||
+            currentOverlappingPermitsIndex != allOverlappingFieldPermits.size
+        ) {
           if (currentOverlappingPermitsIndex == allOverlappingFieldPermits.size) {
             // Fill the remaining current permits and break
             newPermits += drop(currentPermitsIndex)
             break
           } else if (currentPermitsIndex == size) {
             // Fill the remaining overlapping permits and break
-            newPermits += allOverlappingFieldPermits.drop(currentOverlappingPermitsIndex)
-              .map { it.copy(isOverlap = true) }
+            newPermits +=
+              allOverlappingFieldPermits.drop(currentOverlappingPermitsIndex).map {
+                it.copy(isOverlap = true)
+              }
             break
           }
           val currentPermit = this[currentPermitsIndex]
@@ -131,10 +140,11 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         check(newPermits.containsAll(this)) {
           """
             New merged permits don't contain all the original permits!
-            
+
             Original: ${this.joinToString()}
             New: ${newPermits.joinToString()}
-          """.trimIndent()
+          """
+            .trimIndent()
         }
 
         return newPermits

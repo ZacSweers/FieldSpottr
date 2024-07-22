@@ -127,7 +127,6 @@ class PermitRepository(
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
-    // TODO strict mode says this leaks... somehow
     return flow {
       emitAll(
         db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
