@@ -3,8 +3,6 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -91,7 +88,7 @@ fun PermitGrid(
               textAlign = TextAlign.Center,
               fontWeight = FontWeight.Bold,
               modifier = Modifier.weight(columnWeight),
-              style = MaterialTheme.typography.titleSmall
+              style = MaterialTheme.typography.titleSmall,
             )
           }
         }
@@ -165,19 +162,11 @@ fun PermitEvent(
   AdaptiveClickableSurface(
     clickableEnabled = onEventClick != null,
     onClick = { onEventClick!!(event) },
-    modifier = modifier
-      .fillMaxSize()
-      .padding(4.dp)
-      .clipToBounds(),
+    modifier = modifier.fillMaxSize().padding(4.dp).clipToBounds(),
     color = containerColor,
     shape = RoundedCornerShape(4.dp),
   ) {
-    Column(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .padding(4.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
       val textColor =
         if (event.isBlocked) {
           MaterialTheme.colorScheme.onErrorContainer
@@ -211,8 +200,8 @@ private fun AdaptiveClickableSurface(
   shape: Shape = RectangleShape,
   color: Color = Color.Unspecified,
   contentColor: Color = Color.Unspecified,
-  shadowElevation : Dp = 0.dp,
-  content: @Composable () -> Unit
+  shadowElevation: Dp = 0.dp,
+  content: @Composable () -> Unit,
 ) {
   if (!clickableEnabled) {
     AdaptiveSurface(modifier, shape, color, contentColor, shadowElevation, content)
@@ -223,14 +212,10 @@ private fun AdaptiveClickableSurface(
           onClick = onClick,
           modifier = modifier,
           shape = shape,
-          color = color.takeOrElse {
-            MaterialTheme.colorScheme.surface
-          },
-          contentColor = contentColor.takeOrElse {
-            MaterialTheme.colorScheme.onSurface
-          },
+          color = color.takeOrElse { MaterialTheme.colorScheme.surface },
+          contentColor = contentColor.takeOrElse { MaterialTheme.colorScheme.onSurface },
           shadowElevation = shadowElevation,
-          content = content
+          content = content,
         )
       },
       cupertino = {
@@ -238,16 +223,12 @@ private fun AdaptiveClickableSurface(
           onClick = onClick,
           modifier = modifier,
           shape = shape,
-          color = color.takeOrElse {
-            CupertinoTheme.colorScheme.systemBackground
-          },
-          contentColor = contentColor.takeOrElse {
-            LocalContentColor.current
-          },
-  //        shadowElevation = shadowElevation,
-          content = content
+          color = color.takeOrElse { CupertinoTheme.colorScheme.systemBackground },
+          contentColor = contentColor.takeOrElse { LocalContentColor.current },
+          //        shadowElevation = shadowElevation,
+          content = content,
         )
-      }
+      },
     )
   }
 }

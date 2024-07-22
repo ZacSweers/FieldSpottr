@@ -11,7 +11,4 @@ actual fun platformSpecificMaterialColorScheme(
   dynamicColor: Boolean,
 ): ColorScheme? = null
 
-@Composable
-actual fun PlatformSpecificThemeSideEffects() {
-
-}
+@Composable actual fun PlatformSpecificThemeSideEffects() {}

@@ -4,7 +4,6 @@ package dev.zacsweers.fieldspottr.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme as m3DarkColorScheme
 import androidx.compose.material3.lightColorScheme as m3LightColorScheme
 import androidx.compose.runtime.Composable
@@ -16,7 +15,6 @@ import io.github.alexzhirkevich.cupertino.adaptive.MaterialThemeSpec
 import io.github.alexzhirkevich.cupertino.theme.ColorScheme as CupertinoColorScheme
 import io.github.alexzhirkevich.cupertino.theme.CupertinoTheme.shapes
 import io.github.alexzhirkevich.cupertino.theme.Shapes as CuptertinoShapes
-import io.github.alexzhirkevich.cupertino.theme.Typography as CupertinoTypography
 import io.github.alexzhirkevich.cupertino.theme.darkColorScheme as cupertinoDarkColorScheme
 import io.github.alexzhirkevich.cupertino.theme.lightColorScheme as cupertinoLightColorScheme
 
