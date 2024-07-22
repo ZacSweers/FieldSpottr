@@ -14,17 +14,32 @@ internal enum class Area(
       FieldGroup(
         "Track",
         listOf(
-          Field("Soccer-01A East 6th Street", "North Half", "Track"),
-          Field("Soccer-01 East 6th Street", "Whole Field", "Track"),
-          Field("Soccer-01B East 6th Street", "South Half", "Track"),
+          Field(
+            "Soccer-01A East 6th Street",
+            "North Half",
+            "Track",
+            sharedFields = setOf("Track field", "track field 1a"),
+          ),
+          Field(
+            "Soccer-01 East 6th Street",
+            "Whole Field",
+            "Track",
+            sharedFields = setOf("Track field"),
+          ),
+          Field(
+            "Soccer-01B East 6th Street",
+            "South Half",
+            "Track",
+            sharedFields = setOf("Track field", "track field 1b"),
+          ),
         ),
         "ERP",
       ),
       FieldGroup(
         "Field 6",
         listOf(
-          Field("Baseball-06", "Baseball", "Field 6"),
-          Field("Soccer-03 Houston St & FDR", "Outfield", "Field 6"),
+          Field("Baseball-06", "Baseball", "Field 6", sharedFields = setOf("field6")),
+          Field("Soccer-03 Houston St & FDR", "Outfield", "Field 6", sharedFields = setOf("field6")),
         ),
         "ERP",
       ),
@@ -45,10 +60,10 @@ internal enum class Area(
       FieldGroup(
         "Baruch",
         listOf(
-          Field("Softball-01", "Softball 1", "Baruch"),
-          Field("Football-01", "Soccer 1", "Baruch"),
-          Field("Football-02", "Soccer 2", "Baruch"),
-          Field("Softball-02", "Softball 2", "Baruch"),
+          Field("Softball-01", "Softball 1", "Baruch", sharedFields = setOf("field1")),
+          Field("Football-01", "Soccer 1", "Baruch", sharedFields = setOf("field1")),
+          Field("Football-02", "Soccer 2", "Baruch", sharedFields = setOf("field2")),
+          Field("Softball-02", "Softball 2", "Baruch", sharedFields = setOf("field2")),
         ),
         "Baruch",
       )
@@ -80,8 +95,8 @@ internal enum class Area(
       FieldGroup(
         "Peter's Field",
         listOf(
-          Field("Soccer-01", "Soccer", "Peter's Field"),
-          Field("Softball-01", "Softball", "Peter's Field"),
+          Field("Soccer-01", "Soccer", "Peter's Field", sharedFields = setOf("petersfield")),
+          Field("Softball-01", "Softball", "Peter's Field", sharedFields = setOf("petersfield")),
         ),
         "Peter's Field",
       )
@@ -106,9 +121,24 @@ internal enum class Area(
       FieldGroup(
         "Bushwick Inlet Park",
         listOf(
-          Field("Soccer-01A", "West Half", "Bushwick Inlet Park"),
-          Field("Soccer-01", "Whole Field", "Bushwick Inlet Park"),
-          Field("Soccer-01B", "East Half", "Bushwick Inlet Park"),
+          Field(
+            "Soccer-01A",
+            "West Half",
+            "Bushwick Inlet Park",
+            sharedFields = setOf("bushwick inlet field", "field 1a"),
+          ),
+          Field(
+            "Soccer-01",
+            "Whole Field",
+            "Bushwick Inlet Park",
+            sharedFields = setOf("bushwick inlet field"),
+          ),
+          Field(
+            "Soccer-01B",
+            "East Half",
+            "Bushwick Inlet Park",
+            sharedFields = setOf("bushwick inlet field", "field 1b"),
+          ),
         ),
         "Bushwick Inlet Park",
       )
