@@ -69,7 +69,20 @@ private val FORMATTER =
 
 data class FieldGroup(val name: String, val fields: List<Field>, val area: String)
 
-data class Field(val name: String, val displayName: String, val group: String)
+data class Field(
+  val name: String,
+  val displayName: String,
+  val group: String,
+  /**
+   * Shared fields. Field names can be anything, just as long as the unique keys unique within their
+   * group and fields use the same keys.
+   */
+  val sharedFields: Set<String> = setOf(name),
+) {
+  fun overlapsWith(other: Field): Boolean {
+    return sharedFields.intersect(other.sharedFields).isNotEmpty()
+  }
+}
 
 class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
@@ -114,7 +127,6 @@ class PermitRepository(
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
-    // TODO strict mode says this leaks... somehow
     return flow {
       emitAll(
         db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)

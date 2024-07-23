@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -126,7 +125,7 @@ fun PermitGrid(
 
       val fields = permits?.fields ?: PermitState.EMPTY.fields
       for (field in group.fields) {
-        val fieldStates = fields[field.name] ?: FieldState.EMPTY
+        val fieldStates = fields[field] ?: FieldState.EMPTY
         Column(Modifier.weight(columnWeight)) {
           for (fieldState in fieldStates) {
             val height =
@@ -153,19 +152,23 @@ fun PermitEvent(
   modifier: Modifier = Modifier,
   onEventClick: ((Reserved) -> Unit)? = null,
 ) {
+  val isOverlap = event.isOverlap
   val containerColor =
     if (event.isBlocked) {
       MaterialTheme.colorScheme.errorContainer
+    } else if (isOverlap) {
+      MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
     } else {
       MaterialTheme.colorScheme.tertiaryContainer
     }
   AdaptiveClickableSurface(
-    clickableEnabled = onEventClick != null,
+    clickableEnabled = onEventClick != null && !isOverlap,
     onClick = { onEventClick!!(event) },
     modifier = modifier.fillMaxSize().padding(4.dp).clipToBounds(),
     color = containerColor,
     shape = RoundedCornerShape(4.dp),
   ) {
+    if (isOverlap) return@AdaptiveClickableSurface
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
       val textColor =
         if (event.isBlocked) {
@@ -173,6 +176,7 @@ fun PermitEvent(
         } else {
           MaterialTheme.colorScheme.onTertiaryContainer
         }
+
       Text(
         text = event.title,
         style = MaterialTheme.typography.labelLarge,

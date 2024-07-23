@@ -36,8 +36,8 @@ private fun GridPreview() {
           PermitState(
             fields =
               mapOf(
-                MCCARREN.fieldGroups[0].fields[0].name to
-                  sequenceOf(
+                MCCARREN.fieldGroups[0].fields[0] to
+                  listOf(
                       FieldState.Reserved(
                         7,
                         11,
@@ -46,6 +46,7 @@ private fun GridPreview() {
                         "Org",
                         "Approved",
                         "Description",
+                        false,
                         false,
                       )
                     )
