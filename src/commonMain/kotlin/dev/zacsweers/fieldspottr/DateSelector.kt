@@ -4,11 +4,13 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -37,7 +39,7 @@ fun DateSelector(
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
   if (showDatePicker) {
     val current = currentDate.atStartOfDayIn(UTC).toEpochMilliseconds()
-    val datePickerState = rememberCupertinoDatePickerState(current)
+    val datePickerState = rememberDatePickerState(current)
     val confirmEnabled by remember {
       derivedStateOf { datePickerState.selectedDateMillis != current }
     }
@@ -49,10 +51,11 @@ fun DateSelector(
         TextButton(
           onClick = {
             showDatePicker = false
-            val selected =
-              Instant.fromEpochMilliseconds(datePickerState.selectedDateMillis)
+            val selected = datePickerState.selectedDateMillis?.let {
+              Instant.fromEpochMilliseconds(it)
                 .toLocalDateTime(UTC)
                 .date
+            } ?: currentDate
             onDateSelected(selected)
           },
           enabled = confirmEnabled,
@@ -62,7 +65,7 @@ fun DateSelector(
       },
       dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
     ) {
-      AdaptiveDatePicker(datePickerState)
+      DatePicker(datePickerState)
     }
   }
   ExtendedFloatingActionButton(

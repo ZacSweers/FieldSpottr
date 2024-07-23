@@ -89,6 +89,10 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
               return this@withOverlapsFrom
             }
 
+        if (isEmpty()) return allOverlappingFieldPermits.map { it.copy(isOverlap = true) }
+
+        val sorted = sortedBy { it.start }
+
         // return a new list with the original fields + merged in overlapping fields that don't
         // overlap with any current elements
         var currentPermitsIndex = 0
@@ -100,7 +104,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         ) {
           if (currentOverlappingPermitsIndex == allOverlappingFieldPermits.size) {
             // Fill the remaining current permits and break
-            newPermits += drop(currentPermitsIndex)
+            newPermits += sorted.drop(currentPermitsIndex)
             break
           } else if (currentPermitsIndex == size) {
             // Fill the remaining overlapping permits and break
@@ -110,39 +114,41 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
               }
             break
           }
-          val currentPermit = this[currentPermitsIndex]
+          val currentPermit = sorted[currentPermitsIndex]
           val currentOverlappingPermit = allOverlappingFieldPermits[currentOverlappingPermitsIndex]
           if (currentPermit.start <= currentOverlappingPermit.start) {
             // Add the current permit and increment
             newPermits += currentPermit
             currentPermitsIndex++
-            if (currentPermit.end <= currentOverlappingPermit.start) {
-              continue
-            } else {
+            if (currentPermit.end > currentOverlappingPermit.start) {
               // These permits overlap, ignore the current overlapping permit and increment
               currentOverlappingPermitsIndex++
             }
           } else {
             currentOverlappingPermitsIndex++
             // Next overlap is next
-            if (currentOverlappingPermit.end <= currentPermit.start) {
+            if (
+              currentOverlappingPermit.end <= currentPermit.start ||
+                currentOverlappingPermit.end >= currentPermit.end
+            ) {
               // This fits completely in, add it
               newPermits += currentOverlappingPermit.copy(isOverlap = true)
-              break
             } else {
               // These permits overlap, ignore the current overlapping permit and increment
-              break
             }
           }
         }
 
         // Validation
-        check(newPermits.containsAll(this)) {
+        check(newPermits.containsAll(sorted)) {
+          val missingElements = sorted - newPermits.toSet()
           """
             New merged permits don't contain all the original permits!
 
-            Original: ${this.joinToString()}
-            New: ${newPermits.joinToString()}
+            Original:
+              ${this.joinToString("\n")}
+            Missing:
+              ${missingElements.joinToString("\n")}
           """
             .trimIndent()
         }

@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.ContentAlpha
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,7 +20,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Alignment.Companion.BottomCenter
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
@@ -33,7 +29,6 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -162,7 +157,7 @@ fun PermitEvent(
     if (event.isBlocked) {
       MaterialTheme.colorScheme.errorContainer
     } else if (isOverlap) {
-      MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+      MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
     } else {
       MaterialTheme.colorScheme.tertiaryContainer
     }
@@ -173,13 +168,8 @@ fun PermitEvent(
     color = containerColor,
     shape = RoundedCornerShape(4.dp),
   ) {
-    val vertArrangement = if (isOverlap) Arrangement.Center else Arrangement.Top
-    val horizontalAlignment = if (isOverlap) Alignment.CenterHorizontally else Alignment.Start
-    Column(
-      modifier = Modifier.fillMaxSize().padding(4.dp),
-      verticalArrangement = vertArrangement,
-      horizontalAlignment = horizontalAlignment,
-    ) {
+    if (isOverlap) return@AdaptiveClickableSurface
+    Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
       val textColor =
         if (event.isBlocked) {
           MaterialTheme.colorScheme.onErrorContainer
@@ -187,34 +177,21 @@ fun PermitEvent(
           MaterialTheme.colorScheme.onTertiaryContainer
         }
 
-      if (!isOverlap) {
-        Text(
-          text = event.title,
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.Bold,
-          overflow = TextOverflow.Ellipsis,
-          color = textColor,
-        )
-      }
+      Text(
+        text = event.title,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        overflow = TextOverflow.Ellipsis,
+        color = textColor,
+      )
 
-      if (isOverlap) {
-        Text(
-          text = "Overlapping permit",
-          style = MaterialTheme.typography.bodySmall,
-          fontStyle = FontStyle.Italic,
-          fontWeight = FontWeight.Medium,
-          color = LocalContentColor.current.copy(ContentAlpha.high),
-          textAlign = TextAlign.Center,
-        )
-      } else {
-        Text(
-          text = event.org,
-          style = MaterialTheme.typography.bodySmall,
-          fontWeight = FontWeight.Medium,
-          overflow = TextOverflow.Ellipsis,
-          color = textColor.copy(alpha = 0.5f),
-        )
-      }
+      Text(
+        text = event.org,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        overflow = TextOverflow.Ellipsis,
+        color = textColor.copy(alpha = 0.5f),
+      )
     }
   }
 }
