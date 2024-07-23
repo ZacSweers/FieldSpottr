@@ -216,14 +216,12 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         },
       )
     },
-    floatingActionButton = {
-      DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
-    },
     snackbarHost = {
       SnackbarHost(hostState = snackbarHostState) { snackbarData ->
         Snackbar(snackbarData = snackbarData)
       }
     },
+    bottomBar = { DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) } },
   ) { innerPadding ->
     Column(Modifier.padding(innerPadding), verticalArrangement = spacedBy(16.dp)) {
       GroupSelector(
