@@ -20,9 +20,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import io.github.alexzhirkevich.cupertino.ExperimentalCupertinoApi
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveDatePicker
 import io.github.alexzhirkevich.cupertino.adaptive.ExperimentalAdaptiveApi
-import io.github.alexzhirkevich.cupertino.rememberCupertinoDatePickerState
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
@@ -51,11 +49,10 @@ fun DateSelector(
         TextButton(
           onClick = {
             showDatePicker = false
-            val selected = datePickerState.selectedDateMillis?.let {
-              Instant.fromEpochMilliseconds(it)
-                .toLocalDateTime(UTC)
-                .date
-            } ?: currentDate
+            val selected =
+              datePickerState.selectedDateMillis?.let {
+                Instant.fromEpochMilliseconds(it).toLocalDateTime(UTC).date
+              } ?: currentDate
             onDateSelected(selected)
           },
           enabled = confirmEnabled,
