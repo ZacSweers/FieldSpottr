@@ -1,3 +1,5 @@
+// Copyright (C) 2024 Zac Sweers
+// SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.util
 
 import androidx.compose.material3.MaterialTheme
@@ -5,7 +7,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Color.Companion
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.takeOrElse
