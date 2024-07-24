@@ -84,6 +84,9 @@ data object HomeScreen : Screen {
 /**
  * The CM implementation of ModalBottomSheet on non-android platforms is extremely janky and crashy,
  * so just make those go to new screens.
+ *
+ * TODO consider using AdaptiveBottomSheet from Calf once nested scrolling works
+ * https://github.com/MohamedRejeb/Calf/issues/9
  */
 private val USE_BOTTOM_SHEETS = CurrentPlatform == Platform.Android
 
