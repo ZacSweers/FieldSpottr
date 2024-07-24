@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -224,20 +225,22 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         Snackbar(snackbarData = snackbarData)
       }
     },
-    bottomBar = { DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) } },
   ) { innerPadding ->
-    Column(Modifier.padding(innerPadding), verticalArrangement = spacedBy(16.dp)) {
-      GroupSelector(
-        state.selectedGroup,
-        modifier = Modifier.align(CenterHorizontally).padding(horizontal = 16.dp),
-      ) { newGroup ->
+    Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
+      GroupSelector(state.selectedGroup, modifier = Modifier.align(CenterHorizontally)) { newGroup
+        ->
         state.eventSink(ChangeGroup(newGroup))
+      }
+
+      val cornerSlot = movableContentOf {
+        DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
       }
 
       PermitGrid(
         state.selectedGroup,
         state.permits,
-        modifier = Modifier.align(CenterHorizontally),
+        cornerSlot = cornerSlot,
+        modifier = Modifier.align(CenterHorizontally).weight(1f),
       ) { event ->
         state.eventSink(ShowEventDetail(event))
       }
