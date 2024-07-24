@@ -53,13 +53,21 @@ fun DateSelector(
 ) {
   val currentInitialDate by rememberUpdatedState(initialDate)
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
+
   if (showDatePicker) {
     val current by remember {
       derivedStateOf { currentInitialDate.atStartOfDayIn(UTC).toEpochMilliseconds() }
     }
     var currentSelection by remember { mutableLongStateOf(current) }
-    val sheetState = rememberAdaptiveSheetState(skipPartiallyExpanded = true)
     var hideSheet by remember { mutableStateOf(false) }
+
+    val sheetState =
+      rememberAdaptiveSheetState(
+        skipPartiallyExpanded = true,
+        // TODO remove in 2.0.10 https://issuetracker.google.com/355061541
+        confirmValueChange = remember { { true } },
+      )
+
     // TODO track min/max dates available and limit to those
     val datePickerState = rememberAdaptiveDatePickerState(current)
     AdaptiveBottomSheet(
@@ -91,11 +99,7 @@ fun DateSelector(
     }
     if (hideSheet) {
       LaunchedEffect(Unit) {
-        try {
-          sheetState.hide()
-        } catch (e: Exception) {
-          println("But why?!") // because now it's animating back up?!?
-        }
+        sheetState.hide()
         hideSheet = false
         showDatePicker = false
         val selected =
