@@ -62,19 +62,19 @@ fun DateSelector(
 ) {
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
 
+  val sheetState =
+    rememberAdaptiveSheetState(
+      skipPartiallyExpanded = true,
+      // TODO remove in 2.0.10 https://issuetracker.google.com/355061541
+      confirmValueChange = remember { { true } },
+    )
+
   if (showDatePicker) {
     val current by remember {
       derivedStateOf { currentlySelectedDate.atStartOfDayIn(UTC).toEpochMilliseconds() }
     }
     val (currentSelection, setCurrentSelection) = remember { mutableLongStateOf(current) }
     var hideSheet by remember { mutableStateOf(false) }
-
-    val sheetState =
-      rememberAdaptiveSheetState(
-        skipPartiallyExpanded = true,
-        // TODO remove in 2.0.10 https://issuetracker.google.com/355061541
-        confirmValueChange = remember { { true } },
-      )
 
     // TODO track min/max dates available and limit to those
     val datePickerState = rememberAdaptiveDatePickerState(current)
