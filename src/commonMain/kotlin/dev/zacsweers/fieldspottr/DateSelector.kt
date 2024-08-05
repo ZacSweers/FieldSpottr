@@ -34,13 +34,16 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.datepicker.AdaptiveDatePicker
 import com.mohamedrejeb.calf.ui.datepicker.AdaptiveDatePickerState
 import com.mohamedrejeb.calf.ui.datepicker.rememberAdaptiveDatePickerState
 import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
 import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
 import dev.zacsweers.fieldspottr.util.AdaptiveClickableSurface
+import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
 import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveButton
@@ -153,13 +156,21 @@ fun DateSelector(
       horizontalAlignment = CenterHorizontally,
       verticalArrangement = Arrangement.Center,
     ) {
-      Text(
-        ShortMonth.format(currentlySelectedDate),
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f),
-        style = MaterialTheme.typography.labelMedium,
-        lineHeight = MaterialTheme.typography.labelMedium.fontSize,
-      )
+      AutoMeasureText(
+        minSize = 11.sp,
+        maxSize = MaterialTheme.typography.labelMedium.fontSize,
+        textAlign = TextAlign.Center,
+      ) { fontSize ->
+        Text(
+          ShortMonth.format(currentlySelectedDate),
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f),
+          style = MaterialTheme.typography.labelMedium,
+          fontSize = fontSize,
+          lineHeight = MaterialTheme.typography.labelMedium.fontSize,
+          maxLines = 1,
+        )
+      }
       Text(
         currentlySelectedDate.dayOfMonth.toString(),
         fontWeight = FontWeight.Bold,
