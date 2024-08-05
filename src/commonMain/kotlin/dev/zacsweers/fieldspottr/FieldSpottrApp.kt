@@ -16,11 +16,11 @@ import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveSurface
 
 @Composable
 fun FieldSpottrApp(component: FSComponent, onRootPop: () -> Unit) {
-  FSTheme {
-    AdaptiveSurface(color = MaterialTheme.colorScheme.background) {
-      val backStack = rememberSaveableBackStack(HomeScreen)
-      val navigator = rememberCircuitNavigator(backStack) { onRootPop() }
-      CircuitCompositionLocals(component.circuit) {
+  CircuitCompositionLocals(component.circuit) {
+    FSTheme {
+      AdaptiveSurface(color = MaterialTheme.colorScheme.background) {
+        val backStack = rememberSaveableBackStack(HomeScreen)
+        val navigator = rememberCircuitNavigator(backStack) { onRootPop() }
         ContentWithOverlays {
           NavigableCircuitContent(
             navigator = navigator,

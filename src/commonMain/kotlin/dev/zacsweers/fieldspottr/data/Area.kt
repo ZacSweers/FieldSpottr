@@ -4,11 +4,13 @@ package dev.zacsweers.fieldspottr.data
 
 internal enum class Area(
   val areaName: String,
+  val displayName: String,
   val csvUrl: String,
   val fieldGroups: List<FieldGroup>,
 ) {
   ERP(
     "ERP",
+    displayName = "East River Park",
     "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
     listOf(
       FieldGroup(
@@ -55,6 +57,7 @@ internal enum class Area(
   ),
   BARUCH(
     "Baruch",
+    displayName = "Baruch Playground",
     "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
     listOf(
       FieldGroup(
@@ -71,6 +74,7 @@ internal enum class Area(
   ),
   CORLEARS(
     "Corlears Hook",
+    displayName = "Corlears Hook",
     "https://www.nycgovparks.org/permits/field-and-court/issued/M017/csv",
     listOf(
       FieldGroup(
@@ -85,11 +89,13 @@ internal enum class Area(
   ),
   PIER_42(
     "Pier 42",
+    displayName = "Pier 42",
     "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
     listOf(FieldGroup("Pier 42", listOf(Field("Soccer-01", "Soccer", "Pier 42")), "ERP")),
   ),
   PETERS_FIELD(
     "Peter's Field",
+    displayName = "Peter's Field",
     "https://www.nycgovparks.org/permits/field-and-court/issued/M227/csv",
     listOf(
       FieldGroup(
@@ -104,6 +110,7 @@ internal enum class Area(
   ),
   MCCARREN(
     "McCarren",
+    displayName = "McCarren Park Track",
     "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
     listOf(
       FieldGroup(
@@ -116,6 +123,7 @@ internal enum class Area(
   ),
   BIP(
     "Bushwick Inlet Park",
+    displayName = "Bushwick Inlet Park",
     "https://www.nycgovparks.org/permits/field-and-court/issued/B529/csv",
     listOf(
       FieldGroup(
@@ -154,5 +162,10 @@ internal enum class Area(
 
   companion object {
     val groups = entries.flatMap { it.fieldGroups }.associateBy { it.name }
+    val groupsByArea =
+      groups.values.groupBy { group ->
+        Area.entries.find { it.areaName == group.area }
+          ?: error("Could not find area with name ${group.area}")
+      }
   }
 }
