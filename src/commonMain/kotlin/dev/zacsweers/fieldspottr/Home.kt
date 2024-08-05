@@ -181,16 +181,16 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   }
 
   if (state.showInfo) {
-    OverlayEffect(state.showInfo) { host ->
-      host.show(
+    OverlayEffect(state.showInfo) {
+      show(
         BottomSheetOverlay(Unit, onDismiss = { state.eventSink(ShowInfo(false)) }) { _, _ ->
           About()
         }
       )
     }
   } else if (state.detailedEvent != null) {
-    OverlayEffect(state.detailedEvent) { host ->
-      host.show(
+    OverlayEffect(state.detailedEvent) {
+      show(
         BottomSheetOverlay(
           state.detailedEvent,
           onDismiss = { state.eventSink(ClearEventDetail) },
@@ -232,8 +232,10 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         state.eventSink(ChangeGroup(newGroup))
       }
 
-      val cornerSlot = movableContentOf {
-        DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
+      val cornerSlot = remember {
+        movableContentOf {
+          DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
+        }
       }
 
       PermitGrid(

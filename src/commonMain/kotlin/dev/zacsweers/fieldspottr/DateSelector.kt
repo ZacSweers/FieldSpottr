@@ -82,8 +82,10 @@ fun DateSelector(
       onDismissRequest = { showDatePicker = false },
       adaptiveSheetState = sheetState,
     ) {
-      val content = movableContentOf {
-        DatePickerSheetContent(current, datePickerState, setCurrentSelection) { hideSheet = true }
+      val content = remember {
+        movableContentOf {
+          DatePickerSheetContent(current, datePickerState, setCurrentSelection) { hideSheet = true }
+        }
       }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
