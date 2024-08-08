@@ -75,8 +75,7 @@ fun DateSelector(
     val sheetState =
       rememberAdaptiveSheetState(
         skipPartiallyExpanded = true,
-        // TODO remove in 2.0.10 https://issuetracker.google.com/355061541
-        confirmValueChange = remember { { true } },
+        confirmValueChange = { true },
       )
 
     // TODO track min/max dates available and limit to those
