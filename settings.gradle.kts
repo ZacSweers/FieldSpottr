@@ -6,7 +6,6 @@ dependencyResolutionManagement {
     google()
     maven("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev/")
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
-    maven("https://s01.oss.sonatype.org/content/repositories/snapshots")
   }
 }
 
@@ -16,7 +15,6 @@ pluginManagement {
     google()
     maven("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev/")
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
-    maven("https://s01.oss.sonatype.org/content/repositories/snapshots")
     // Gradle's plugin portal proxies jcenter, which we don't want. To avoid this, we specify
     // exactly which dependencies to pull from here.
     exclusiveContent {
