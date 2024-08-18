@@ -128,13 +128,12 @@ kotlin {
       dependencies {
         // API for klib reasons
         api(libs.calf.ui)
-        implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(compose.components.resources)
+        implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
-        implementation(libs.ktor.client)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
@@ -144,6 +143,7 @@ kotlin {
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
         implementation(libs.compose.cupertino.adaptive)
+        implementation(libs.ktor.client)
         implementation(libs.aboutLicenses)
       }
     }
