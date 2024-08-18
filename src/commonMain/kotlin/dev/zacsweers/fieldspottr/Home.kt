@@ -227,11 +227,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     },
   ) { innerPadding ->
     Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
-      GroupSelector(state.selectedGroup, modifier = Modifier.align(CenterHorizontally)) { newGroup
-        ->
-        state.eventSink(ChangeGroup(newGroup))
-      }
-
+      GroupSelector(state.selectedGroup) { newGroup -> state.eventSink(ChangeGroup(newGroup)) }
       val cornerSlot =
         remember(state.date) {
           movableContentOf {
