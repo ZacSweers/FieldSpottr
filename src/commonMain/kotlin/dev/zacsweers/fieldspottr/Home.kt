@@ -232,11 +232,12 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         state.eventSink(ChangeGroup(newGroup))
       }
 
-      val cornerSlot = remember {
-        movableContentOf {
-          DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
+      val cornerSlot =
+        remember(state.date) {
+          movableContentOf {
+            DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
+          }
         }
-      }
 
       PermitGrid(
         state.selectedGroup,
