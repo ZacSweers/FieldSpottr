@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.MaterialTheme
@@ -73,10 +75,7 @@ fun DateSelector(
     var hideSheet by remember { mutableStateOf(false) }
 
     val sheetState =
-      rememberAdaptiveSheetState(
-        skipPartiallyExpanded = true,
-        confirmValueChange = { true },
-      )
+      rememberAdaptiveSheetState(skipPartiallyExpanded = true, confirmValueChange = { true })
 
     // TODO track min/max dates available and limit to those
     val datePickerState = rememberAdaptiveDatePickerState(current)
@@ -146,12 +145,13 @@ fun DateSelector(
   AdaptiveClickableSurface(
     clickableEnabled = true,
     onClick = { showDatePicker = true },
-    modifier = modifier,
+    modifier =
+      modifier.requiredHeightIn(max = 48.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
     shape = CircleShape,
     color = MaterialTheme.colorScheme.primaryContainer,
   ) {
     Column(
-      modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
+      modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp),
       horizontalAlignment = CenterHorizontally,
       verticalArrangement = Arrangement.Center,
     ) {
