@@ -95,8 +95,8 @@ fun GroupSelector(
                 )
               },
               onClick = {
-                onGroupSelected(group.name)
                 groupExpanded = false
+                onGroupSelected(group.name)
               },
               contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
             )
