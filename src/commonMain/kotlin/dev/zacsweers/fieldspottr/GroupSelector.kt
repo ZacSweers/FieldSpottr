@@ -2,28 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryScrollableTabRow
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.zacsweers.fieldspottr.data.Area
 
 @Composable
@@ -32,40 +27,82 @@ fun GroupSelector(
   modifier: Modifier = Modifier,
   onGroupSelected: (String) -> Unit,
 ) {
-  val groups by remember { mutableStateOf(Area.groups.keys.sorted()) }
-  val selectedIndex by remember(selectedGroup) { derivedStateOf { groups.indexOf(selectedGroup) } }
-  PrimaryScrollableTabRow(
-    selectedTabIndex = selectedIndex,
-    edgePadding = 12.dp,
-    modifier = modifier,
-    divider = {},
-    indicator = { tabPositions ->
-      Box(
-        Modifier.tabIndicatorOffset(tabPositions[selectedIndex])
-          .fillMaxSize()
-          .padding(horizontal = 2.dp)
-          .border(BorderStroke(2.dp, MaterialTheme.colorScheme.primary), RoundedCornerShape(10.dp))
+  Row(
+    modifier = modifier.padding(horizontal = 16.dp).fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(16.dp),
+  ) {
+    var areasExpanded by remember { mutableStateOf(false) }
+    val selectedArea by
+      remember(selectedGroup) {
+        val areaName = Area.groups.getValue(selectedGroup).area
+        mutableStateOf(Area.entries.first { it.areaName == areaName })
+      }
+    ExposedDropdownMenuBox(
+      areasExpanded,
+      onExpandedChange = { areasExpanded = it },
+      modifier = Modifier.weight(1f),
+    ) {
+      OutlinedTextField(
+        value = selectedArea.displayName,
+        modifier = Modifier.menuAnchor().fillMaxWidth(),
+        onValueChange = {},
+        readOnly = true,
+        singleLine = true,
+        label = { Text("Area") },
+        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = areasExpanded) },
+        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
       )
-    },
-  ) {
-    for ((i, group) in groups.withIndex()) {
-      GroupTabText(group, selected = i == selectedIndex, onTabSelected = { onGroupSelected(group) })
+      ExposedDropdownMenu(areasExpanded, { areasExpanded = false }) {
+        for (area in Area.entries.sortedBy { it.displayName }) {
+          DropdownMenuItem(
+            text = {
+              val isSelected = area == selectedArea
+              Text(area.displayName, fontWeight = if (isSelected) FontWeight.Black else null)
+            },
+            onClick = {
+              areasExpanded = false
+              onGroupSelected(area.fieldGroups.first().name)
+            },
+            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+          )
+        }
+      }
     }
-  }
-}
-
-private val textModifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp)
-
-val SmallHeadingStyle =
-  TextStyle(fontSize = 16.sp, fontWeight = FontWeight(600), letterSpacing = 0.5.sp)
-
-@Composable
-private fun GroupTabText(group: String, selected: Boolean, onTabSelected: () -> Unit) {
-  Tab(
-    modifier = Modifier.padding(horizontal = 2.dp).clip(RoundedCornerShape(16.dp)),
-    selected = selected,
-    onClick = onTabSelected,
-  ) {
-    Text(modifier = textModifier, text = group, style = SmallHeadingStyle)
+    if (selectedArea.fieldGroups.size > 1) {
+      var groupExpanded by remember { mutableStateOf(false) }
+      ExposedDropdownMenuBox(
+        groupExpanded,
+        onExpandedChange = { groupExpanded = it },
+        modifier = Modifier.weight(1f),
+      ) {
+        OutlinedTextField(
+          value = selectedGroup,
+          modifier = Modifier.menuAnchor(),
+          onValueChange = {},
+          readOnly = true,
+          singleLine = true,
+          label = { Text("Field") },
+          trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = groupExpanded) },
+          colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+        )
+        ExposedDropdownMenu(groupExpanded, { groupExpanded = false }) {
+          for (group in selectedArea.fieldGroups.sortedBy { it.name }) {
+            DropdownMenuItem(
+              text = {
+                Text(
+                  group.name,
+                  fontWeight = FontWeight.Black.takeIf { group.name == selectedGroup },
+                )
+              },
+              onClick = {
+                groupExpanded = false
+                onGroupSelected(group.name)
+              },
+              contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+            )
+          }
+        }
+      }
+    }
   }
 }

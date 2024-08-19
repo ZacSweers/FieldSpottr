@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -84,6 +85,9 @@ data object HomeScreen : Screen {
 /**
  * The CM implementation of ModalBottomSheet on non-android platforms is extremely janky and crashy,
  * so just make those go to new screens.
+ *
+ * TODO consider using AdaptiveBottomSheet from Calf once nested scrolling works
+ * https://github.com/MohamedRejeb/Calf/issues/9
  */
 private val USE_BOTTOM_SHEETS = CurrentPlatform == Platform.Android
 
@@ -177,16 +181,16 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   }
 
   if (state.showInfo) {
-    OverlayEffect(state.showInfo) { host ->
-      host.show(
+    OverlayEffect(state.showInfo) {
+      show(
         BottomSheetOverlay(Unit, onDismiss = { state.eventSink(ShowInfo(false)) }) { _, _ ->
           About()
         }
       )
     }
   } else if (state.detailedEvent != null) {
-    OverlayEffect(state.detailedEvent) { host ->
-      host.show(
+    OverlayEffect(state.detailedEvent) {
+      show(
         BottomSheetOverlay(
           state.detailedEvent,
           onDismiss = { state.eventSink(ClearEventDetail) },
@@ -216,27 +220,26 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         },
       )
     },
-    floatingActionButton = {
-      DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
-    },
     snackbarHost = {
       SnackbarHost(hostState = snackbarHostState) { snackbarData ->
         Snackbar(snackbarData = snackbarData)
       }
     },
   ) { innerPadding ->
-    Column(Modifier.padding(innerPadding), verticalArrangement = spacedBy(16.dp)) {
-      GroupSelector(
-        state.selectedGroup,
-        modifier = Modifier.align(CenterHorizontally).padding(horizontal = 16.dp),
-      ) { newGroup ->
-        state.eventSink(ChangeGroup(newGroup))
-      }
+    Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
+      GroupSelector(state.selectedGroup) { newGroup -> state.eventSink(ChangeGroup(newGroup)) }
+      val cornerSlot =
+        remember(state.date) {
+          movableContentOf {
+            DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
+          }
+        }
 
       PermitGrid(
         state.selectedGroup,
         state.permits,
-        modifier = Modifier.align(CenterHorizontally),
+        cornerSlot = cornerSlot,
+        modifier = Modifier.align(CenterHorizontally).weight(1f),
       ) { event ->
         state.eventSink(ShowEventDetail(event))
       }

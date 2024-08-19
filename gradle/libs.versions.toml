@@ -3,7 +3,8 @@ aboutLicenses = "11.2.2"
 androidx-activity = "1.9.1"
 androidx-appcompat = "1.7.0"
 agp = "8.5.2"
-circuit = "0.22.2"
+calf = "0.5.3"
+circuit = "0.23.0"
 compose-cupertino = "0.1.0-alpha04"
 compose-jb = "1.6.11"
 jdk = "21"
@@ -37,6 +38,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.0.1"
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.2.2"
 bugsnag-android = "com.bugsnag:bugsnag-android:6.7.0"
+calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }

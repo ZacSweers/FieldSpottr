@@ -4,6 +4,8 @@ dependencyResolutionManagement {
   repositories {
     mavenCentral()
     google()
+    maven("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev/")
+    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
   }
 }
 
@@ -11,6 +13,8 @@ pluginManagement {
   repositories {
     mavenCentral()
     google()
+    maven("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev/")
+    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     // Gradle's plugin portal proxies jcenter, which we don't want. To avoid this, we specify
     // exactly which dependencies to pull from here.
     exclusiveContent {
@@ -29,7 +33,7 @@ pluginManagement {
   }
 }
 
-plugins { id("com.gradle.develocity") version "3.17.5" }
+plugins { id("com.gradle.develocity") version "3.17.6" }
 
 develocity {
   buildScan {
