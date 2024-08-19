@@ -39,6 +39,7 @@ echo "Building Android"
 
 # Build iOS release
 echo "Building iOS"
+bundle install
 bundle exec fastlane ios build_prod
 
 # Commit and tag. Don't do it until we know builds were successful
