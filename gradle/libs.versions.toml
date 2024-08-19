@@ -2,7 +2,7 @@
 aboutLicenses = "11.2.2"
 androidx-activity = "1.9.1"
 androidx-appcompat = "1.7.0"
-agp = "8.5.1"
+agp = "8.5.2"
 calf = "0.5.3"
 circuit = "0.23.0"
 compose-cupertino = "0.1.0-alpha04"
@@ -10,7 +10,7 @@ compose-jb = "1.6.11"
 jdk = "21"
 jvmTarget = "11"
 kotlin = "2.0.10"
-kotlinx-coroutines = "1.9.0-RC"
+kotlinx-coroutines = "1.9.0-RC.2"
 ktfmt = "0.50"
 ktor = "2.3.12"
 okio = "3.9.0"
@@ -37,7 +37,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.0.1"
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.2.2"
-bugsnag-android = "com.bugsnag:bugsnag-android:6.6.1"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.7.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
