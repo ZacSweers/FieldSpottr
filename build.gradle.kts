@@ -3,6 +3,8 @@
 import com.diffplug.spotless.LineEnding
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.konan.target.Family
 
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
 
@@ -107,9 +109,9 @@ kotlin {
   }
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
-  listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
-    it.binaries.framework { baseName = "FieldSpottrKt" }
-  }
+  iosX64()
+  iosArm64()
+  iosSimulatorArm64()
 
   compilerOptions {
     progressiveMode = true
@@ -124,13 +126,14 @@ kotlin {
   sourceSets {
     commonMain {
       dependencies {
-        implementation(project.dependencies.platform(libs.kotlin.bom))
+        // API for klib reasons
+        api(libs.calf.ui)
         implementation(compose.components.resources)
+        implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
-        implementation(libs.ktor.client)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
@@ -140,6 +143,7 @@ kotlin {
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
         implementation(libs.compose.cupertino.adaptive)
+        implementation(libs.ktor.client)
         implementation(libs.aboutLicenses)
       }
     }
@@ -174,6 +178,16 @@ kotlin {
       }
     }
   }
+
+  targets
+    .filterIsInstance<KotlinNativeTarget>()
+    .filter { it.konanTarget.family == Family.IOS }
+    .forEach {
+      it.binaries.framework {
+        baseName = "FieldSpottrKt"
+        export(libs.calf.ui)
+      }
+    }
 }
 
 // Teach Gradle that full guava replaces listenablefuture.
@@ -286,6 +300,7 @@ compose {
 composeCompiler {
   enableStrongSkippingMode = true
   includeSourceInformation = true
+  stabilityConfigurationFile.set(layout.projectDirectory.file("compose-compiler-config.conf"))
 }
 
 sqldelight {

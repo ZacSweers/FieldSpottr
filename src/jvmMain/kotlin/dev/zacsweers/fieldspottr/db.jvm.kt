@@ -23,7 +23,6 @@ class JvmSqlDriverFactory(private val appDirs: FSAppDirs) : SqlDriverFactory {
           JdbcSqliteDriver(url = "jdbc:sqlite:${dbPath.toNioPath().absolutePathString()}")
         }
         .also { schema.create(it).await() }
-    schema.create(driver)
     return driver
   }
 }
