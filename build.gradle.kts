@@ -200,7 +200,7 @@ dependencies.modules {
 val appId = "dev.zacsweers.fieldspottr"
 
 val fsVersionCode = providers.gradleProperty("fs_versioncode").map(String::toLong).get()
-val fsVersionName = "1.0.0"
+val fsVersionName = providers.gradleProperty("fs_versionname").get()
 
 val isReleasing = providers.environmentVariable("RELEASING").map(String::toBoolean).orElse(false)
 
@@ -223,13 +223,13 @@ buildConfig {
 
 android {
   namespace = appId
-  compileSdk = 34
+  compileSdk = 35
 
   defaultConfig {
     versionCode = fsVersionCode.toInt()
     versionName = fsVersionName
     minSdk = 29
-    targetSdk = 34
+    targetSdk = 35
     // Here because Bugsnag requires it in manifests for some reason
     manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
   }

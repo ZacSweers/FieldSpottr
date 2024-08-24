@@ -1,5 +1,5 @@
 [versions]
-aboutLicenses = "11.2.2"
+aboutLicenses = "11.2.3"
 androidx-activity = "1.9.1"
 androidx-appcompat = "1.7.0"
 agp = "8.5.2"
@@ -9,7 +9,7 @@ compose-cupertino = "0.1.0-alpha04"
 compose-jb = "1.6.11"
 jdk = "21"
 jvmTarget = "11"
-kotlin = "2.0.10"
+kotlin = "2.0.20"
 kotlinx-coroutines = "1.9.0-RC.2"
 ktfmt = "0.50"
 ktor = "2.3.12"
@@ -54,7 +54,7 @@ compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-pre
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.0.4"
-kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.6.0"
+kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.6.1"
 kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.7"
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
