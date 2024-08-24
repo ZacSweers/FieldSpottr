@@ -33,7 +33,7 @@ NEW_VERSION=$(increment_version gradle.properties)
 export RELEASING=true
 export FS_BUILD_NUMBER=$NEW_VERSION
 
-VERSION_NAME=$(getProperty 'fs_versionname' "${properties_file}")
+VERSION_NAME=$(getProperty 'fs_versionname' gradle.properties)
 cd FieldSpottr
 xcrun agvtool new-version -all "${NEW_VERSION}"
 xcrun agvtool new-marketing-version "${VERSION_NAME}"
