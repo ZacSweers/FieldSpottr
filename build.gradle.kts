@@ -200,7 +200,7 @@ dependencies.modules {
 val appId = "dev.zacsweers.fieldspottr"
 
 val fsVersionCode = providers.gradleProperty("fs_versioncode").map(String::toLong).get()
-val fsVersionName = "2.0.0"
+val fsVersionName = providers.gradleProperty("fs_versionname").get()
 
 val isReleasing = providers.environmentVariable("RELEASING").map(String::toBoolean).orElse(false)
 
