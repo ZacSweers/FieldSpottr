@@ -200,7 +200,7 @@ private fun DatePickerSheetContent(
   }
   AdaptiveDatePicker(
     datePickerState,
-    modifier = modifier.fillMaxWidth(),
+    modifier = modifier.fillMaxWidth().padding(bottom = 8.dp),
     headline = { Text("Select a date", Modifier.padding(start = 16.dp)) },
     colors = colors,
   )
