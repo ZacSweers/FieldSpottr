@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -181,12 +182,12 @@ fun DateSelector(
   }
 }
 
+@Suppress("UnusedReceiverParameter")
 @Composable
-private fun DatePickerSheetContent(
+private fun ColumnScope.DatePickerSheetContent(
   current: Long,
   datePickerState: AdaptiveDatePickerState,
   updateSelection: (Long) -> Unit,
-  modifier: Modifier = Modifier,
   hideSheet: () -> Unit,
 ) {
   val defaultColors = DatePickerDefaults.colors()
@@ -200,7 +201,7 @@ private fun DatePickerSheetContent(
   }
   AdaptiveDatePicker(
     datePickerState,
-    modifier = modifier.fillMaxWidth().padding(bottom = 8.dp),
+    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
     headline = { Text("Select a date", Modifier.padding(start = 16.dp)) },
     colors = colors,
   )
