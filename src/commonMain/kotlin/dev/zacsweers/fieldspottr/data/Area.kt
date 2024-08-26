@@ -91,7 +91,7 @@ internal enum class Area(
     "Pier 42",
     displayName = "Pier 42",
     "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
-    listOf(FieldGroup("Pier 42", listOf(Field("Soccer-01", "Soccer", "Pier 42")), "ERP")),
+    listOf(FieldGroup("Pier 42", listOf(Field("Soccer-01", "Soccer", "Pier 42")), "Pier 42")),
   ),
   PETERS_FIELD(
     "Peter's Field",
