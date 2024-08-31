@@ -48,8 +48,7 @@ internal enum class Area(
       FieldGroup(
         "Grand Street",
         listOf(
-          Field("Soccer-02 Grand Street", "Main Field", "Grand Street"),
-          Field("Grand Street Mini Field-Soccer-03", "Mini Field", "Grand Street"),
+          Field("Soccer-02 Grand Street", "Whole Field", "Grand Street"),
         ),
         "ERP",
       ),
