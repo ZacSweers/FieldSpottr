@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import com.diffplug.spotless.LineEnding
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.compose.compiler.gradle.ComposeFeatureFlag
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.konan.target.Family
@@ -298,9 +299,9 @@ compose {
 }
 
 composeCompiler {
-  enableStrongSkippingMode = true
   includeSourceInformation = true
   stabilityConfigurationFile.set(layout.projectDirectory.file("compose-compiler-config.conf"))
+  featureFlags.add(ComposeFeatureFlag.StrongSkipping)
 }
 
 sqldelight {
