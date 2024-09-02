@@ -97,8 +97,8 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
-  // TODO eventually observe this from the permit repository instead
-  val areas by rememberRetained { mutableStateOf(Areas.default) }
+  val areasFlow = rememberRetained { repository.areasFlow() }
+  val areas by areasFlow.collectAsRetainedState()
   var showInfo by rememberRetained { mutableStateOf(false) }
   var populateDb by rememberRetained { mutableStateOf(true) }
   var forceRefresh by rememberRetained { mutableStateOf(false) }

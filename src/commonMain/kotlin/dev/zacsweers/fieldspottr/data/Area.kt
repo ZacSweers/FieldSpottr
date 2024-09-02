@@ -10,19 +10,20 @@ import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.collections.immutable.toImmutableSet
+import kotlinx.serialization.Serializable
 
-// TODO
-//  eventually JSON serialize and host on github for live updates?
-//  store in a DB
+@Serializable
 @Immutable
-data class Areas(val entries: ImmutableList<Area>) {
-  val groups by lazy { default.entries.flatMap { it.fieldGroups }.associateBy { it.name } }
+data class Areas(val entries: ImmutableList<Area>, val version: Int = VERSION) {
+  val groups by lazy { entries.flatMap { it.fieldGroups }.associateBy { it.name } }
 
   companion object {
+    const val VERSION = 1
     val default by lazy { buildDefaultAreas() }
   }
 }
 
+@Serializable
 @Immutable
 data class Area(
   val areaName: String,
@@ -34,7 +35,7 @@ data class Area(
     fieldGroups
       .flatMap(FieldGroup::fields)
       .map { field -> field.name to field }
-      .associate { it.first to it.second }
+      .associate { (first, second) -> first to second }
       .toImmutableMap()
   }
 }
@@ -204,9 +205,11 @@ fun buildDefaultAreas(): Areas {
   }
 }
 
+@Serializable
 @Immutable
 data class FieldGroup(val name: String, val fields: ImmutableList<Field>, val area: String)
 
+@Serializable
 @Immutable
 data class Field(
   val name: String,
