@@ -39,7 +39,6 @@ import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
-import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
@@ -232,7 +231,9 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     },
   ) { innerPadding ->
     Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
-      GroupSelector(state.selectedGroup, state.areas) { newGroup -> state.eventSink(ChangeGroup(newGroup)) }
+      GroupSelector(state.selectedGroup, state.areas) { newGroup ->
+        state.eventSink(ChangeGroup(newGroup))
+      }
       val cornerSlot =
         remember(state.date) {
           movableContentOf {

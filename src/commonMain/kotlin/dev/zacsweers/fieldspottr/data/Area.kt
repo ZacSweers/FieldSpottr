@@ -15,16 +15,11 @@ import kotlinx.collections.immutable.toImmutableSet
 //  eventually JSON serialize and host on github for live updates?
 //  store in a DB
 @Immutable
-data class Areas(
-  val entries: ImmutableList<Area>,
-) {
-  val groups by lazy {
-    default.entries.flatMap { it.fieldGroups }.associateBy { it.name }
-  }
+data class Areas(val entries: ImmutableList<Area>) {
+  val groups by lazy { default.entries.flatMap { it.fieldGroups }.associateBy { it.name } }
+
   companion object {
-    val default by lazy {
-      buildDefaultAreas()
-    }
+    val default by lazy { buildDefaultAreas() }
   }
 }
 

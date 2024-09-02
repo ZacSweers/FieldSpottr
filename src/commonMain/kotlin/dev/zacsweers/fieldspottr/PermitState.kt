@@ -6,7 +6,6 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.withOverlapsFrom
-import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.util.formatAmPm

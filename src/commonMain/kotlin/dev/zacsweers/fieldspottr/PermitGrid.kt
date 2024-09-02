@@ -37,7 +37,6 @@ import androidx.compose.ui.unit.times
 import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
-import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AdaptiveClickableSurface
 import dev.zacsweers.fieldspottr.util.AutoMeasureText

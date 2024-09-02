@@ -19,7 +19,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 
 @Composable
