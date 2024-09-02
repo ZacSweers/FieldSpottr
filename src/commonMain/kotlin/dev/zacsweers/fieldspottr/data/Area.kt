@@ -2,169 +2,223 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data
 
-internal enum class Area(
+import androidx.compose.runtime.Immutable
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.ImmutableMap
+import kotlinx.collections.immutable.ImmutableSet
+import kotlinx.collections.immutable.persistentSetOf
+import kotlinx.collections.immutable.toImmutableList
+import kotlinx.collections.immutable.toImmutableMap
+import kotlinx.collections.immutable.toImmutableSet
+
+// TODO
+//  eventually JSON serialize and host on github for live updates?
+//  store in a DB
+@Immutable
+data class Areas(val entries: ImmutableList<Area>) {
+  val groups by lazy { default.entries.flatMap { it.fieldGroups }.associateBy { it.name } }
+
+  companion object {
+    val default by lazy { buildDefaultAreas() }
+  }
+}
+
+@Immutable
+data class Area(
   val areaName: String,
   val displayName: String,
   val csvUrl: String,
-  val fieldGroups: List<FieldGroup>,
+  val fieldGroups: ImmutableList<FieldGroup>,
 ) {
-  ERP(
-    "ERP",
-    displayName = "East River Park",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
-    listOf(
-      FieldGroup(
-        "Track",
-        listOf(
-          Field(
-            "Soccer-01A East 6th Street",
-            "North Half",
-            "Track",
-            sharedFields = setOf("Track field", "track field 1a"),
-          ),
-          Field(
-            "Soccer-01 East 6th Street",
-            "Whole Field",
-            "Track",
-            sharedFields = setOf("Track field"),
-          ),
-          Field(
-            "Soccer-01B East 6th Street",
-            "South Half",
-            "Track",
-            sharedFields = setOf("Track field", "track field 1b"),
-          ),
-        ),
-        "ERP",
-      ),
-      FieldGroup(
-        "Field 6",
-        listOf(
-          Field("Baseball-06", "Baseball", "Field 6", sharedFields = setOf("field6")),
-          Field("Soccer-03 Houston St & FDR", "Outfield", "Field 6", sharedFields = setOf("field6")),
-        ),
-        "ERP",
-      ),
-      FieldGroup(
-        "Grand Street",
-        listOf(
-          Field("Soccer-02 Grand Street", "Whole Field", "Grand Street"),
-        ),
-        "ERP",
-      ),
-    ),
-  ),
-  BARUCH(
-    "Baruch",
-    displayName = "Baruch Playground",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
-    listOf(
-      FieldGroup(
-        "Baruch",
-        listOf(
-          Field("Softball-01", "Softball 1", "Baruch", sharedFields = setOf("field1")),
-          Field("Football-01", "Soccer 1", "Baruch", sharedFields = setOf("field1")),
-          Field("Football-02", "Soccer 2", "Baruch", sharedFields = setOf("field2")),
-          Field("Softball-02", "Softball 2", "Baruch", sharedFields = setOf("field2")),
-        ),
-        "Baruch",
-      )
-    ),
-  ),
-  CORLEARS(
-    "Corlears Hook",
-    displayName = "Corlears Hook",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/M017/csv",
-    listOf(
-      FieldGroup(
-        "Corlears Hook",
-        listOf(
-          Field("Soccer-01", "Soccer", "Corlears Hook"),
-          Field("Softball-01", "Softball", "Corlears Hook"),
-        ),
-        "Corlears Hook",
-      )
-    ),
-  ),
-  PIER_42(
-    "Pier 42",
-    displayName = "Pier 42",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
-    listOf(FieldGroup("Pier 42", listOf(Field("Soccer-01", "Soccer", "Pier 42")), "Pier 42")),
-  ),
-  PETERS_FIELD(
-    "Peter's Field",
-    displayName = "Peter's Field",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/M227/csv",
-    listOf(
-      FieldGroup(
-        "Peter's Field",
-        listOf(
-          Field("Soccer-01", "Soccer", "Peter's Field", sharedFields = setOf("petersfield")),
-          Field("Softball-01", "Softball", "Peter's Field", sharedFields = setOf("petersfield")),
-        ),
-        "Peter's Field",
-      )
-    ),
-  ),
-  MCCARREN(
-    "McCarren",
-    displayName = "McCarren Park Track",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
-    listOf(
-      FieldGroup(
-        name = "McCarren Track",
-        fields =
-          listOf(Field(name = "Soccer-01", displayName = "Soccer", group = "McCarren Track")),
-        area = "McCarren",
-      )
-    ),
-  ),
-  BIP(
-    "Bushwick Inlet Park",
-    displayName = "Bushwick Inlet Park",
-    "https://www.nycgovparks.org/permits/field-and-court/issued/B529/csv",
-    listOf(
-      FieldGroup(
-        "Bushwick Inlet Park",
-        listOf(
-          Field(
-            "Soccer-01A",
-            "West Half",
-            "Bushwick Inlet Park",
-            sharedFields = setOf("bushwick inlet field", "field 1a"),
-          ),
-          Field(
-            "Soccer-01",
-            "Whole Field",
-            "Bushwick Inlet Park",
-            sharedFields = setOf("bushwick inlet field"),
-          ),
-          Field(
-            "Soccer-01B",
-            "East Half",
-            "Bushwick Inlet Park",
-            sharedFields = setOf("bushwick inlet field", "field 1b"),
-          ),
-        ),
-        "Bushwick Inlet Park",
-      )
-    ),
-  );
-
-  val fieldMappings: Map<String, Field> by lazy {
+  val fieldMappings: ImmutableMap<String, Field> by lazy {
     fieldGroups
       .flatMap(FieldGroup::fields)
       .map { field -> field.name to field }
       .associate { it.first to it.second }
+      .toImmutableMap()
+  }
+}
+
+@DslMarker annotation class AreaDSL
+
+@AreaDSL
+fun buildAreas(block: AreasBuilder.() -> Unit): Areas {
+  val builder = AreasBuilder()
+  builder.block()
+  val areas = builder.build()
+  return Areas(areas.toImmutableList())
+}
+
+class AreasBuilder {
+  private val areas = mutableListOf<Area>()
+
+  @AreaDSL
+  fun area(name: String, displayName: String, csvUrl: String, block: AreaBuilder.() -> Unit) {
+    val builder = AreaBuilder(name, displayName, csvUrl)
+    builder.block()
+    areas.add(builder.build())
   }
 
-  companion object {
-    val groups = entries.flatMap { it.fieldGroups }.associateBy { it.name }
-    val groupsByArea =
-      groups.values.groupBy { group ->
-        Area.entries.find { it.areaName == group.area }
-          ?: error("Could not find area with name ${group.area}")
+  fun build(): List<Area> {
+    return areas
+  }
+
+  class AreaBuilder(val name: String, val displayName: String, val csvUrl: String) {
+    private val fieldGroups = mutableListOf<FieldGroup>()
+
+    @AreaDSL
+    fun group(name: String, block: FieldGroupBuilder.() -> Unit) {
+      val builder = FieldGroupBuilder(name, this.name)
+      builder.block()
+      fieldGroups.add(builder.build())
+    }
+
+    fun build(): Area {
+      return Area(name, displayName, csvUrl, fieldGroups.toImmutableList())
+    }
+
+    class FieldGroupBuilder(val name: String, val areaName: String) {
+      private val fields = mutableListOf<Field>()
+
+      @AreaDSL
+      fun field(csvName: String, displayName: String, sharedFields: Set<String> = setOf(csvName)) {
+        fields.add(Field(csvName, displayName, this.name, sharedFields.toImmutableSet()))
       }
+
+      fun build(): FieldGroup {
+        return FieldGroup(name, fields.toImmutableList(), areaName)
+      }
+    }
+  }
+}
+
+fun buildDefaultAreas(): Areas {
+  return buildAreas {
+    area(
+      name = "ERP",
+      displayName = "East River Park",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
+    ) {
+      group("Track") {
+        field(
+          csvName = "Soccer-01A East 6th Street",
+          displayName = "North Half",
+          sharedFields = setOf("Track field", "track field 1a"),
+        )
+        field(
+          csvName = "Soccer-01 East 6th Street",
+          displayName = "Whole Field",
+          sharedFields = setOf("Track field"),
+        )
+        field(
+          csvName = "Soccer-01B East 6th Street",
+          displayName = "South Half",
+          sharedFields = setOf("Track field", "track field 1b"),
+        )
+      }
+      group("Field 6") {
+        field(csvName = "Baseball-06", displayName = "Baseball", sharedFields = setOf("field6"))
+        field(
+          csvName = "Soccer-03 Houston St & FDR",
+          displayName = "Outfield",
+          sharedFields = setOf("field6"),
+        )
+      }
+      group("Grand Street") {
+        field(csvName = "Soccer-02 Grand Street", displayName = "Whole Field")
+      }
+    }
+    area(
+      name = "Baruch",
+      displayName = "Baruch Playground",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
+    ) {
+      group("Baruch") {
+        field(csvName = "Softball-01", displayName = "Softball 1", sharedFields = setOf("field1"))
+        field(csvName = "Football-01", displayName = "Soccer 1", sharedFields = setOf("field1"))
+        field(csvName = "Football-02", displayName = "Soccer 2", sharedFields = setOf("field2"))
+        field(csvName = "Softball-02", displayName = "Softball 2", sharedFields = setOf("field2"))
+      }
+    }
+    area(
+      name = "Corlears Hook",
+      displayName = "Corlears Hook",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M017/csv",
+    ) {
+      group("Corlears Hook") {
+        field(csvName = "Soccer-01", displayName = "Soccer")
+        field(csvName = "Softball-01", displayName = "Softball")
+      }
+    }
+    area(
+      name = "Pier 42",
+      displayName = "Pier 42",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
+    ) {
+      group("Pier 42") { field(csvName = "Soccer-01", displayName = "Soccer") }
+    }
+    area(
+      name = "Peter's Field",
+      displayName = "Peter's Field",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M227/csv",
+    ) {
+      group("Peter's Field") {
+        field(csvName = "Soccer-01", displayName = "Soccer", sharedFields = setOf("petersfield"))
+        field(
+          csvName = "Softball-01",
+          displayName = "Softball",
+          sharedFields = setOf("petersfield"),
+        )
+      }
+    }
+    area(
+      name = "McCarren",
+      displayName = "McCarren Park",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
+    ) {
+      group(name = "McCarren Track") { field(csvName = "Soccer-01", displayName = "Soccer") }
+    }
+    area(
+      name = "Bushwick Inlet Park",
+      displayName = "Bushwick Inlet Park",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/B529/csv",
+    ) {
+      group("Bushwick Inlet Park") {
+        field(
+          csvName = "Soccer-01A",
+          displayName = "West Half",
+          sharedFields = setOf("bushwick inlet field", "field 1a"),
+        )
+        field(
+          csvName = "Soccer-01",
+          displayName = "Whole Field",
+          sharedFields = setOf("bushwick inlet field"),
+        )
+        field(
+          csvName = "Soccer-01B",
+          displayName = "East Half",
+          sharedFields = setOf("bushwick inlet field", "field 1b"),
+        )
+      }
+    }
+  }
+}
+
+@Immutable
+data class FieldGroup(val name: String, val fields: ImmutableList<Field>, val area: String)
+
+@Immutable
+data class Field(
+  val name: String,
+  val displayName: String,
+  val group: String,
+  /**
+   * Shared fields. Field names can be anything, just as long as the unique keys unique within their
+   * group and fields use the same keys.
+   */
+  val sharedFields: ImmutableSet<String> = persistentSetOf(name),
+) {
+  fun overlapsWith(other: Field): Boolean {
+    return sharedFields.intersect(other.sharedFields).isNotEmpty()
   }
 }

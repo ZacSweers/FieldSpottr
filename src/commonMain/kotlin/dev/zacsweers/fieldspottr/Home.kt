@@ -39,7 +39,7 @@ import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
-import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -60,6 +60,7 @@ data object HomeScreen : Screen {
   data class State(
     val showInfo: Boolean,
     val date: LocalDate,
+    val areas: Areas,
     val selectedGroup: String,
     val loadingMessage: String?,
     val permits: PermitState?,
@@ -96,16 +97,18 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
+  // TODO eventually observe this from the permit repository instead
+  val areas by rememberRetained { mutableStateOf(Areas.default) }
   var showInfo by rememberRetained { mutableStateOf(false) }
   var populateDb by rememberRetained { mutableStateOf(true) }
   var forceRefresh by rememberRetained { mutableStateOf(false) }
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
-  var selectedGroup by rememberRetained { mutableStateOf(Area.entries[0].fieldGroups[0].name) }
+  var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
   var currentlyDetailedEvent by rememberRetained { mutableStateOf<Reserved?>(null) }
 
   val permitsFlow =
     rememberRetained(selectedDate, selectedGroup) {
-      repository.permitsFlow(selectedDate, selectedGroup).map(PermitState::fromPermits)
+      repository.permitsFlow(selectedDate, selectedGroup).map { PermitState.fromPermits(it, areas) }
     }
   val permits by permitsFlow.collectAsRetainedState(null)
 
@@ -124,6 +127,7 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
   }
   return HomeScreen.State(
     showInfo = showInfo,
+    areas = areas,
     date = selectedDate,
     selectedGroup = selectedGroup,
     loadingMessage = loadingMessage,
@@ -227,7 +231,9 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     },
   ) { innerPadding ->
     Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
-      GroupSelector(state.selectedGroup) { newGroup -> state.eventSink(ChangeGroup(newGroup)) }
+      GroupSelector(state.selectedGroup, state.areas) { newGroup ->
+        state.eventSink(ChangeGroup(newGroup))
+      }
       val cornerSlot =
         remember(state.date) {
           movableContentOf {
@@ -238,6 +244,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       PermitGrid(
         state.selectedGroup,
         state.permits,
+        state.areas,
         cornerSlot = cornerSlot,
         modifier = Modifier.align(CenterHorizontally).weight(1f),
       ) { event ->

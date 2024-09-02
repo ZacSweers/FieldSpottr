@@ -19,11 +19,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Areas
 
 @Composable
 fun GroupSelector(
   selectedGroup: String,
+  areas: Areas,
   modifier: Modifier = Modifier,
   onGroupSelected: (String) -> Unit,
 ) {
@@ -34,8 +35,8 @@ fun GroupSelector(
     var areasExpanded by remember { mutableStateOf(false) }
     val selectedArea by
       remember(selectedGroup) {
-        val areaName = Area.groups.getValue(selectedGroup).area
-        mutableStateOf(Area.entries.first { it.areaName == areaName })
+        val areaName = areas.groups.getValue(selectedGroup).area
+        mutableStateOf(areas.entries.first { it.areaName == areaName })
       }
     ExposedDropdownMenuBox(
       areasExpanded,
@@ -53,7 +54,7 @@ fun GroupSelector(
         colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
       )
       ExposedDropdownMenu(areasExpanded, { areasExpanded = false }) {
-        for (area in Area.entries.sortedBy { it.displayName }) {
+        for (area in areas.entries.sortedBy { it.displayName }) {
           DropdownMenuItem(
             text = {
               val isSelected = area == selectedArea

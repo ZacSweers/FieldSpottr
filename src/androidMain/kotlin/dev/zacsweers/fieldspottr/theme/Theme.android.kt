@@ -27,6 +27,7 @@ actual fun platformSpecificMaterialColorScheme(
   }
 }
 
+@Suppress("DEPRECATION")
 @Composable
 actual fun PlatformSpecificThemeSideEffects() {
   val view = LocalView.current

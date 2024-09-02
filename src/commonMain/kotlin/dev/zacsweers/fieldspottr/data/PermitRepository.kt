@@ -67,23 +67,6 @@ private val FORMATTER =
     )
   }
 
-data class FieldGroup(val name: String, val fields: List<Field>, val area: String)
-
-data class Field(
-  val name: String,
-  val displayName: String,
-  val group: String,
-  /**
-   * Shared fields. Field names can be anything, just as long as the unique keys unique within their
-   * group and fields use the same keys.
-   */
-  val sharedFields: Set<String> = setOf(name),
-) {
-  fun overlapsWith(other: Field): Boolean {
-    return sharedFields.intersect(other.sharedFields).isNotEmpty()
-  }
-}
-
 class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
@@ -97,11 +80,13 @@ class PermitRepository(
 
   suspend fun populateDb(forceRefresh: Boolean, log: (String) -> Unit): Boolean =
     withContext(Dispatchers.IO) {
+      // TODO load this from the DB
+      val areas = Areas.default
       val outdated =
         if (forceRefresh) {
-          Area.entries
+          areas.entries
         } else {
-          Area.entries.filterNot { db().isAreaUpToDate(it) }
+          areas.entries.filterNot { db().isAreaUpToDate(it) }
         }
       if (outdated.isEmpty()) {
         return@withContext true
@@ -111,7 +96,7 @@ class PermitRepository(
 
       // Parallelize, but unfortunately we can't escape the try/catch here
       try {
-        outdated.parallelForEach(parallelism = Area.entries.size) { area ->
+        outdated.parallelForEach(parallelism = areas.entries.size) { area ->
           val successful = db().populateDbFrom(area)
           if (!successful) {
             throw Exception()
