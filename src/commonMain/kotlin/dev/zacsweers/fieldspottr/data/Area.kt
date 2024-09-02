@@ -14,7 +14,10 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 @Immutable
-data class Areas(val entries: ImmutableList<Area>, val version: Int = VERSION) {
+data class Areas(
+  @Serializable(with = ImmutableListSerializer::class) val entries: ImmutableList<Area>,
+  val version: Int = VERSION,
+) {
   val groups by lazy { entries.flatMap { it.fieldGroups }.associateBy { it.name } }
 
   companion object {
@@ -29,7 +32,7 @@ data class Area(
   val areaName: String,
   val displayName: String,
   val csvUrl: String,
-  val fieldGroups: ImmutableList<FieldGroup>,
+  @Serializable(with = ImmutableListSerializer::class) val fieldGroups: ImmutableList<FieldGroup>,
 ) {
   val fieldMappings: ImmutableMap<String, Field> by lazy {
     fieldGroups
@@ -207,7 +210,11 @@ fun buildDefaultAreas(): Areas {
 
 @Serializable
 @Immutable
-data class FieldGroup(val name: String, val fields: ImmutableList<Field>, val area: String)
+data class FieldGroup(
+  val name: String,
+  @Serializable(with = ImmutableListSerializer::class) val fields: ImmutableList<Field>,
+  val area: String,
+)
 
 @Serializable
 @Immutable
@@ -219,6 +226,7 @@ data class Field(
    * Shared fields. Field names can be anything, just as long as the unique keys unique within their
    * group and fields use the same keys.
    */
+  @Serializable(with = ImmutableSetSerializer::class)
   val sharedFields: ImmutableSet<String> = persistentSetOf(name),
 ) {
   fun overlapsWith(other: Field): Boolean {
