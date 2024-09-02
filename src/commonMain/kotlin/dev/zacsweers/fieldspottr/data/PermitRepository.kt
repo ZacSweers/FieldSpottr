@@ -82,23 +82,17 @@ class PermitRepository(
     FSDatabase(driver)
   }
 
-  private val areasJson by lazy {
-    appDirs.userData / "areas.json"
-  }
+  private val areasJson by lazy { appDirs.userData / "areas.json" }
 
   private val areasStateFlow = MutableStateFlow(Areas.default)
 
   private fun loadLocalAreas(): Areas {
     return try {
-      json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
-        .also {
-          println("Loaded ${it.entries.size} areas from local storage")
-        }
+      json
+        .decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
+        .also { println("Loaded ${it.entries.size} areas from local storage") }
     } catch (e: Exception) {
-      Areas.default
-        .also {
-          println("Using default Areas")
-        }
+      Areas.default.also { println("Using default Areas") }
     }
   }
 
