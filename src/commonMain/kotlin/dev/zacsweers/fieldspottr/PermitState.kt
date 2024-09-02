@@ -7,10 +7,12 @@ import androidx.compose.runtime.Stable
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.withOverlapsFrom
 import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.collections.immutable.persistentListOf
 
 @Stable
 data class PermitState(val fields: Map<Field, List<FieldState>>) {
@@ -208,12 +210,12 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
   }
 
   companion object {
-    val EMPTY = fromPermits(emptyList())
+    val EMPTY = fromPermits(emptyList(), Areas(persistentListOf()))
 
-    fun fromPermits(dbPermits: List<DbPermit>): PermitState {
+    fun fromPermits(dbPermits: List<DbPermit>, areas: Areas): PermitState {
       if (dbPermits.isEmpty()) return PermitState(emptyMap())
 
-      val areasByName = Area.entries.associateBy { it.areaName }
+      val areasByName = areas.entries.associateBy { it.areaName }
       // TODO
       //  get the group ID, get fields for each group, show those too
       val fields =
@@ -225,7 +227,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
 
             // Because only one field may have any permits, we still need to load all available
             // fields to show here so that we can show any overlapping permits
-            val allFieldsInGroup = Area.groups.getValue(permitsByField.keys.first().group).fields
+            val allFieldsInGroup = areas.groups.getValue(permitsByField.keys.first().group).fields
             val fullMap = buildMap {
               for (field in allFieldsInGroup) {
                 put(field, permitsByField[field].orEmpty())

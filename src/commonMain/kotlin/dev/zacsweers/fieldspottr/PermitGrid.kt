@@ -38,6 +38,7 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AdaptiveClickableSurface
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveHorizontalDivider
@@ -49,11 +50,12 @@ const val TIME_COLUMN_WEIGHT = 0.15f
 fun PermitGrid(
   selectedGroup: String,
   permits: PermitState?,
+  areas: Areas,
   modifier: Modifier = Modifier,
   cornerSlot: (@Composable () -> Unit)? = null,
   onEventClick: (Reserved) -> Unit = {},
 ) {
-  val group = Area.groups.getValue(selectedGroup)
+  val group = areas.groups.getValue(selectedGroup)
   val numColumns = group.fields.size
 
   val columnWeight = (1f - TIME_COLUMN_WEIGHT) / numColumns

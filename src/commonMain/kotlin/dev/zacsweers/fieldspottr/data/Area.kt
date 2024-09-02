@@ -15,6 +15,20 @@ import kotlinx.collections.immutable.toImmutableSet
 //  eventually JSON serialize and host on github for live updates?
 //  store in a DB
 @Immutable
+data class Areas(
+  val entries: ImmutableList<Area>,
+) {
+  val groups by lazy {
+    default.entries.flatMap { it.fieldGroups }.associateBy { it.name }
+  }
+  companion object {
+    val default by lazy {
+      buildDefaultAreas()
+    }
+  }
+}
+
+@Immutable
 data class Area(
   val areaName: String,
   val displayName: String,
@@ -28,20 +42,16 @@ data class Area(
       .associate { it.first to it.second }
       .toImmutableMap()
   }
-
-  companion object {
-    val entries = buildDefaultAreas()
-    val groups = entries.flatMap { it.fieldGroups }.associateBy { it.name }
-  }
 }
 
 @DslMarker annotation class AreaDSL
 
 @AreaDSL
-fun buildAreas(block: AreasBuilder.() -> Unit): List<Area> {
+fun buildAreas(block: AreasBuilder.() -> Unit): Areas {
   val builder = AreasBuilder()
   builder.block()
-  return builder.build()
+  val areas = builder.build()
+  return Areas(areas.toImmutableList())
 }
 
 class AreasBuilder {
@@ -87,7 +97,7 @@ class AreasBuilder {
   }
 }
 
-fun buildDefaultAreas(): List<Area> {
+fun buildDefaultAreas(): Areas {
   return buildAreas {
     area(
       name = "ERP",
@@ -168,7 +178,7 @@ fun buildDefaultAreas(): List<Area> {
     }
     area(
       name = "McCarren",
-      displayName = "McCarren Park Track",
+      displayName = "McCarren Park",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
     ) {
       group(name = "McCarren Track") { field(csvName = "Soccer-01", displayName = "Soccer") }
@@ -199,8 +209,10 @@ fun buildDefaultAreas(): List<Area> {
   }
 }
 
+@Immutable
 data class FieldGroup(val name: String, val fields: ImmutableList<Field>, val area: String)
 
+@Immutable
 data class Field(
   val name: String,
   val displayName: String,

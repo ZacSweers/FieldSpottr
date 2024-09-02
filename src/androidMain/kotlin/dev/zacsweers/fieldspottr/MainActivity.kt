@@ -12,7 +12,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
-import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.theme.FSTheme
 
 class MainActivity : AppCompatActivity() {
@@ -28,15 +28,17 @@ class MainActivity : AppCompatActivity() {
 @Preview
 @Composable
 private fun GridPreview() {
+  val areas = Areas.default
   FSTheme {
     Surface {
       PermitGrid(
-        selectedGroup = Area.entries[0].fieldGroups[0].name,
+        selectedGroup = areas.entries[0].fieldGroups[0].name,
+        areas = areas,
         permits =
           PermitState(
             fields =
               mapOf(
-                Area.entries[0].fieldGroups[0].fields[0] to
+                areas.entries[0].fieldGroups[0].fields[0] to
                   listOf(
                       FieldState.Reserved(
                         start = 7,
