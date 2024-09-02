@@ -1,0 +1,248 @@
+{
+  "entries": [
+    {
+      "areaName": "ERP",
+      "displayName": "East River Park",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
+      "fieldGroups": [
+        {
+          "name": "Track",
+          "fields": [
+            {
+              "name": "Soccer-01A East 6th Street",
+              "displayName": "North Half",
+              "group": "Track",
+              "sharedFields": [
+                "Track field",
+                "track field 1a"
+              ]
+            },
+            {
+              "name": "Soccer-01 East 6th Street",
+              "displayName": "Whole Field",
+              "group": "Track",
+              "sharedFields": [
+                "Track field"
+              ]
+            },
+            {
+              "name": "Soccer-01B East 6th Street",
+              "displayName": "South Half",
+              "group": "Track",
+              "sharedFields": [
+                "Track field",
+                "track field 1b"
+              ]
+            }
+          ],
+          "area": "ERP"
+        },
+        {
+          "name": "Field 6",
+          "fields": [
+            {
+              "name": "Baseball-06",
+              "displayName": "Baseball",
+              "group": "Field 6",
+              "sharedFields": [
+                "field6"
+              ]
+            },
+            {
+              "name": "Soccer-03 Houston St & FDR",
+              "displayName": "Outfield",
+              "group": "Field 6",
+              "sharedFields": [
+                "field6"
+              ]
+            }
+          ],
+          "area": "ERP"
+        },
+        {
+          "name": "Grand Street",
+          "fields": [
+            {
+              "name": "Soccer-02 Grand Street",
+              "displayName": "Whole Field",
+              "group": "Grand Street"
+            }
+          ],
+          "area": "ERP"
+        }
+      ]
+    },
+    {
+      "areaName": "Baruch",
+      "displayName": "Baruch Playground",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
+      "fieldGroups": [
+        {
+          "name": "Baruch",
+          "fields": [
+            {
+              "name": "Softball-01",
+              "displayName": "Softball 1",
+              "group": "Baruch",
+              "sharedFields": [
+                "field1"
+              ]
+            },
+            {
+              "name": "Football-01",
+              "displayName": "Soccer 1",
+              "group": "Baruch",
+              "sharedFields": [
+                "field1"
+              ]
+            },
+            {
+              "name": "Football-02",
+              "displayName": "Soccer 2",
+              "group": "Baruch",
+              "sharedFields": [
+                "field2"
+              ]
+            },
+            {
+              "name": "Softball-02",
+              "displayName": "Softball 2",
+              "group": "Baruch",
+              "sharedFields": [
+                "field2"
+              ]
+            }
+          ],
+          "area": "Baruch"
+        }
+      ]
+    },
+    {
+      "areaName": "Corlears Hook",
+      "displayName": "Corlears Hook",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M017/csv",
+      "fieldGroups": [
+        {
+          "name": "Corlears Hook",
+          "fields": [
+            {
+              "name": "Soccer-01",
+              "displayName": "Soccer",
+              "group": "Corlears Hook"
+            },
+            {
+              "name": "Softball-01",
+              "displayName": "Softball",
+              "group": "Corlears Hook"
+            }
+          ],
+          "area": "Corlears Hook"
+        }
+      ]
+    },
+    {
+      "areaName": "Pier 42",
+      "displayName": "Pier 42",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
+      "fieldGroups": [
+        {
+          "name": "Pier 42",
+          "fields": [
+            {
+              "name": "Soccer-01",
+              "displayName": "Soccer",
+              "group": "Pier 42"
+            }
+          ],
+          "area": "Pier 42"
+        }
+      ]
+    },
+    {
+      "areaName": "Peter's Field",
+      "displayName": "Peter's Field",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M227/csv",
+      "fieldGroups": [
+        {
+          "name": "Peter's Field",
+          "fields": [
+            {
+              "name": "Soccer-01",
+              "displayName": "Soccer",
+              "group": "Peter's Field",
+              "sharedFields": [
+                "petersfield"
+              ]
+            },
+            {
+              "name": "Softball-01",
+              "displayName": "Softball",
+              "group": "Peter's Field",
+              "sharedFields": [
+                "petersfield"
+              ]
+            }
+          ],
+          "area": "Peter's Field"
+        }
+      ]
+    },
+    {
+      "areaName": "McCarren",
+      "displayName": "McCarren Park",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
+      "fieldGroups": [
+        {
+          "name": "McCarren Track",
+          "fields": [
+            {
+              "name": "Soccer-01",
+              "displayName": "Soccer",
+              "group": "McCarren Track"
+            }
+          ],
+          "area": "McCarren"
+        }
+      ]
+    },
+    {
+      "areaName": "Bushwick Inlet Park",
+      "displayName": "Bushwick Inlet Park",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/B529/csv",
+      "fieldGroups": [
+        {
+          "name": "Bushwick Inlet Park",
+          "fields": [
+            {
+              "name": "Soccer-01A",
+              "displayName": "West Half",
+              "group": "Bushwick Inlet Park",
+              "sharedFields": [
+                "bushwick inlet field",
+                "field 1a"
+              ]
+            },
+            {
+              "name": "Soccer-01",
+              "displayName": "Whole Field",
+              "group": "Bushwick Inlet Park",
+              "sharedFields": [
+                "bushwick inlet field"
+              ]
+            },
+            {
+              "name": "Soccer-01B",
+              "displayName": "East Half",
+              "group": "Bushwick Inlet Park",
+              "sharedFields": [
+                "bushwick inlet field",
+                "field 1b"
+              ]
+            }
+          ],
+          "area": "Bushwick Inlet Park"
+        }
+      ]
+    }
+  ]
+}
