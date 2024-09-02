@@ -30,6 +30,8 @@ import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -41,6 +43,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
+import kotlinx.serialization.json.Json
 import okio.Path
 import okio.buffer
 import okio.use
@@ -70,6 +73,7 @@ private val FORMATTER =
 class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
+  private val json: Json,
 ) {
   private val client = lazySuspend { HttpClient() }
 
@@ -78,10 +82,32 @@ class PermitRepository(
     FSDatabase(driver)
   }
 
+  private val areasJson by lazy { appDirs.userData / "areas.json" }
+
+  private val areasStateFlow = MutableStateFlow(Areas.default)
+
+  private fun loadLocalAreas(): Areas {
+    return try {
+      json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
+    } catch (e: Exception) {
+      Areas.default
+    }
+  }
+
+  fun areasFlow(): StateFlow<Areas> = areasStateFlow
+
   suspend fun populateDb(forceRefresh: Boolean, log: (String) -> Unit): Boolean =
     withContext(Dispatchers.IO) {
-      // TODO load this from the DB
-      val areas = Areas.default
+      downloadFile(
+        "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
+        areasJson,
+        allowCachedVersion = !forceRefresh,
+      )
+      val newAreas = loadLocalAreas()
+
+      areasStateFlow.compareAndSet(newAreas, newAreas)
+
+      val areas = areasStateFlow.value
       val outdated =
         if (forceRefresh) {
           areas.entries
@@ -119,33 +145,41 @@ class PermitRepository(
     }
   }
 
-  private suspend fun getOrFetchCsv(area: Area): Path? {
+  private suspend fun fetchCsv(area: Area): Path? {
     val targetPath = appDirs.userCache / "${area.areaName}.csv"
-    if (appDirs.fs.exists(targetPath)) {
-      appDirs.delete(targetPath)
-    }
-    appDirs.touch(targetPath)
-
-    if (!downloadFile(area.csvUrl, targetPath)) {
-      appDirs.delete(targetPath)
-      return null
-    }
-
-    return targetPath
+    val downloaded =
+      downloadFile(
+        area.csvUrl,
+        targetPath,
+        allowCachedVersion = false,
+        // Lie and say we're a browser. NYC parks doesn't like bots
+        // Can't really easily get a "real" UA without spinning up UI and doing async JS calls
+        // on iOS.
+        userAgent =
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+      )
+    return targetPath.takeIf { downloaded }
   }
 
-  private suspend fun downloadFile(url: String, targetPath: Path): Boolean {
+  private suspend fun downloadFile(
+    url: String,
+    targetPath: Path,
+    allowCachedVersion: Boolean,
+    userAgent: String? = null,
+  ): Boolean {
+    if (appDirs.fs.exists(targetPath)) {
+      if (allowCachedVersion) {
+        return true
+      }
+      appDirs.delete(targetPath)
+    }
+
+    appDirs.touch(targetPath)
+
     try {
       appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
         client()
-          .prepareGet(url) {
-            // Lie and say we're a browser. NYC parks doesn't like bots
-            // Can't really easily get a "real" UA without spinning up UI and doing async JS calls
-            // on iOS.
-            userAgent(
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-            )
-          }
+          .prepareGet(url) { userAgent?.let { userAgent(it) } }
           .execute { httpResponse ->
             val channel = httpResponse.body<ByteReadChannel>()
             while (!channel.isClosedForRead) {
@@ -158,9 +192,11 @@ class PermitRepository(
           }
       }
     } catch (e: Exception) {
-      println("Failed to download CSV file:\n${e.stackTraceToString()}")
+      println("Failed to download file:\n${e.stackTraceToString()}")
+      appDirs.delete(targetPath)
       return false
     }
+
     return true
   }
 
@@ -175,7 +211,7 @@ class PermitRepository(
   private suspend fun FSDatabase.populateDbFrom(area: Area): Boolean {
     val now = System.now()
 
-    val csvFile = getOrFetchCsv(area) ?: return false
+    val csvFile = fetchCsv(area) ?: return false
 
     // One single transaction for all ops so it's atomic
     transaction {

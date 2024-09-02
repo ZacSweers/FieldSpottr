@@ -19,6 +19,7 @@ plugins {
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
   alias(libs.plugins.bugsnag)
+  alias(libs.plugins.kotlin.plugin.serialization)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -137,6 +138,8 @@ kotlin {
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
+        implementation(libs.kotlinx.serialization.core)
+        implementation(libs.kotlinx.serialization.json)
         implementation(libs.coroutines)
         implementation(libs.sqldelight.async)
         implementation(libs.sqldelight.coroutines)

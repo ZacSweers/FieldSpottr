@@ -20,6 +20,7 @@ import dev.zacsweers.fieldspottr.ScaffoldScreen
 import dev.zacsweers.fieldspottr.ScaffoldScreenContent
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import kotlinx.serialization.json.Json
 
 interface SharedPlatformFSComponent {
   fun provideFSAppDirs(): FSAppDirs
@@ -31,8 +32,15 @@ interface SharedPlatformFSComponent {
 class FSComponent(private val shared: SharedPlatformFSComponent) :
   SharedPlatformFSComponent by shared {
 
+  val json: Json by lazy {
+    Json {
+      ignoreUnknownKeys = true
+      isLenient = true
+    }
+  }
+
   private val permitRepository: PermitRepository by lazy {
-    PermitRepository(provideSqlDriverFactory(), provideFSAppDirs())
+    PermitRepository(provideSqlDriverFactory(), provideFSAppDirs(), json)
   }
 
   val circuit: Circuit by lazy {
