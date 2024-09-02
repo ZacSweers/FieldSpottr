@@ -32,7 +32,7 @@ interface SharedPlatformFSComponent {
 class FSComponent(private val shared: SharedPlatformFSComponent) :
   SharedPlatformFSComponent by shared {
 
-  private val json: Json by lazy {
+  val json: Json by lazy {
     Json {
       ignoreUnknownKeys = true
       isLenient = true

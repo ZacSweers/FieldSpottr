@@ -13,8 +13,16 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.di.FSComponent
 import dev.zacsweers.fieldspottr.di.JvmSharedPlatformFSComponent
+import java.nio.file.Paths
+import kotlin.io.path.createFile
+import kotlin.io.path.exists
+import kotlin.io.path.writeText
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 fun main() {
   val component = FSComponent(JvmSharedPlatformFSComponent())
@@ -38,6 +46,11 @@ fun main() {
             exitApplication()
             true
           }
+          // Cmd+D
+          event.key == Key.D && event.isMetaPressed && event.type == KeyEventType.KeyDown -> {
+            dumpAreasJson(component.json)
+            true
+          }
           else -> false
         }
       },
@@ -45,4 +58,20 @@ fun main() {
       FieldSpottrApp(component, ::exitApplication)
     }
   }
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+private fun dumpAreasJson(json: Json) {
+  val workingDir = Paths.get("").toAbsolutePath()
+  val path = workingDir.resolve("areas.json")
+  val prettyPrintingJson =
+    Json(json) {
+      prettyPrint = true
+      prettyPrintIndent = "  "
+    }
+  if (!path.exists()) {
+    path.createFile()
+  }
+  path.writeText(prettyPrintingJson.encodeToString(Areas.default))
+  println("Wrote areas to ${path.toAbsolutePath()}")
 }
