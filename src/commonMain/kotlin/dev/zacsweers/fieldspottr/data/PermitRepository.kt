@@ -90,9 +90,8 @@ class PermitRepository(
     return try {
       json
         .decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
-        .also { println("Loaded ${it.entries.size} areas from local storage") }
     } catch (e: Exception) {
-      Areas.default.also { println("Using default Areas") }
+      Areas.default
     }
   }
 
