@@ -17,11 +17,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DatePickerDefaults
+import androidx.compose.material3.LocalAbsoluteTonalElevation
+import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
@@ -32,11 +37,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.datepicker.AdaptiveDatePicker
@@ -90,8 +97,14 @@ fun DateSelector(
       }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-          Column(Modifier.fillMaxWidth(), verticalArrangement = spacedBy(16.dp)) { content() }
+        val absoluteElevation = LocalAbsoluteTonalElevation.current
+        val containerColorAtElevation =
+          surfaceColorAtElevation(
+            color = DatePickerDefaults.colors().containerColor,
+            elevation = absoluteElevation,
+          )
+        Box(Modifier.fillMaxSize().background(containerColorAtElevation)) {
+          Column(Modifier.fillMaxWidth()) { content() }
         }
       } else {
         content()
@@ -189,20 +202,10 @@ private fun DatePickerSheetContent(
   modifier: Modifier = Modifier,
   hideSheet: () -> Unit,
 ) {
-  val defaultColors = DatePickerDefaults.colors()
-  val primaryColor = MaterialTheme.colorScheme.primary
-  val colors = remember {
-    if (CurrentPlatform == Platform.Native) {
-      defaultColors.copy(selectedDayContentColor = primaryColor)
-    } else {
-      defaultColors
-    }
-  }
   AdaptiveDatePicker(
     datePickerState,
     modifier = modifier.fillMaxWidth(),
     headline = { Text("Select a date", Modifier.padding(start = 16.dp)) },
-    colors = colors,
   )
   Row(Modifier.padding(bottom = 16.dp, end = 16.dp), horizontalArrangement = spacedBy(16.dp)) {
     Spacer(Modifier.weight(1f))
@@ -223,3 +226,18 @@ private fun DatePickerSheetContent(
 }
 
 private val ShortMonth = LocalDate.Format { monthName(MonthNames.ENGLISH_ABBREVIATED) }
+
+@Composable
+internal fun surfaceColorAtElevation(color: Color, elevation: Dp): Color =
+  MaterialTheme.colorScheme.applyTonalElevation(color, elevation)
+
+@Composable
+@ReadOnlyComposable
+internal fun ColorScheme.applyTonalElevation(backgroundColor: Color, elevation: Dp): Color {
+  val tonalElevationEnabled = LocalTonalElevationEnabled.current
+  return if (backgroundColor == surface && tonalElevationEnabled) {
+    surfaceColorAtElevation(elevation)
+  } else {
+    backgroundColor
+  }
+}
