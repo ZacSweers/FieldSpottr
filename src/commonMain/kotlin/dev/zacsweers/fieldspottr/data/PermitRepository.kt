@@ -67,23 +67,6 @@ private val FORMATTER =
     )
   }
 
-data class FieldGroup(val name: String, val fields: List<Field>, val area: String)
-
-data class Field(
-  val name: String,
-  val displayName: String,
-  val group: String,
-  /**
-   * Shared fields. Field names can be anything, just as long as the unique keys unique within their
-   * group and fields use the same keys.
-   */
-  val sharedFields: Set<String> = setOf(name),
-) {
-  fun overlapsWith(other: Field): Boolean {
-    return sharedFields.intersect(other.sharedFields).isNotEmpty()
-  }
-}
-
 class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
