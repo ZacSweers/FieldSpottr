@@ -88,8 +88,7 @@ class PermitRepository(
 
   private fun loadLocalAreas(): Areas {
     return try {
-      json
-        .decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
+      json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
     } catch (e: Exception) {
       Areas.default
     }
