@@ -55,7 +55,7 @@ compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data",
 compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-jb" }
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
-desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.1"
+desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.2"
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.6.1"
