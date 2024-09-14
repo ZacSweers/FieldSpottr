@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement.spacedBy
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -21,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,16 +42,19 @@ import dev.zacsweers.fieldspottr.HomeScreen.Event.FilterDate
 import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowLocation
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
+import dev.zacsweers.fieldspottr.util.Platform.Android
+import dev.zacsweers.fieldspottr.util.Platform.Native
 import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveIconButton
 import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveScaffold
 import io.github.alexzhirkevich.cupertino.adaptive.icons.AdaptiveIcons
-import io.github.alexzhirkevich.cupertino.adaptive.icons.Info
+import io.github.alexzhirkevich.cupertino.adaptive.icons.Place
 import io.github.alexzhirkevich.cupertino.adaptive.icons.Refresh
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock.System
@@ -80,6 +87,8 @@ data object HomeScreen : Screen {
     data class FilterDate(val date: LocalDate) : Event
 
     data class ChangeGroup(val group: String) : Event
+
+    data object ShowLocation : Event
   }
 }
 
@@ -125,6 +134,7 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
       populateDb = false
     }
   }
+  val uriHandler = LocalUriHandler.current
   return HomeScreen.State(
     showInfo = showInfo,
     areas = areas,
@@ -171,6 +181,16 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
           )
         }
       }
+
+      ShowLocation -> {
+        val location = areas.groups.getValue(selectedGroup).location
+        val url =
+          when (CurrentPlatform) {
+            Native -> location.amaps
+            else -> location.gmaps
+          }
+        uriHandler.openUri(url)
+      }
     }
   }
 }
@@ -212,14 +232,21 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     topBar = {
       CenterAlignedTopAppBar(
         title = {
-          Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
+          val interactionSource = remember { MutableInteractionSource() }
+          Box(
+            Modifier.clickable(interactionSource = interactionSource, indication = null) {
+              state.eventSink(ShowInfo(true))
+            }
+          ) {
+            Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
+          }
         },
         actions = {
+          AdaptiveIconButton(onClick = { state.eventSink(ShowLocation) }) {
+            Icon(AdaptiveIcons.Outlined.Place, contentDescription = "Location")
+          }
           AdaptiveIconButton(onClick = { state.eventSink(Refresh) }) {
             Icon(AdaptiveIcons.Outlined.Refresh, contentDescription = "Refresh")
-          }
-          AdaptiveIconButton(onClick = { state.eventSink(ShowInfo(true)) }) {
-            Icon(AdaptiveIcons.Outlined.Info, contentDescription = "Info")
           }
         },
       )

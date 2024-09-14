@@ -71,8 +71,8 @@ class AreasBuilder {
     private val fieldGroups = mutableListOf<FieldGroup>()
 
     @AreaDSL
-    fun group(name: String, block: FieldGroupBuilder.() -> Unit) {
-      val builder = FieldGroupBuilder(name, this.name)
+    fun group(name: String, location: Location, block: FieldGroupBuilder.() -> Unit) {
+      val builder = FieldGroupBuilder(name, this.name, location)
       builder.block()
       fieldGroups.add(builder.build())
     }
@@ -81,7 +81,7 @@ class AreasBuilder {
       return Area(name, displayName, csvUrl, fieldGroups.toImmutableList())
     }
 
-    class FieldGroupBuilder(val name: String, val areaName: String) {
+    class FieldGroupBuilder(val name: String, val areaName: String, val location: Location) {
       private val fields = mutableListOf<Field>()
 
       @AreaDSL
@@ -90,7 +90,7 @@ class AreasBuilder {
       }
 
       fun build(): FieldGroup {
-        return FieldGroup(name, fields.toImmutableList(), areaName)
+        return FieldGroup(name, fields.toImmutableList(), areaName, location)
       }
     }
   }
@@ -103,7 +103,14 @@ fun buildDefaultAreas(): Areas {
       displayName = "East River Park",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
     ) {
-      group("Track") {
+      group(
+        name = "Track",
+        location =
+          Location(
+            "https://maps.app.goo.gl/bFmVPr5st28os4vQA",
+            "https://maps.apple.com/?address=E%20River%20Esplanade%20%26%20FDR%20Drive%0ANew%20York,%20NY%20%2010002%0AUnited%20States&auid=16002436924869229563&ll=40.721770,-73.973812&lsp=9902&q=East%20River%20Park%20Running%20Track",
+          ),
+      ) {
         field(
           csvName = "Soccer-01A East 6th Street",
           displayName = "North Half",
@@ -120,7 +127,14 @@ fun buildDefaultAreas(): Areas {
           sharedFields = setOf("Track field", "track field 1b"),
         )
       }
-      group("Field 6") {
+      group(
+        name = "Field 6",
+        location =
+          Location(
+            "https://maps.app.goo.gl/KD27oHCF6Jw1UhX58",
+            "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20E%20River%20Esplanade,%20New%20York,%20NY%20%2010002,%20United%20States&auid=2997997111374685654&ll=40.719770,-73.974155&lsp=9902&q=John%20V.%20Lindsay%20East%20River%20Park%20Baseball%20Fields",
+          ),
+      ) {
         field(csvName = "Baseball-06", displayName = "Baseball", sharedFields = setOf("field6"))
         field(
           csvName = "Soccer-03 Houston St & FDR",
@@ -128,7 +142,14 @@ fun buildDefaultAreas(): Areas {
           sharedFields = setOf("field6"),
         )
       }
-      group("Field 2 (Grand Street)") {
+      group(
+        name = "Field 2 (Grand Street)",
+        location =
+          Location(
+            "https://www.google.com/maps/place/40°42'44.2\"N+73°58'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
+            "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20New%20York,%20NY%20%2010002,%20United%20States&ll=40.712206,-73.976992&q=Dropped%20Pin",
+          ),
+      ) {
         field(csvName = "Soccer-02 Grand Street", displayName = "Whole Field")
       }
     }
@@ -137,7 +158,14 @@ fun buildDefaultAreas(): Areas {
       displayName = "Baruch Playground",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
     ) {
-      group("Baruch") {
+      group(
+        name = "Baruch",
+        location =
+          Location(
+            "https://maps.app.goo.gl/S6x4PgTCGucMKnB9A",
+            "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground",
+          ),
+      ) {
         field(csvName = "Softball-01", displayName = "Softball 1", sharedFields = setOf("field1"))
         field(csvName = "Football-01", displayName = "Soccer 1", sharedFields = setOf("field1"))
         field(csvName = "Football-02", displayName = "Soccer 2", sharedFields = setOf("field2"))
@@ -149,7 +177,14 @@ fun buildDefaultAreas(): Areas {
       displayName = "Corlears Hook",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M017/csv",
     ) {
-      group("Corlears Hook") {
+      group(
+        name = "Corlears Hook",
+        location =
+          Location(
+            "https://maps.app.goo.gl/qhdRxmus8UPUtSyY8",
+            "https://maps.apple.com/?address=397%20FDR%20Drive,%20New%20York,%20NY%2010002,%20United%20States&auid=16313010153387216666&ll=40.711739,-73.979789&lsp=9902&q=Corlears%20Hook%20Park",
+          ),
+      ) {
         field(csvName = "Soccer-01", displayName = "Soccer")
         field(csvName = "Softball-01", displayName = "Softball")
       }
@@ -159,14 +194,30 @@ fun buildDefaultAreas(): Areas {
       displayName = "Pier 42",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",
     ) {
-      group("Pier 42") { field(csvName = "Soccer-01", displayName = "Soccer") }
+      group(
+        name = "Pier 42",
+        location =
+          Location(
+            "https://maps.app.goo.gl/d9Qi6Dqu8z5yPdU56",
+            "https://maps.apple.com/?address=New%20York,%20NY%2010002,%20United%20States&auid=14094921999338982991&ll=40.709947,-73.982427&lsp=9902&q=Pier%2042",
+          ),
+      ) {
+        field(csvName = "Soccer-01", displayName = "Soccer")
+      }
     }
     area(
       name = "Peter's Field",
       displayName = "Peter's Field",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M227/csv",
     ) {
-      group("Peter's Field") {
+      group(
+        name = "Peter's Field",
+        location =
+          Location(
+            "https://maps.app.goo.gl/Q1rftzTaKiVHRNDz6",
+            "https://maps.apple.com/?address=301%20E%2020th%20St,%20New%20York,%20NY%20%2010003,%20United%20States&auid=7985386323298652825&ll=40.736111,-73.981667&lsp=9902&q=Peter's%20Field",
+          ),
+      ) {
         field(csvName = "Soccer-01", displayName = "Soccer", sharedFields = setOf("petersfield"))
         field(
           csvName = "Softball-01",
@@ -180,14 +231,30 @@ fun buildDefaultAreas(): Areas {
       displayName = "McCarren Park",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/B058/csv",
     ) {
-      group(name = "McCarren Track") { field(csvName = "Soccer-01", displayName = "Soccer") }
+      group(
+        name = "McCarren Track",
+        location =
+          Location(
+            "https://maps.app.goo.gl/4oHKgX7kkxTPcwWS7",
+            "https://maps.apple.com/?address=Lorimer%20Street,%20Union%20%26%20Driggs%20Avenue,%20Brooklyn,%20NY%2011211,%20United%20States&auid=2152782516168223158&ll=40.720052,-73.951718&lsp=9902&q=McCarren%20Park%20Track",
+          ),
+      ) {
+        field(csvName = "Soccer-01", displayName = "Soccer")
+      }
     }
     area(
       name = "Bushwick Inlet Park",
       displayName = "Bushwick Inlet Park",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/B529/csv",
     ) {
-      group("Bushwick Inlet Park") {
+      group(
+        name = "Bushwick Inlet Park",
+        location =
+          Location(
+            "https://maps.app.goo.gl/P1J6DhgdAVmG8Syq6",
+            "https://maps.apple.com/?address=86%20Kent%20Ave,%20Brooklyn,%20NY%2011249,%20United%20States&auid=17553726733896206163&ll=40.722201,-73.961238&lsp=9902&q=Bushwick%20Inlet%20Park",
+          ),
+      ) {
         field(
           csvName = "Soccer-01A",
           displayName = "West Half",
@@ -214,7 +281,10 @@ data class FieldGroup(
   val name: String,
   @Serializable(with = ImmutableListSerializer::class) val fields: ImmutableList<Field>,
   val area: String,
+  val location: Location,
 )
+
+@Serializable @Immutable data class Location(val gmaps: String, val amaps: String)
 
 @Serializable
 @Immutable
