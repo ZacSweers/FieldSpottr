@@ -128,7 +128,7 @@ fun buildDefaultAreas(): Areas {
           sharedFields = setOf("field6"),
         )
       }
-      group("Grand Street") {
+      group("Field 2 (Grand Street)") {
         field(csvName = "Soccer-02 Grand Street", displayName = "Whole Field")
       }
     }
