@@ -6,20 +6,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.zacsweers.fieldspottr.data.Areas
+import dev.zacsweers.fieldspottr.util.TextFieldDropdown
 
 @Composable
 fun GroupSelector(
@@ -32,78 +27,31 @@ fun GroupSelector(
     modifier = modifier.padding(horizontal = 16.dp).fillMaxWidth(),
     horizontalArrangement = Arrangement.spacedBy(16.dp),
   ) {
-    var areasExpanded by remember { mutableStateOf(false) }
     val selectedArea by
       remember(selectedGroup) {
         val areaName = areas.groups.getValue(selectedGroup).area
         mutableStateOf(areas.entries.first { it.areaName == areaName })
       }
-    ExposedDropdownMenuBox(
-      areasExpanded,
-      onExpandedChange = { areasExpanded = it },
+    val areasList = remember { areas.entries.sortedBy { it.displayName } }
+    TextFieldDropdown(
+      label = "Area",
+      currentValue = selectedArea,
+      allValues = areasList,
       modifier = Modifier.weight(1f),
-    ) {
-      OutlinedTextField(
-        value = selectedArea.displayName,
-        modifier = Modifier.menuAnchor().fillMaxWidth(),
-        onValueChange = {},
-        readOnly = true,
-        singleLine = true,
-        label = { Text("Area") },
-        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = areasExpanded) },
-        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-      )
-      ExposedDropdownMenu(areasExpanded, { areasExpanded = false }) {
-        for (area in areas.entries.sortedBy { it.displayName }) {
-          DropdownMenuItem(
-            text = {
-              val isSelected = area == selectedArea
-              Text(area.displayName, fontWeight = if (isSelected) FontWeight.Black else null)
-            },
-            onClick = {
-              areasExpanded = false
-              onGroupSelected(area.fieldGroups.first().name)
-            },
-            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
-          )
-        }
-      }
-    }
+      setValue = { area -> onGroupSelected(area.fieldGroups.first().name) },
+      displayName = { it.displayName },
+    )
     if (selectedArea.fieldGroups.size > 1) {
-      var groupExpanded by remember { mutableStateOf(false) }
-      ExposedDropdownMenuBox(
-        groupExpanded,
-        onExpandedChange = { groupExpanded = it },
+      val sortedGroups =
+        remember(selectedArea) { selectedArea.fieldGroups.sortedBy { it.name }.map { it.name } }
+      TextFieldDropdown(
+        label = "Field",
+        currentValue = selectedGroup,
+        allValues = sortedGroups,
         modifier = Modifier.weight(1f),
-      ) {
-        OutlinedTextField(
-          value = selectedGroup,
-          modifier = Modifier.menuAnchor(),
-          onValueChange = {},
-          readOnly = true,
-          singleLine = true,
-          label = { Text("Field") },
-          trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = groupExpanded) },
-          colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-        )
-        ExposedDropdownMenu(groupExpanded, { groupExpanded = false }) {
-          for (group in selectedArea.fieldGroups.sortedBy { it.name }) {
-            DropdownMenuItem(
-              text = {
-                Text(
-                  group.name,
-                  fontWeight = FontWeight.Black.takeIf { group.name == selectedGroup },
-                )
-              },
-              onClick = {
-                groupExpanded = false
-                onGroupSelected(group.name)
-              },
-              contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
-            )
-          }
-        }
-      }
+        setValue = { group -> onGroupSelected(group) },
+        displayName = { it },
+      )
     }
   }
 }
