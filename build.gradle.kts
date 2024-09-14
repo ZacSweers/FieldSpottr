@@ -54,14 +54,7 @@ spotless {
   format("license") {
     licenseHeaderFile(rootProject.file("spotless/spotless.kt"), "(package|@file:)")
     target("src/**/*.kt")
-    targetExclude(
-      "**/circuit/backstack/**/*.kt",
-      "**/HorizontalPagerIndicator.kt",
-      "**/FilterList.kt",
-      "**/Remove.kt",
-      "**/Pets.kt",
-      "**/SystemUiController.kt",
-    )
+    targetExclude("**/TextFieldDropdown.kt")
   }
 }
 
