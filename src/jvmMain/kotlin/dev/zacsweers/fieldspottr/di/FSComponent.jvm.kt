@@ -2,16 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.di
 
-import dev.zacsweers.fieldspottr.DesktopFSAppDirs
-import dev.zacsweers.fieldspottr.JvmSqlDriverFactory
-import dev.zacsweers.fieldspottr.SqlDriverFactory
+import kotlinx.serialization.json.Json
+import me.tatarka.inject.annotations.Component
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.MergeComponent
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
-class JvmSharedPlatformFSComponent : SharedPlatformFSComponent {
-  private val appDirs = DesktopFSAppDirs()
-
-  override fun provideFSAppDirs() = appDirs
-
-  override fun provideSqlDriverFactory(): SqlDriverFactory {
-    return JvmSqlDriverFactory(appDirs)
-  }
+@Component
+@MergeComponent(AppScope::class)
+@SingleIn(AppScope::class)
+interface JvmFSComponent : FSComponent, JvmFSComponentMerged {
+  val json: Json
 }
