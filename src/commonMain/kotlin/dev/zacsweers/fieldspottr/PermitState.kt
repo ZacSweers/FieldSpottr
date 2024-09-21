@@ -168,6 +168,14 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         var currentPermitIndex = 0
         var hour = 0
         while (hour < 24) {
+          if (currentPermitIndex == sortedPermits.size) {
+            // Pad free slots until the end of the day
+            repeat(24 - hour) {
+              elements += Free
+              hour++
+            }
+            break
+          }
           val permit = sortedPermits[currentPermitIndex]
           when {
             permit.start == hour -> {
