@@ -5,7 +5,7 @@
 	<key>CFBundleVersion</key>
 	<string>19</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.3</string>
+	<string>2.2.1</string>
 	<key>CFBundleIdentifier</key>
 	<string>dev.zacsweers.FieldSpottr</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
