@@ -2,11 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import me.tatarka.inject.annotations.Inject
 import net.harawata.appdirs.AppDirsFactory
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
+@Inject
+@ContributesBinding(AppScope::class)
+@SingleIn(AppScope::class)
 class DesktopFSAppDirs(override val fs: FileSystem = FileSystem.SYSTEM) : FSAppDirs {
 
   private val appDirs = AppDirsFactory.getInstance()

@@ -3,12 +3,14 @@
 package dev.zacsweers.fieldspottr.di
 
 import android.content.Context
-import dev.zacsweers.fieldspottr.AndroidSqlDriverFactory
-import dev.zacsweers.fieldspottr.ContextFSAppDirs
+import me.tatarka.inject.annotations.Component
+import me.tatarka.inject.annotations.Provides
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.MergeComponent
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
-class AndroidSharedPlatformFSComponent(private val appContext: Context) :
-  SharedPlatformFSComponent {
-  override fun provideFSAppDirs() = ContextFSAppDirs(appContext)
-
-  override fun provideSqlDriverFactory() = AndroidSqlDriverFactory(appContext)
-}
+@Component
+@MergeComponent(AppScope::class)
+@SingleIn(AppScope::class)
+abstract class AndroidFSComponent(@get:Provides val appContext: Context) :
+  FSComponent, AndroidFSComponentMerged

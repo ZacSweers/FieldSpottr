@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.di
 
-import androidx.compose.runtime.Immutable
 import com.slack.circuit.foundation.Circuit
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.presenterOf
 import dev.zacsweers.fieldspottr.About
 import dev.zacsweers.fieldspottr.AboutScreen
-import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.fieldspottr.Home
 import dev.zacsweers.fieldspottr.HomePresenter
 import dev.zacsweers.fieldspottr.HomeScreen
@@ -18,33 +16,31 @@ import dev.zacsweers.fieldspottr.PermitDetailsScreen
 import dev.zacsweers.fieldspottr.ScaffoldPresenter
 import dev.zacsweers.fieldspottr.ScaffoldScreen
 import dev.zacsweers.fieldspottr.ScaffoldScreenContent
-import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import kotlinx.serialization.json.Json
+import me.tatarka.inject.annotations.Provides
+import okio.FileSystem
+import okio.SYSTEM
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
-interface SharedPlatformFSComponent {
-  fun provideFSAppDirs(): FSAppDirs
+@SingleIn(AppScope::class)
+interface FSComponent {
+  val circuit: Circuit
 
-  fun provideSqlDriverFactory(): SqlDriverFactory
-}
+  @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM
 
-@Immutable
-class FSComponent(private val shared: SharedPlatformFSComponent) :
-  SharedPlatformFSComponent by shared {
-
-  val json: Json by lazy {
-    Json {
-      ignoreUnknownKeys = true
-      isLenient = true
-    }
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideJson(): Json = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
   }
 
-  private val permitRepository: PermitRepository by lazy {
-    PermitRepository(provideSqlDriverFactory(), provideFSAppDirs(), json)
-  }
-
-  val circuit: Circuit by lazy {
-    Circuit.Builder()
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideCircuit(permitRepository: PermitRepository): Circuit {
+    return Circuit.Builder()
       .addPresenter<HomeScreen, HomeScreen.State> { _, navigator, _ ->
         presenterOf { HomePresenter(navigator, permitRepository) }
       }

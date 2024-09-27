@@ -44,9 +44,12 @@ import kotlinx.datetime.LocalTime
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
 import kotlinx.serialization.json.Json
+import me.tatarka.inject.annotations.Inject
 import okio.Path
 import okio.buffer
 import okio.use
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 /** The default buffer size when working with buffered streams. */
 private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
@@ -70,6 +73,8 @@ private val FORMATTER =
     )
   }
 
+@Inject
+@SingleIn(AppScope::class)
 class PermitRepository(
   private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
