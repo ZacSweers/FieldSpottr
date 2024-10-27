@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -24,16 +23,13 @@ import androidx.compose.ui.Alignment.Companion.Center
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.ExperimentalTextApi
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.UrlAnnotation
+import androidx.compose.ui.text.LinkAnnotation.Url
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
@@ -98,48 +94,19 @@ private fun Header(modifier: Modifier = Modifier) {
     Spacer(modifier = Modifier.height(8.dp))
     val text = buildAnnotatedString {
       append("An app for checking field permit status from ")
-      pushUrlAnnotation(UrlAnnotation("https://nycgovparks.org"))
-      withStyle(
-        style =
-          SpanStyle(
-            color = MaterialTheme.colorScheme.primary,
-            textDecoration = TextDecoration.Underline,
-          )
-      ) {
-        append("nycgovparks.org")
-      }
+      withLink(Url("https://nycgovparks.org")) { append("nycgovparks.org") }
       pop()
       append(".")
       repeat(2) { appendLine() }
       append("By ")
       append(" ")
-      pushUrlAnnotation(UrlAnnotation("https://zacsweers.dev"))
-      withStyle(
-        style =
-          SpanStyle(
-            color = MaterialTheme.colorScheme.primary,
-            textDecoration = TextDecoration.Underline,
-          )
-      ) {
-        append("Zac Sweers")
-      }
+      withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") }
       pop()
       append(" — ")
-      pushUrlAnnotation(UrlAnnotation("https://github.com/ZacSweers/FieldSpottr"))
-      withStyle(
-        style =
-          SpanStyle(
-            color = MaterialTheme.colorScheme.primary,
-            textDecoration = TextDecoration.Underline,
-          )
-      ) {
-        append("Source code")
-      }
+      withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
       pop()
     }
-    // TODO move to the cleaner Compose APIs once they're in CM.
-    val uriHandler = LocalUriHandler.current
-    ClickableText(
+    Text(
       text,
       modifier = Modifier.align(CenterHorizontally),
       style =
@@ -147,10 +114,6 @@ private fun Header(modifier: Modifier = Modifier) {
           textAlign = TextAlign.Center,
           color = LocalContentColor.current,
         ),
-    ) { offset ->
-      text.getUrlAnnotations(start = offset, end = offset).firstOrNull()?.let { annotation ->
-        uriHandler.openUri(annotation.item.url)
-      }
-    }
+    )
   }
 }
