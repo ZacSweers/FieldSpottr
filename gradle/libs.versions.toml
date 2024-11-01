@@ -2,7 +2,7 @@
 aboutLicenses = "11.2.3"
 androidx-activity = "1.9.3"
 androidx-appcompat = "1.7.0"
-agp = "8.7.1"
+agp = "8.7.2"
 calf = "0.5.5"
 circuit = "0.25.0"
 compose-cupertino = "0.1.0-alpha04"
