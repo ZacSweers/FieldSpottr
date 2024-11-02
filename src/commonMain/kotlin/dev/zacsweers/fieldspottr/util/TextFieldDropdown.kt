@@ -26,6 +26,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.OutlinedTextFieldDefaults.Container
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -73,7 +74,7 @@ fun <T> TextFieldDropdown(
       trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isShowingDropdownMenu) },
     ) {
       Box(propagateMinConstraints = true) {
-        OutlinedTextFieldDefaults.ContainerBox(
+        Container(
           enabled = true,
           isError = false,
           interactionSource = interactionSource,
