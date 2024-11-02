@@ -55,7 +55,7 @@ fun main() {
         }
       },
     ) {
-      FieldSpottrApp(component, ::exitApplication)
+      FieldSpottrApp(component.circuit, ::exitApplication)
     }
   }
 }
