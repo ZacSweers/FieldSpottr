@@ -8,34 +8,90 @@ function getProperty() {
   grep "${1}" "$2" | cut -d'=' -f2
 }
 
-# Increments the fs_versioncode prop in gradle.properties to a new value
-# usage: increment_version $gradlePropertiesFile
+
+# Increments an input version string given a version type
+# usage: increment_version $current_version $version_type
 increment_version() {
+    local current_version=$1
+    local version_type=$2
+    IFS='.' read -r major minor patch <<< "$current_version"
+    case "$version_type" in
+        major) ((major++)); minor=0; patch=0 ;;
+        minor) ((minor++)); patch=0 ;;
+        patch) ((patch++)) ;;
+    esac
+    echo "$major.$minor.$patch"
+}
+
+update_property() {
+    local file=$1
+    local key=$2
+    local value=$3
+
+    sed "s/^${key}=.*$/${key}=${value}/" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
+# Increments the fs_versioncode prop in gradle.properties to a new value
+# usage: increment_version_code $gradlePropertiesFile
+increment_version_code() {
   local properties_file=$1
   if grep -q "fs_versioncode=" "$properties_file"; then
     local prev_version
     prev_version=$(getProperty 'fs_versioncode' "${properties_file}")
     local new_version
     new_version=$((prev_version + 1))
-    sed -i '' "s/${prev_version}/${new_version}/g" "${properties_file}"
-    echo $new_version
+    update_property "${properties_file}" "fs_versioncode" "${new_version}"
+    echo "${new_version}"
   fi
 }
+
+# Remove stale iOS binaries
+rm FieldSpottr.ipa || true
+rm FieldSpottr.app.dSYM.zip || true
+
+# Default values
+specific_version=""
+increment_type=""
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --major|--minor|--patch)
+            increment_type="${1/--/}"  # Remove -- prefix
+            ;;
+        *)
+            specific_version="$1"  # Assume it's a specific version
+            ;;
+    esac
+    shift
+done
 
 # Update libraries
 echo "Updating library definitions"
 ./gradlew exportLibraryDefinitions -PaboutLibraries.exportPath=src/commonMain/composeResources/files --quiet
 
-# Increment version
-echo "Incrementing version"
-NEW_VERSION=$(increment_version gradle.properties)
+# Increment version code
+echo "Incrementing version code"
+NEW_VERSION_CODE=$(increment_version_code gradle.properties)
 
 export RELEASING=true
-export FS_BUILD_NUMBER=$NEW_VERSION
+export FS_BUILD_NUMBER=$NEW_VERSION_CODE
 
-VERSION_NAME=$(getProperty 'fs_versionname' gradle.properties)
+# Fetch the latest version from gradle.properties if no specific version provided
+if [[ -z "$specific_version" ]]; then
+    latest_version=$(getProperty 'fs_versionname' gradle.properties)
+    VERSION_NAME=$(increment_version "$latest_version" "$increment_type")
+else
+    VERSION_NAME="$specific_version"
+fi
+
+update_property gradle.properties "fs_versionname" "${VERSION_NAME}"
+
+echo "New version code: ${NEW_VERSION_CODE}"
+echo "New version name: ${VERSION_NAME}"
+
 cd FieldSpottr
-xcrun agvtool new-version -all "${NEW_VERSION}"
+xcrun agvtool new-version -all "${NEW_VERSION_CODE}"
 xcrun agvtool new-marketing-version "${VERSION_NAME}"
 cd ..
 
@@ -50,8 +106,8 @@ bundle exec fastlane ios build_prod
 
 # Commit and tag. Don't do it until we know builds were successful
 echo "Tagging"
-git commit -am "Prepare for release ${NEW_VERSION}."
-git tag -a "v${NEW_VERSION}" -m "Version ${NEW_VERSION}"
+git commit -am "Prepare for release ${NEW_VERSION_CODE}."
+git tag -a "v${NEW_VERSION_CODE}" -m "Version ${NEW_VERSION_CODE}"
 
 # Publish binaries
 bundle exec fastlane ios publish_prod
