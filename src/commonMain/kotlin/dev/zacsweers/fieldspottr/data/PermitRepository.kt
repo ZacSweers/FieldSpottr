@@ -24,8 +24,7 @@ import io.ktor.client.call.body
 import io.ktor.client.request.prepareGet
 import io.ktor.http.userAgent
 import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.core.isEmpty
-import io.ktor.utils.io.core.readBytes
+import io.ktor.utils.io.readRemaining
 import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -43,6 +42,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
+import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import okio.Path
 import okio.buffer
@@ -184,8 +184,8 @@ class PermitRepository(
             val channel = httpResponse.body<ByteReadChannel>()
             while (!channel.isClosedForRead) {
               val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
-              while (!packet.isEmpty) {
-                val bytes = packet.readBytes()
+              while (!packet.exhausted()) {
+                val bytes = packet.readByteArray()
                 sink.write(bytes)
               }
             }
