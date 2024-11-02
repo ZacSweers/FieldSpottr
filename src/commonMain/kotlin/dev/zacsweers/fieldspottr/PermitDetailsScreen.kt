@@ -107,7 +107,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
       HorizontalDivider()
       LazyColumn {
         items(state.otherPermits, key = { it.key }) { permit ->
-          Column(Modifier.padding(top = 16.dp).animateItemPlacement().fillMaxWidth()) {
+          Column(Modifier.padding(top = 16.dp).animateItem().fillMaxWidth()) {
             Row {
               Text(
                 permit.date,
