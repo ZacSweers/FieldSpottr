@@ -17,11 +17,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.LocalAbsoluteTonalElevation
 import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
@@ -51,11 +53,9 @@ import com.mohamedrejeb.calf.ui.datepicker.AdaptiveDatePickerState
 import com.mohamedrejeb.calf.ui.datepicker.rememberAdaptiveDatePickerState
 import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
 import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
-import dev.zacsweers.fieldspottr.util.AdaptiveClickableSurface
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveButton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.datetime.Clock
@@ -155,8 +155,8 @@ fun DateSelector(
     }
   }
 
-  AdaptiveClickableSurface(
-    clickableEnabled = true,
+  Surface(
+    enabled = true,
     onClick = { showDatePicker = true },
     modifier =
       modifier.requiredHeightIn(max = 48.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
@@ -209,11 +209,11 @@ private fun DatePickerSheetContent(
   )
   Row(Modifier.padding(bottom = 16.dp, end = 16.dp), horizontalArrangement = spacedBy(16.dp)) {
     Spacer(Modifier.weight(1f))
-    AdaptiveButton(onClick = hideSheet) { Text("Cancel") }
+    Button(onClick = hideSheet) { Text("Cancel") }
     val confirmEnabled by remember {
       derivedStateOf { datePickerState.selectedDateMillis != current }
     }
-    AdaptiveButton(
+    Button(
       onClick = {
         updateSelection(datePickerState.selectedDateMillis ?: current)
         hideSheet()

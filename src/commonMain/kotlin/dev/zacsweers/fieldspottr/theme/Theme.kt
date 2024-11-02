@@ -4,19 +4,12 @@ package dev.zacsweers.fieldspottr.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme as m3DarkColorScheme
 import androidx.compose.material3.lightColorScheme as m3LightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveTheme
-import io.github.alexzhirkevich.cupertino.adaptive.CupertinoThemeSpec
-import io.github.alexzhirkevich.cupertino.adaptive.MaterialThemeSpec
-import io.github.alexzhirkevich.cupertino.theme.ColorScheme as CupertinoColorScheme
-import io.github.alexzhirkevich.cupertino.theme.CupertinoTheme.shapes
-import io.github.alexzhirkevich.cupertino.theme.Shapes as CuptertinoShapes
-import io.github.alexzhirkevich.cupertino.theme.darkColorScheme as cupertinoDarkColorScheme
-import io.github.alexzhirkevich.cupertino.theme.lightColorScheme as cupertinoLightColorScheme
 
 internal val lightScheme =
   m3LightColorScheme(
@@ -285,50 +278,5 @@ fun FSTheme(
 
   PlatformSpecificThemeSideEffects()
 
-  AdaptiveTheme(
-    material = MaterialThemeSpec(colorScheme = colorScheme, typography = AppTypography),
-    cupertino =
-      CupertinoThemeSpec.Default(
-        colorScheme = colorScheme.toCupertinoThemeSpec(useDarkTheme),
-        shapes =
-          CuptertinoShapes(
-            extraSmall = shapes.extraSmall,
-            small = shapes.small,
-            medium = shapes.medium,
-            large = shapes.large,
-            extraLarge = shapes.extraLarge,
-          ),
-        // TODO typography on iOS still uses MaterialTheme in places, probably not ideal
-      ),
-    content = content,
-  )
-}
-
-fun ColorScheme.toCupertinoThemeSpec(useDarkTheme: Boolean): CupertinoColorScheme {
-  val colors = this
-
-  val colorSchemeCreator =
-    if (useDarkTheme) ::cupertinoDarkColorScheme else ::cupertinoLightColorScheme
-
-  return colorSchemeCreator(
-    /* accent = */ colors.primary,
-    /* label = */ colors.onSurface,
-    /* secondaryLabel = */ colors.secondary,
-    /* tertiaryLabel = */ colors.tertiary,
-    /* quaternaryLabel = */ colors.tertiary, // ???
-    /* systemFill = */ colors.surface,
-    /* secondarySystemFill = */ colors.surfaceVariant,
-    /* tertiarySystemFill = */ colors.surfaceBright,
-    /* quaternarySystemFill = */ colors.surfaceDim,
-    /* placeholderText = */ colors.onPrimary.copy(alpha = 0.5f),
-    /* separator = */ colors.outline,
-    /* opaqueSeparator = */ colors.outline.copy(alpha = 1f),
-    /* link = */ colors.primary,
-    /* systemGroupedBackground = */ colors.background,
-    /* secondarySystemGroupedBackground = */ colors.surfaceContainer,
-    /* tertiarySystemGroupedBackground = */ colors.primaryContainer,
-    /* systemBackground = */ colors.surface,
-    /* secondarySystemBackground = */ colors.surfaceVariant,
-    /* tertiarySystemBackground = */ colors.surfaceContainer,
-  )
+  MaterialTheme(colorScheme = colorScheme, typography = AppTypography) { content() }
 }

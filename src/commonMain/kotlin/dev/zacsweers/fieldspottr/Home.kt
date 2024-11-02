@@ -8,8 +8,13 @@ import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -51,11 +56,6 @@ import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Android
 import dev.zacsweers.fieldspottr.util.Platform.Native
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveIconButton
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveScaffold
-import io.github.alexzhirkevich.cupertino.adaptive.icons.AdaptiveIcons
-import io.github.alexzhirkevich.cupertino.adaptive.icons.Place
-import io.github.alexzhirkevich.cupertino.adaptive.icons.Refresh
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.LocalDate
@@ -227,7 +227,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
-  AdaptiveScaffold(
+  Scaffold(
     modifier = modifier,
     topBar = {
       CenterAlignedTopAppBar(
@@ -242,11 +242,11 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
           }
         },
         actions = {
-          AdaptiveIconButton(onClick = { state.eventSink(ShowLocation) }) {
-            Icon(AdaptiveIcons.Outlined.Place, contentDescription = "Location")
+          IconButton(onClick = { state.eventSink(ShowLocation) }) {
+            Icon(Icons.Outlined.Place, contentDescription = "Location")
           }
-          AdaptiveIconButton(onClick = { state.eventSink(Refresh) }) {
-            Icon(AdaptiveIcons.Outlined.Refresh, contentDescription = "Refresh")
+          IconButton(onClick = { state.eventSink(Refresh) }) {
+            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
           }
         },
       )

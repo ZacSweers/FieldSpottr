@@ -287,7 +287,7 @@ fun buildDefaultAreas(): Areas {
       ) {
         field(
           csvName = "Tim McGinn Fields-Softball-01",
-          displayName = "West Softball Half",
+          displayName = "West Softball",
           sharedFields = setOf("murphy whole field"),
         )
         field(
@@ -297,7 +297,7 @@ fun buildDefaultAreas(): Areas {
         )
         field(
           csvName = "Tim McGinn Fields-Softball-02",
-          displayName = "East Softball Half",
+          displayName = "East Softball",
           sharedFields = setOf("murphy whole field"),
         )
       }

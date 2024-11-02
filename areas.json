@@ -290,7 +290,7 @@
           "fields": [
             {
               "name": "Tim McGinn Fields-Softball-01",
-              "displayName": "West Softball Half",
+              "displayName": "West Softball",
               "group": "Murphy Brothers Playground",
               "sharedFields": [
                 "murphy whole field"
@@ -306,7 +306,7 @@
             },
             {
               "name": "Tim McGinn Fields-Softball-02",
-              "displayName": "East Softball Half",
+              "displayName": "East Softball",
               "group": "Murphy Brothers Playground",
               "sharedFields": [
                 "murphy whole field"
