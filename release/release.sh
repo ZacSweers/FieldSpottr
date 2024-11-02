@@ -45,6 +45,8 @@ increment_version_code() {
   fi
 }
 
+# TODO eventually generate release notes to release_notes.txt
+
 # Remove stale iOS binaries
 rm FieldSpottr.ipa || true
 rm FieldSpottr.app.dSYM.zip || true

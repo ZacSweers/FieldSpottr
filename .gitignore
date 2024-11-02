@@ -75,3 +75,5 @@ fastlane/report.xml
 # .swiftpm
 
 .env.default
+
+fastlane/release_notes.txt
