@@ -34,3 +34,6 @@
     boolean ANDROID_DETECTED return true;
 }
 -checkdiscard class kotlinx.coroutines.internal.FastServiceLoader
+
+# Weirdly referenced by compose resources
+-dontwarn androidx.test.platform.app.InstrumentationRegistry
