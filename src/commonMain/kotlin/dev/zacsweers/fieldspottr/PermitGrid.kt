@@ -13,16 +13,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.BottomCenter
-import androidx.compose.ui.Alignment.Companion.Center
 import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
@@ -38,10 +38,7 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
-import dev.zacsweers.fieldspottr.util.AdaptiveClickableSurface
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveHorizontalDivider
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveSurface
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
@@ -76,7 +73,7 @@ fun PermitGrid(
 
   Column(modifier) {
     // Names of the fields as a header
-    AdaptiveSurface {
+    Surface {
       Box {
         Row(
           modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
@@ -112,7 +109,7 @@ fun PermitGrid(
           visible = isScrolled,
           modifier = Modifier.align(BottomCenter),
         ) {
-          AdaptiveHorizontalDivider()
+          HorizontalDivider()
         }
       }
     }
@@ -154,7 +151,7 @@ fun PermitGrid(
               if (fieldState is Reserved) {
                 PermitEvent(event = fieldState, onEventClick = { onEventClick(fieldState) })
               }
-              AdaptiveHorizontalDivider(modifier = Modifier.align(BottomCenter))
+              HorizontalDivider(modifier = Modifier.align(BottomCenter))
             }
           }
         }
@@ -178,14 +175,14 @@ fun PermitEvent(
     } else {
       MaterialTheme.colorScheme.tertiaryContainer
     }
-  AdaptiveClickableSurface(
-    clickableEnabled = onEventClick != null && !isOverlap,
+  Surface(
+    enabled = onEventClick != null && !isOverlap,
     onClick = { onEventClick!!(event) },
     modifier = modifier.fillMaxSize().padding(4.dp).clipToBounds(),
     color = containerColor,
     shape = RoundedCornerShape(4.dp),
   ) {
-    if (isOverlap) return@AdaptiveClickableSurface
+    if (isOverlap) return@Surface
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
       val textColor =
         if (event.isBlocked) {
