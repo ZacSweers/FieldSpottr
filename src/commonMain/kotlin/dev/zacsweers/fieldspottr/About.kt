@@ -95,16 +95,13 @@ private fun Header(modifier: Modifier = Modifier) {
     val text = buildAnnotatedString {
       append("An app for checking field permit status from ")
       withLink(Url("https://nycgovparks.org")) { append("nycgovparks.org") }
-      pop()
       append(".")
       repeat(2) { appendLine() }
       append("By ")
       append(" ")
       withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") }
-      pop()
       append(" — ")
       withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
-      pop()
     }
     Text(
       text,
