@@ -272,6 +272,36 @@ fun buildDefaultAreas(): Areas {
         )
       }
     }
+    area(
+      name = "Murphy Brothers Playground",
+      displayName = "Murphy Brothers Playground",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M059/csv",
+    ) {
+      group(
+        name = "Murphy Brothers Playground",
+        location =
+          Location(
+            "https://maps.app.goo.gl/ji38JTioKTi1aCZu8",
+            "https://maps.apple.com/?address=729%20E%2016th%20St,%20New%20York,%20NY%20%2010009,%20United%20States&auid=6845864669219202528&ll=40.730238,-73.973458&lsp=9902&q=Murphy%20Brothers%20Playground",
+          ),
+      ) {
+        field(
+          csvName = "Tim McGinn Fields-Softball-01",
+          displayName = "West Softball Half",
+          sharedFields = setOf("murphy whole field"),
+        )
+        field(
+          csvName = "Tim McGinn Fields-Soccer-01",
+          displayName = "Whole Field",
+          sharedFields = setOf("murphy whole field"),
+        )
+        field(
+          csvName = "Tim McGinn Fields-Softball-02",
+          displayName = "East Softball Half",
+          sharedFields = setOf("murphy whole field"),
+        )
+      }
+    }
   }
 }
 
