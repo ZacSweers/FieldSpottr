@@ -121,11 +121,9 @@ platform :ios do
       in_house: false, # if it is enterprise or not
     )
 
-    release_notes = File.read("./release_notes.txt")
-
     upload_to_testflight(
       app_identifier: "dev.zacsweers.FieldSpottr",
-      changelog: release_notes,
+      changelog: File.read("./release_notes.txt"),
       distribute_external: true,
       notify_external_testers: true,
       skip_waiting_for_build_processing: true
@@ -140,7 +138,7 @@ platform :ios do
 #       force: true,
 #       submission_information: {
 #         release_notes: {
-#           'en-US' => release_notes
+#           'en-US' => File.read("./release_notes.txt")
 #         }
 #       }
 #     )
