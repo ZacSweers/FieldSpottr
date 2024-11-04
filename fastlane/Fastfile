@@ -3,7 +3,7 @@ skip_docs
 platform :android do
 
   lane :publish_prod do
-    release_notes = File.read("./fastlane/release_notes.txt")
+    release_notes = File.read("./release_notes.txt")
 
     # First upload to beta
     upload_to_play_store(
@@ -121,7 +121,7 @@ platform :ios do
       in_house: false, # if it is enterprise or not
     )
 
-    release_notes = File.read("./fastlane/release_notes.txt")
+    release_notes = File.read("./release_notes.txt")
 
     upload_to_testflight(
       app_identifier: "dev.zacsweers.FieldSpottr",
