@@ -82,19 +82,21 @@ export FS_BUILD_NUMBER=$NEW_VERSION_CODE
 # Fetch the latest version from gradle.properties if no specific version provided
 if [[ -z "$specific_version" ]]; then
     latest_version=$(getProperty 'fs_versionname' gradle.properties)
-    VERSION_NAME=$(increment_version "$latest_version" "$increment_type")
+    FS_VERSION_NAME=$(increment_version "$latest_version" "$increment_type")
 else
-    VERSION_NAME="$specific_version"
+    FS_VERSION_NAME="$specific_version"
 fi
 
-update_property gradle.properties "fs_versionname" "${VERSION_NAME}"
+export FS_VERSION_NAME="${FS_VERSION_NAME}"
 
-echo "New version code: ${NEW_VERSION_CODE}"
-echo "New version name: ${VERSION_NAME}"
+update_property gradle.properties "fs_versionname" "${FS_VERSION_NAME}"
+
+echo "New version code: ${FS_BUILD_NUMBER}"
+echo "New version name: ${FS_VERSION_NAME}"
 
 cd FieldSpottr
-xcrun agvtool new-version -all "${NEW_VERSION_CODE}"
-xcrun agvtool new-marketing-version "${VERSION_NAME}"
+xcrun agvtool new-version -all "${FS_BUILD_NUMBER}"
+xcrun agvtool new-marketing-version "${FS_VERSION_NAME}"
 cd ..
 
 # Build Android release
@@ -108,8 +110,8 @@ bundle exec fastlane ios build_prod
 
 # Commit and tag. Don't do it until we know builds were successful
 echo "Tagging"
-git commit -am "Prepare for release ${NEW_VERSION_CODE}."
-git tag -a "v${NEW_VERSION_CODE}" -m "Version ${NEW_VERSION_CODE}"
+git commit -am "Prepare for release ${FS_BUILD_NUMBER}."
+git tag -a "v${FS_BUILD_NUMBER}" -m "Version ${FS_BUILD_NUMBER}"
 
 # Publish binaries
 bundle exec fastlane ios publish_prod
