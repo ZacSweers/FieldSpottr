@@ -3,8 +3,6 @@ skip_docs
 platform :android do
 
   lane :publish_prod do
-    release_notes = File.read("./release_notes.txt")
-
     # First upload to beta
     upload_to_play_store(
       package_name: "dev.zacsweers.fieldspottr",
@@ -13,9 +11,6 @@ platform :android do
       aab: "build/outputs/bundle/release/field-spottr-root-release.aab",
       mapping: "build/outputs/mapping/release/mapping.txt",
       json_key: "release/play-account.json",
-      release_notes: {
-        'en-US' => release_notes
-      }
     )
 
     # Then promote to production
@@ -25,9 +20,6 @@ platform :android do
       track_promote_to: "production",
       release_status: "completed", # Auto-publish to production
       json_key: "release/play-account.json",
-      release_notes: {
-        'en-US' => release_notes
-      }
     )
   end
 
@@ -121,9 +113,11 @@ platform :ios do
       in_house: false, # if it is enterprise or not
     )
 
+    release_notes = File.read("./release_notes.txt")
+
     upload_to_testflight(
       app_identifier: "dev.zacsweers.FieldSpottr",
-      changelog: File.read("./release_notes.txt"),
+      changelog: release_notes,
       distribute_external: true,
       notify_external_testers: true,
       skip_waiting_for_build_processing: true
@@ -138,7 +132,7 @@ platform :ios do
 #       force: true,
 #       submission_information: {
 #         release_notes: {
-#           'en-US' => File.read("./release_notes.txt")
+#           'en-US' => release_notes
 #         }
 #       }
 #     )

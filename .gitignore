@@ -77,3 +77,4 @@ fastlane/report.xml
 .env.default
 
 fastlane/release_notes.txt
+fastlane/metadata/android/en-US/changelogs/release_notes.txt
