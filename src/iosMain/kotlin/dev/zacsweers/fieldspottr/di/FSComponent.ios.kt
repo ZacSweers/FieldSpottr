@@ -2,11 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.di
 
-import dev.zacsweers.fieldspottr.NativeSqlDriverFactory
-import dev.zacsweers.fieldspottr.data.NSFileManagerFSAppDirs
+import kotlin.reflect.KClass
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.MergeComponent
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
-class IosSharedPlatformFSComponent : SharedPlatformFSComponent {
-  override fun provideFSAppDirs() = NSFileManagerFSAppDirs()
-
-  override fun provideSqlDriverFactory() = NativeSqlDriverFactory()
+@MergeComponent(AppScope::class)
+@SingleIn(AppScope::class)
+interface IosFSComponent : FSComponent {
+  companion object {
+    fun create() = IosFSComponent::class.createComponent()
+  }
 }
+
+/**
+ * The `actual fun` will be generated for each iOS specific target. See [MergeComponent] for more
+ * details.
+ */
+@MergeComponent.CreateComponent expect fun KClass<IosFSComponent>.createComponent(): IosFSComponent

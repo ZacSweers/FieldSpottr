@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data
 
 import dev.zacsweers.fieldspottr.FSAppDirs
 import kotlinx.cinterop.ExperimentalForeignApi
+import me.tatarka.inject.annotations.Inject
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
@@ -11,6 +12,9 @@ import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSUserDomainMask
+import software.amazon.lastmile.kotlin.inject.anvil.AppScope
+import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
+import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 @OptIn(ExperimentalForeignApi::class)
 private val NSFileManager.cacheDir: String
@@ -36,8 +40,10 @@ private val NSFileManager.filesDir: String
       )
       ?.path!!
 
-class NSFileManagerFSAppDirs : FSAppDirs {
-  override val fs: FileSystem = FileSystem.SYSTEM
+@Inject
+@ContributesBinding(AppScope::class)
+@SingleIn(AppScope::class)
+class NSFileManagerFSAppDirs(override val fs: FileSystem = FileSystem.SYSTEM) : FSAppDirs {
 
   private val fileManager = NSFileManager.defaultManager
 

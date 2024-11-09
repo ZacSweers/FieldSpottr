@@ -15,5 +15,5 @@ fun makeUiViewController(component: FSComponent): UIViewController =
       platformLayers = false
     }
   ) {
-    FieldSpottrApp(component, onRootPop = {})
+    FieldSpottrApp(component.circuit, onRootPop = {})
   }

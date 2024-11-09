@@ -5,8 +5,9 @@ package dev.zacsweers.fieldspottr
 import android.app.Application
 import android.os.StrictMode
 import com.bugsnag.android.Bugsnag
-import dev.zacsweers.fieldspottr.di.AndroidSharedPlatformFSComponent
+import dev.zacsweers.fieldspottr.di.AndroidFSComponent
 import dev.zacsweers.fieldspottr.di.FSComponent
+import dev.zacsweers.fieldspottr.di.create
 
 class FieldSpottrApplication : Application() {
 
@@ -20,7 +21,7 @@ class FieldSpottrApplication : Application() {
           Bugsnag.start(this, it)
         }
       }
-    fsComponent = FSComponent(AndroidSharedPlatformFSComponent(this))
+    fsComponent = AndroidFSComponent::class.create(this)
     if (!BuildConfig.IS_RELEASE) {
       StrictMode.enableDefaults()
     }
