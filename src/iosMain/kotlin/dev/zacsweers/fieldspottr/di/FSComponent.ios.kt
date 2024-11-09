@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.di
 
+import kotlin.reflect.KClass
 import software.amazon.lastmile.kotlin.inject.anvil.AppScope
 import software.amazon.lastmile.kotlin.inject.anvil.MergeComponent
 import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
@@ -10,6 +11,12 @@ import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 @SingleIn(AppScope::class)
 interface IosFSComponent : FSComponent {
   companion object {
-    fun create() = IosFSComponent::class.create()
+    fun create() = IosFSComponent::class.createComponent()
   }
 }
+
+/**
+ * The `actual fun` will be generated for each iOS specific target. See [MergeComponent] for more
+ * details.
+ */
+@MergeComponent.CreateComponent expect fun KClass<IosFSComponent>.createComponent(): IosFSComponent
