@@ -3,12 +3,27 @@ skip_docs
 platform :android do
 
   lane :publish_prod do
+    # First upload to beta
     upload_to_play_store(
       package_name: "dev.zacsweers.fieldspottr",
       track: "beta", # Open testing
+      release_status: "completed", # Auto-publish to beta
       aab: "build/outputs/bundle/release/field-spottr-root-release.aab",
       mapping: "build/outputs/mapping/release/mapping.txt",
-      json_key: "release/play-account.json"
+      json_key: "release/play-account.json",
+      version_code: ENV['FS_VERSION_CODE'],
+      version_name: ENV['FS_VERSION_NAME']
+    )
+
+    # Then promote to production
+    upload_to_play_store(
+      package_name: "dev.zacsweers.fieldspottr",
+      track: "beta",
+      track_promote_to: "production",
+      release_status: "completed", # Auto-publish to production
+      json_key: "release/play-account.json",
+      version_code: ENV['FS_VERSION_CODE'],
+      version_name: ENV['FS_VERSION_NAME']
     )
   end
 
@@ -101,7 +116,30 @@ platform :ios do
       is_key_content_base64: true,
       in_house: false, # if it is enterprise or not
     )
-    upload_to_testflight(app_identifier: "dev.zacsweers.FieldSpottr")
+
+    release_notes = File.read("./release_notes.txt")
+
+    upload_to_testflight(
+      app_identifier: "dev.zacsweers.FieldSpottr",
+      changelog: release_notes,
+      distribute_external: true,
+      notify_external_testers: true,
+      skip_waiting_for_build_processing: true
+    )
+
+    # TODO eventually enable this
+    # Submit for App Store review with release notes
+#     upload_to_app_store(
+#       app_identifier: "dev.zacsweers.FieldSpottr",
+#       submit_for_review: true,
+#       automatic_release: true,
+#       force: true,
+#       submission_information: {
+#         release_notes: {
+#           'en-US' => release_notes
+#         }
+#       }
+#     )
   end
 
   lane :build do

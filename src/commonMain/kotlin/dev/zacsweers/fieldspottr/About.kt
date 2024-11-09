@@ -33,9 +33,9 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
+import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.runtime.screen.StaticScreen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
-import io.github.alexzhirkevich.cupertino.adaptive.AdaptiveCircularProgressIndicator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -87,7 +87,7 @@ private fun Header(modifier: Modifier = Modifier) {
     Spacer(modifier = Modifier.height(16.dp))
     Text("Field Spottr", fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
     Text(
-      "v${BuildConfig.VERSION_NAME}",
+      "v${BuildConfig.FS_VERSION_NAME}",
       style = MaterialTheme.typography.labelSmall,
       color = LocalContentColor.current.copy(alpha = 0.5f),
     )
@@ -95,16 +95,13 @@ private fun Header(modifier: Modifier = Modifier) {
     val text = buildAnnotatedString {
       append("An app for checking field permit status from ")
       withLink(Url("https://nycgovparks.org")) { append("nycgovparks.org") }
-      pop()
       append(".")
       repeat(2) { appendLine() }
       append("By ")
       append(" ")
       withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") }
-      pop()
       append(" — ")
       withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
-      pop()
     }
     Text(
       text,

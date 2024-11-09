@@ -114,7 +114,6 @@ kotlin {
     optIn.addAll(
       "androidx.compose.material3.ExperimentalMaterial3Api",
       "androidx.compose.foundation.ExperimentalFoundationApi",
-      "io.github.alexzhirkevich.cupertino.adaptive.ExperimentalAdaptiveApi",
     )
     freeCompilerArgs.addAll("-Xexpect-actual-classes")
   }
@@ -143,7 +142,6 @@ kotlin {
         implementation(libs.sqldelight.coroutines)
         implementation(libs.compose.material.material3)
         implementation(libs.compose.material.icons)
-        implementation(libs.compose.cupertino.adaptive)
         implementation(libs.ktor.client)
         implementation(libs.aboutLicenses)
       }
@@ -172,12 +170,7 @@ kotlin {
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
-    iosMain {
-      dependencies {
-        implementation(libs.ktor.client.engine.darwin)
-        implementation(libs.compose.cupertino.native)
-      }
-    }
+    iosMain { dependencies { implementation(libs.ktor.client.engine.darwin) } }
   }
 
   targets
@@ -211,7 +204,7 @@ buildConfig {
     // internal isn't visible to iOS sources
     internalVisibility = false
   }
-  buildConfigField("String", "VERSION_NAME", "\"$fsVersionName - $fsVersionCode\"")
+  buildConfigField("String", "FS_VERSION_NAME", "\"$fsVersionName - $fsVersionCode\"")
   buildConfigField("Long", "VERSION_CODE", fsVersionCode)
   buildConfigField("Boolean", "IS_RELEASE", isReleasing)
   buildConfigField(
