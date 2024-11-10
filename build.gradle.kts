@@ -1,6 +1,7 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
 import com.diffplug.spotless.LineEnding
+import java.util.Locale
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
@@ -20,6 +21,7 @@ plugins {
   alias(libs.plugins.buildConfig)
   alias(libs.plugins.bugsnag)
   alias(libs.plugins.kotlin.plugin.serialization)
+  alias(libs.plugins.ksp)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -128,6 +130,9 @@ kotlin {
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
         implementation(libs.okio)
+        implementation(libs.kotlinInject.runtime)
+        implementation(libs.kotlinInject.anvil.runtime)
+        implementation(libs.kotlinInject.anvil.runtime.optional)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
         implementation(libs.kotlinx.serialization.core)
@@ -307,3 +312,18 @@ tasks
     dependsOn("jvmJar")
     classpath("jvmJar")
   }
+
+// This is the worst deprecation replacement in the history of deprecation replacements
+fun String.capitalizeUS() = replaceFirstChar {
+  if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
+}
+
+val kspTargets = kotlin.targets.names.map { it.capitalizeUS() }
+
+dependencies {
+  for (target in kspTargets) {
+    val targetConfigSuffix = if (target == "Metadata") "CommonMainMetadata" else target
+    add("ksp${targetConfigSuffix}", libs.kotlinInject.compiler)
+    add("ksp${targetConfigSuffix}", libs.kotlinInject.anvil.compiler)
+  }
+}

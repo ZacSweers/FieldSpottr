@@ -14,8 +14,8 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.zacsweers.fieldspottr.data.Areas
-import dev.zacsweers.fieldspottr.di.FSComponent
-import dev.zacsweers.fieldspottr.di.JvmSharedPlatformFSComponent
+import dev.zacsweers.fieldspottr.di.JvmFSComponent
+import dev.zacsweers.fieldspottr.di.create
 import java.nio.file.Paths
 import kotlin.io.path.createFile
 import kotlin.io.path.exists
@@ -25,7 +25,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 fun main() {
-  val component = FSComponent(JvmSharedPlatformFSComponent())
+  val component = JvmFSComponent::class.create()
   application {
     val windowState =
       rememberWindowState(
@@ -55,7 +55,7 @@ fun main() {
         }
       },
     ) {
-      FieldSpottrApp(component, ::exitApplication)
+      FieldSpottrApp(component.circuit, ::exitApplication)
     }
   }
 }

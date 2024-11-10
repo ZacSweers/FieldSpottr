@@ -12,7 +12,7 @@ struct ContentView: View {
     private let component: FSComponent
 
     init() {
-        self.component = FSComponent(shared: IosSharedPlatformFSComponent())
+        self.component = IosFSComponentCompanion.shared.create()
     }
 
     var body: some View {
