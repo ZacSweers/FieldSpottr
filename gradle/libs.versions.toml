@@ -5,7 +5,6 @@ androidx-appcompat = "1.7.0"
 agp = "8.7.2"
 calf = "0.6.1"
 circuit = "0.25.0"
-compose-cupertino = "0.1.0-alpha04"
 compose-jb = "1.7.0"
 jdk = "22"
 jvmTarget = "11"
@@ -24,7 +23,7 @@ sqldelight = "2.0.2"
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.1.0" }
-buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.4.0" }
+buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.5.0" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
