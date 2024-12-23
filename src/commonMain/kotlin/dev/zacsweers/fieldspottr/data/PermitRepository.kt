@@ -226,8 +226,14 @@ class PermitRepository(
       // Insert the new entries
       appDirs.fs.source(csvFile).buffer().useLines { lines ->
         lines.drop(1).forEach { line ->
-          val (start, end, field, type, name, org, status) =
-            line.split(",").map { it.removeSurrounding("\"").trim() }
+          val lineSegments = line.split(",").map { it.removeSurrounding("\"").trim() }
+          // Sometimes the city just breaks a specific park's permits and return a CSV that says
+          // "There is no field usage information available for this park."
+          if (lineSegments.size < 7) {
+            println("Skipping broken CSV entry $line ($lineSegments) in area $area")
+            return@forEach
+          }
+          val (start, end, field, type, name, org, status) = lineSegments
           if (field !in area.fieldMappings) {
             // Irrelevant field
             return@forEach
