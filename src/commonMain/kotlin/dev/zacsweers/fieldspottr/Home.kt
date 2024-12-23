@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -254,6 +255,11 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     snackbarHost = {
       SnackbarHost(hostState = snackbarHostState) { snackbarData ->
         Snackbar(snackbarData = snackbarData)
+      }
+    },
+    floatingActionButton = {
+      if (state.permits?.fields.orEmpty().isEmpty()) {
+        ExtendedFloatingActionButton(onClick = {}) { Text("No permits today!") }
       }
     },
   ) { innerPadding ->
