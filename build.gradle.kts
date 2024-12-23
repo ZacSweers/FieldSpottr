@@ -293,7 +293,7 @@ compose {
 
 composeCompiler {
   includeSourceInformation = true
-  stabilityConfigurationFile.set(layout.projectDirectory.file("compose-compiler-config.conf"))
+  stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-compiler-config.conf"))
 }
 
 sqldelight {
