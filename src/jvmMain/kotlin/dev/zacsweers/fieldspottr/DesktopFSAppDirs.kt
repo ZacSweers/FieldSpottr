@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import me.tatarka.inject.annotations.Inject
+import dev.zacsweers.lattice.AppScope
+import dev.zacsweers.lattice.ContributesBinding
+import dev.zacsweers.lattice.Inject
+import dev.zacsweers.lattice.SingleIn
 import net.harawata.appdirs.AppDirsFactory
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 @Inject
 @ContributesBinding(AppScope::class)

@@ -19,6 +19,9 @@ import dev.zacsweers.fieldspottr.util.lazySuspend
 import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import dev.zacsweers.fieldspottr.util.useLines
+import dev.zacsweers.lattice.AppScope
+import dev.zacsweers.lattice.Inject
+import dev.zacsweers.lattice.SingleIn
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.prepareGet
@@ -44,12 +47,9 @@ import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
-import me.tatarka.inject.annotations.Inject
 import okio.Path
 import okio.buffer
 import okio.use
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 /** The default buffer size when working with buffered streams. */
 private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024

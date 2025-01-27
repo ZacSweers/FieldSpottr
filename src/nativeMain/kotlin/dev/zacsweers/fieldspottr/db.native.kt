@@ -8,10 +8,10 @@ import app.cash.sqldelight.db.QueryResult.AsyncValue
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.native.NativeSqliteDriver
-import me.tatarka.inject.annotations.Inject
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
+import dev.zacsweers.lattice.AppScope
+import dev.zacsweers.lattice.ContributesBinding
+import dev.zacsweers.lattice.Inject
+import dev.zacsweers.lattice.SingleIn
 
 @Stable
 @Inject

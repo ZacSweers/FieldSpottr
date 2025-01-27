@@ -3,8 +3,11 @@
 package dev.zacsweers.fieldspottr.data
 
 import dev.zacsweers.fieldspottr.FSAppDirs
+import dev.zacsweers.lattice.AppScope
+import dev.zacsweers.lattice.ContributesBinding
+import dev.zacsweers.lattice.Inject
+import dev.zacsweers.lattice.SingleIn
 import kotlinx.cinterop.ExperimentalForeignApi
-import me.tatarka.inject.annotations.Inject
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
@@ -12,9 +15,6 @@ import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSUserDomainMask
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 @OptIn(ExperimentalForeignApi::class)
 private val NSFileManager.cacheDir: String

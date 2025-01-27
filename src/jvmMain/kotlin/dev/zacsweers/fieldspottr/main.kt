@@ -14,18 +14,17 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.zacsweers.fieldspottr.data.Areas
-import dev.zacsweers.fieldspottr.di.JvmFSComponent
-import dev.zacsweers.fieldspottr.di.create
+import dev.zacsweers.fieldspottr.di.JvmFSGraph
+import dev.zacsweers.lattice.createGraph
 import java.nio.file.Paths
 import kotlin.io.path.createFile
 import kotlin.io.path.exists
 import kotlin.io.path.writeText
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 fun main() {
-  val component = JvmFSComponent::class.create()
+  val fsGraph = createGraph<JvmFSGraph>()
   application {
     val windowState =
       rememberWindowState(
@@ -48,14 +47,14 @@ fun main() {
           }
           // Cmd+D
           event.key == Key.D && event.isMetaPressed && event.type == KeyEventType.KeyDown -> {
-            dumpAreasJson(component.json)
+            dumpAreasJson(fsGraph.json)
             true
           }
           else -> false
         }
       },
     ) {
-      FieldSpottrApp(component.circuit, ::exitApplication)
+      FieldSpottrApp(fsGraph.circuit, ::exitApplication)
     }
   }
 }

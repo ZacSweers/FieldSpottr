@@ -7,11 +7,11 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import dev.zacsweers.lattice.AppScope
+import dev.zacsweers.lattice.ContributesBinding
+import dev.zacsweers.lattice.Inject
+import dev.zacsweers.lattice.SingleIn
 import kotlin.io.path.absolutePathString
-import me.tatarka.inject.annotations.Inject
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 @Stable
 @Inject

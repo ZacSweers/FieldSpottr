@@ -3,13 +3,13 @@
 package dev.zacsweers.fieldspottr
 
 import android.content.Context
-import me.tatarka.inject.annotations.Inject
+import dev.zacsweers.lattice.AppScope
+import dev.zacsweers.lattice.ContributesBinding
+import dev.zacsweers.lattice.Inject
+import dev.zacsweers.lattice.SingleIn
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toOkioPath
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.ContributesBinding
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 @Inject
 @ContributesBinding(AppScope::class)
