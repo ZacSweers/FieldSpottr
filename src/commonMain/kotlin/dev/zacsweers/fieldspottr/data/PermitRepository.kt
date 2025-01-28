@@ -19,9 +19,9 @@ import dev.zacsweers.fieldspottr.util.lazySuspend
 import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import dev.zacsweers.fieldspottr.util.useLines
-import dev.zacsweers.lattice.AppScope
-import dev.zacsweers.lattice.Inject
-import dev.zacsweers.lattice.SingleIn
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.prepareGet

@@ -7,7 +7,7 @@ import android.os.StrictMode
 import com.bugsnag.android.Bugsnag
 import dev.zacsweers.fieldspottr.di.AndroidFSGraph
 import dev.zacsweers.fieldspottr.di.FSGraph
-import dev.zacsweers.lattice.createGraphFactory
+import dev.zacsweers.metro.createGraphFactory
 
 class FieldSpottrApplication : Application() {
 

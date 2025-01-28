@@ -17,9 +17,9 @@ import dev.zacsweers.fieldspottr.ScaffoldPresenter
 import dev.zacsweers.fieldspottr.ScaffoldScreen
 import dev.zacsweers.fieldspottr.ScaffoldScreenContent
 import dev.zacsweers.fieldspottr.data.PermitRepository
-import dev.zacsweers.lattice.AppScope
-import dev.zacsweers.lattice.Provides
-import dev.zacsweers.lattice.SingleIn
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.Provides
+import dev.zacsweers.metro.SingleIn
 import kotlinx.serialization.json.Json
 import okio.FileSystem
 import okio.SYSTEM

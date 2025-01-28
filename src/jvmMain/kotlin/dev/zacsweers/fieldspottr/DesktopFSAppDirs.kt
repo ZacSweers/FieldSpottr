@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import dev.zacsweers.lattice.AppScope
-import dev.zacsweers.lattice.ContributesBinding
-import dev.zacsweers.lattice.Inject
-import dev.zacsweers.lattice.SingleIn
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesBinding
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metro.SingleIn
 import net.harawata.appdirs.AppDirsFactory
 import okio.FileSystem
 import okio.Path

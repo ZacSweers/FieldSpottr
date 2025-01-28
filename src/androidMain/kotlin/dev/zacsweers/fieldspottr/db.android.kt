@@ -8,9 +8,9 @@ import app.cash.sqldelight.async.coroutines.synchronous
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.android.AndroidSqliteDriver
-import dev.zacsweers.lattice.AppScope
-import dev.zacsweers.lattice.ContributesBinding
-import dev.zacsweers.lattice.Inject
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesBinding
+import dev.zacsweers.metro.Inject
 
 @Stable
 @Inject

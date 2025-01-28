@@ -7,10 +7,10 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
-import dev.zacsweers.lattice.AppScope
-import dev.zacsweers.lattice.ContributesBinding
-import dev.zacsweers.lattice.Inject
-import dev.zacsweers.lattice.SingleIn
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesBinding
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metro.SingleIn
 import kotlin.io.path.absolutePathString
 
 @Stable

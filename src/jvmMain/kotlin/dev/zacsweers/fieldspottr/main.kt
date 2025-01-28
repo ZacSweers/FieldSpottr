@@ -15,7 +15,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.di.JvmFSGraph
-import dev.zacsweers.lattice.createGraph
+import dev.zacsweers.metro.createGraph
 import java.nio.file.Paths
 import kotlin.io.path.createFile
 import kotlin.io.path.exists

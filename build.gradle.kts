@@ -21,7 +21,7 @@ plugins {
   alias(libs.plugins.buildConfig)
   alias(libs.plugins.bugsnag)
   alias(libs.plugins.kotlin.plugin.serialization)
-  alias(libs.plugins.lattice)
+  alias(libs.plugins.metro)
 }
 
 val ktfmtVersion = libs.versions.ktfmt.get()
@@ -130,7 +130,7 @@ kotlin {
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
         implementation(libs.okio)
-        implementation(libs.lattice.runtime)
+        implementation(libs.metro.runtime)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
         implementation(libs.kotlinx.serialization.core)

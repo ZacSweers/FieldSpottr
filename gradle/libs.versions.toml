@@ -13,7 +13,7 @@ kotlinx-coroutines = "1.10.1"
 kotlinx-serialization = "1.8.0"
 ktfmt = "0.53"
 ktor = "3.0.3"
-lattice = "1.0.0-LOCAL22"
+metro = "1.0.0-LOCAL23"
 okio = "3.10.2"
 spotless = "7.0.2"
 sqldelight = "2.0.2"
@@ -28,7 +28,7 @@ kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref 
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-plugin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }
 kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-lattice = { id = "dev.zacsweers.lattice", version.ref = "lattice" }
+metro = { id = "dev.zacsweers.metro", version.ref = "metro" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 
@@ -66,7 +66,7 @@ ktor-client = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-engine-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-engine-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
 
-lattice-runtime = { module = "dev.zacsweers.lattice:runtime", version.ref = "lattice" }
+metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }
 
 lints-compose = "com.slack.lint.compose:compose-lint-checks:1.4.2"
 
