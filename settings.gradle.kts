@@ -4,7 +4,14 @@ dependencyResolutionManagement {
   repositories {
     mavenCentral()
     google()
-    mavenLocal()
+    maven("https://oss.sonatype.org/content/repositories/snapshots") {
+      name = "snapshots-maven-central"
+      mavenContent { snapshotsOnly() }
+    }
+    maven("https://s01.oss.sonatype.org/content/repositories/snapshots") {
+      name = "snapshots-maven-central-s01"
+      mavenContent { snapshotsOnly() }
+    }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
   }
 }
@@ -13,7 +20,14 @@ pluginManagement {
   repositories {
     mavenCentral()
     google()
-    mavenLocal()
+    maven("https://oss.sonatype.org/content/repositories/snapshots") {
+      name = "snapshots-maven-central"
+      mavenContent { snapshotsOnly() }
+    }
+    maven("https://s01.oss.sonatype.org/content/repositories/snapshots") {
+      name = "snapshots-maven-central-s01"
+      mavenContent { snapshotsOnly() }
+    }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     // Gradle's plugin portal proxies jcenter, which we don't want. To avoid this, we specify
     // exactly which dependencies to pull from here.
@@ -33,7 +47,7 @@ pluginManagement {
   }
 }
 
-plugins { id("com.gradle.develocity") version "3.19" }
+plugins { id("com.gradle.develocity") version "3.19.1" }
 
 develocity {
   buildScan {
