@@ -5,7 +5,7 @@ androidx-appcompat = "1.7.0"
 agp = "8.9.1"
 calf = "0.7.1"
 circuit = "0.27.0"
-compose-jb = "1.7.3"
+compose-jb = "1.8.0-beta01"
 jdk = "23"
 jvmTarget = "11"
 kotlin = "2.1.20"
@@ -22,14 +22,14 @@ sqldelight = "2.0.2"
 [plugins]
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
-bugsnag = { id = "com.bugsnag.android.gradle", version = "8.1.0" }
-buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.5.0" }
+bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
+buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.6.0" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-plugin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }
 kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-ksp = { id = "com.google.devtools.ksp", version = "2.1.10-1.0.31" }
+ksp = { id = "com.google.devtools.ksp", version = "2.1.20-1.0.32" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 
@@ -47,7 +47,7 @@ circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }
 circuitx-gestureNav = { module = "com.slack.circuit:circuitx-gesture-navigation", version.ref = "circuit" }
-compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version.ref = "compose-jb" }
+compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version = "1.7.3" }
 compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-jb" }
 # Tooling support (Previews, etc.)
 compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-jb" }
