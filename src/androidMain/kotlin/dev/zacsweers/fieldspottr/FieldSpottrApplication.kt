@@ -5,13 +5,13 @@ package dev.zacsweers.fieldspottr
 import android.app.Application
 import android.os.StrictMode
 import com.bugsnag.android.Bugsnag
-import dev.zacsweers.fieldspottr.di.AndroidFSComponent
-import dev.zacsweers.fieldspottr.di.FSComponent
-import dev.zacsweers.fieldspottr.di.create
+import dev.zacsweers.fieldspottr.di.AndroidFSGraph
+import dev.zacsweers.fieldspottr.di.FSGraph
+import dev.zacsweers.metro.createGraphFactory
 
 class FieldSpottrApplication : Application() {
 
-  internal lateinit var fsComponent: FSComponent
+  internal lateinit var fsGraph: FSGraph
 
   override fun onCreate() {
     super.onCreate()
@@ -21,7 +21,7 @@ class FieldSpottrApplication : Application() {
           Bugsnag.start(this, it)
         }
       }
-    fsComponent = AndroidFSComponent::class.create(this)
+    fsGraph = createGraphFactory<AndroidFSGraph.Factory>()(this)
     if (!BuildConfig.IS_RELEASE) {
       StrictMode.enableDefaults()
     }

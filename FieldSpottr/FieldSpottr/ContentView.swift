@@ -9,27 +9,27 @@ import SwiftUI
 import FieldSpottrKt
 
 struct ContentView: View {
-    private let component: FSComponent
+    private let graph: FSGraph
 
     init() {
-        self.component = IosFSComponentCompanion.shared.create()
+        self.graph = IosFSGraphCompanion.shared.create()
     }
 
     var body: some View {
-        ComposeView(component: self.component)
+        ComposeView(graph: self.graph)
             .ignoresSafeArea(.all, edges: .all)
     }
 }
 
 struct ComposeView: UIViewControllerRepresentable {
-    private let component: FSComponent
+    private let graph: FSGraph
 
-    init(component: FSComponent) {
-        self.component = component
+    init(graph: FSGraph) {
+        self.graph = graph
     }
 
     func makeUIViewController(context _: Context) -> UIViewController {
-        return FSUiViewControllerKt.makeUiViewController(component: component)
+        return FSUiViewControllerKt.makeUiViewController(graph: graph)
     }
 
     func updateUIViewController(_: UIViewController, context _: Context) {}

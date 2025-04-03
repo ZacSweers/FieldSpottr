@@ -17,15 +17,15 @@ import dev.zacsweers.fieldspottr.ScaffoldPresenter
 import dev.zacsweers.fieldspottr.ScaffoldScreen
 import dev.zacsweers.fieldspottr.ScaffoldScreenContent
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.Provides
+import dev.zacsweers.metro.SingleIn
 import kotlinx.serialization.json.Json
-import me.tatarka.inject.annotations.Provides
 import okio.FileSystem
 import okio.SYSTEM
-import software.amazon.lastmile.kotlin.inject.anvil.AppScope
-import software.amazon.lastmile.kotlin.inject.anvil.SingleIn
 
 @SingleIn(AppScope::class)
-interface FSComponent {
+interface FSGraph {
   val circuit: Circuit
 
   @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM

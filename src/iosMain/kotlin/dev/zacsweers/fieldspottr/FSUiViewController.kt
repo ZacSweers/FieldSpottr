@@ -3,9 +3,9 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.ui.window.ComposeUIViewController
-import dev.zacsweers.fieldspottr.di.FSComponent
+import dev.zacsweers.fieldspottr.di.FSGraph
 import platform.UIKit.UIViewController
 
-fun makeUiViewController(component: FSComponent): UIViewController = ComposeUIViewController {
-  FieldSpottrApp(component.circuit, onRootPop = {})
+fun makeUiViewController(graph: FSGraph): UIViewController = ComposeUIViewController {
+  FieldSpottrApp(graph.circuit, onRootPop = {})
 }
