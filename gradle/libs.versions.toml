@@ -1,5 +1,5 @@
 [versions]
-aboutLicenses = "12.2.0"
+aboutLicenses = "12.2.1"
 androidx-activity = "1.10.1"
 androidx-appcompat = "1.7.1"
 agp = "8.10.1"
