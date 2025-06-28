@@ -33,11 +33,12 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
+import kotlin.time.Clock.System
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.datetime.Clock.System
+import kotlinx.datetime.number
 
 @CommonParcelize
 data class PermitDetailsScreen(
@@ -72,7 +73,7 @@ fun PermitDetailsPresenter(
           OtherPermit(
             key = dbPermit.recordId,
             name = dbPermit.name,
-            date = "${start.date.monthNumber}/${start.date.dayOfMonth}",
+            date = "${start.date.month.number}/${start.date.day}",
             timeRange = "${start.formatAmPm()}-${end.formatAmPm()}",
           )
         }
