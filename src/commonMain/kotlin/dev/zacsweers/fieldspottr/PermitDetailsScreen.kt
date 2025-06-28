@@ -33,12 +33,11 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
+import kotlin.time.Clock.System
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlin.time.Clock.System
-import kotlinx.datetime.LocalDate
 import kotlinx.datetime.number
 
 @CommonParcelize
