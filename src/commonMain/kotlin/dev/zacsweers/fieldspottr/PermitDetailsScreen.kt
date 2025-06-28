@@ -37,7 +37,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.datetime.Clock.System
+import kotlin.time.Clock.System
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.number
 
 @CommonParcelize
 data class PermitDetailsScreen(
@@ -72,7 +74,7 @@ fun PermitDetailsPresenter(
           OtherPermit(
             key = dbPermit.recordId,
             name = dbPermit.name,
-            date = "${start.date.monthNumber}/${start.date.dayOfMonth}",
+            date = "${start.date.month.number}/${start.date.day}",
             timeRange = "${start.formatAmPm()}-${end.formatAmPm()}",
           )
         }

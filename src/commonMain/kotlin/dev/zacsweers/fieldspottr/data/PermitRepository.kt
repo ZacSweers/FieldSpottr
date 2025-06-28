@@ -38,8 +38,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.Clock.System
-import kotlinx.datetime.Instant
+import kotlin.time.Clock.System
+import kotlin.time.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
@@ -58,7 +58,7 @@ private val FORMATTER =
   LocalDateTime.Format {
     monthNumber(padding = Padding.NONE)
     char('/')
-    dayOfMonth(padding = Padding.NONE)
+    day(padding = Padding.NONE)
     char('/')
     year()
     char(' ')
@@ -94,7 +94,7 @@ class PermitRepository(
   private fun loadLocalAreas(): Areas {
     return try {
       json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
-    } catch (e: Exception) {
+    } catch (_: Exception) {
       Areas.default
     }
   }
