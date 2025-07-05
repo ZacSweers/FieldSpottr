@@ -2,10 +2,10 @@
 aboutLicenses = "12.2.4"
 androidx-activity = "1.10.1"
 androidx-appcompat = "1.7.1"
-agp = "8.10.1"
+agp = "8.11.0"
 calf = "0.8.0"
 circuit = "0.29.1"
-compose-jb = "1.9.0-alpha03"
+compose-jb = "1.8.2"
 jdk = "23"
 jvmTarget = "11"
 kotlin = "2.2.0"
@@ -58,6 +58,7 @@ desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.5"
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 
+# https://youtrack.jetbrains.com/issue/CMP-8519/Migrate-to-kotlinx-datetime-0.7.0
 kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.6.2"
 kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0"
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
