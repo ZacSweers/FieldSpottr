@@ -15,6 +15,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -177,6 +180,7 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
 @Composable
 fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   val snackbarHostState = remember { SnackbarHostState() }
+
   LaunchedEffect(state.loadingMessage) {
     state.loadingMessage?.let {
       snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Indefinite)
@@ -206,8 +210,25 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
+  val focusRequester = remember { FocusRequester() }
+
+  LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
   Scaffold(
-    modifier = modifier,
+    modifier =
+      modifier.focusRequester(focusRequester).onKeyEvent { keyEvent ->
+        if (keyEvent.type == KeyEventType.KeyDown) {
+          when {
+            (keyEvent.isMetaPressed || keyEvent.isCtrlPressed) && keyEvent.key == Key.R -> {
+              state.eventSink(Refresh)
+              true
+            }
+            else -> false
+          }
+        } else {
+          false
+        }
+      },
     topBar = {
       CenterAlignedTopAppBar(
         title = {
