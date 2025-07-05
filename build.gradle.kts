@@ -162,6 +162,7 @@ kotlin {
         implementation(compose.desktop.currentOs)
         implementation(libs.appDirs)
         implementation(libs.ktor.client.engine.okhttp)
+        implementation(libs.slf4jNop)
         implementation(libs.sqldelight.driver.jdbc)
         implementation(project.dependencies.platform(libs.kotlin.bom))
       }
