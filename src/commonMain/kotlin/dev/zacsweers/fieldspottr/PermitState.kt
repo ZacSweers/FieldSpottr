@@ -227,7 +227,12 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       //  get the group ID, get fields for each group, show those too
       val fields =
         dbPermits
-          .groupBy { areasByName.getValue(it.area).fieldMappings.getValue(it.fieldId) }
+          .groupBy { areasByName.getValue(it.area).fieldMappings[it.fieldId] }
+          .filterKeys { it != null }
+          .let {
+            @Suppress("UNCHECKED_CAST")
+            it as Map<Field, List<DbPermit>>
+          }
           .mapValues { (_, permits) -> FieldState.fromPermits(permits) }
           .let { permitsByField ->
             if (permitsByField.isEmpty()) return EMPTY
