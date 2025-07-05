@@ -257,6 +257,6 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
     }
 
     val DbPermit.isBlocked: Boolean
-      get() = name == "Permit Block" && org == "NYC Parks and Recreation"
+      get() = org == "NYC Parks and Recreation" && ("Permit Block" in name || "Construction" in name)
   }
 }
