@@ -269,6 +269,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
 
     val DbPermit.isBlocked: Boolean
       get() =
-        org == NYC_PARKS_ORG && PERMIT_BLOCK_KEYWORDS.any { name.contains(it, ignoreCase = true) }
+        (org == NYC_PARKS_ORG || org.isEmpty()) &&
+          PERMIT_BLOCK_KEYWORDS.any { name.contains(it, ignoreCase = true) }
   }
 }
