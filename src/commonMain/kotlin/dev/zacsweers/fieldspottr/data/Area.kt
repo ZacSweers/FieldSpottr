@@ -143,7 +143,7 @@ fun buildDefaultAreas(): Areas {
         )
       }
       group(
-        name = "Grand Street (née Field 2)",
+        name = "Grand Street (Field 2)",
         location =
           Location(
             "https://www.google.com/maps/place/40°42'44.2\"N+73°58'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
@@ -163,7 +163,7 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/place?coordinate=40.713506,-73.976811&name=Marked%20Location",
           ),
       ) {
-        field(csvName = "Grand Street Mini Field-Soccer-02", displayName = "Whole Field", sharedFields = setOf("field1"))
+        field(csvName = "Grand Street Mini Field-Soccer-02", displayName = "Whole Field")
       }
     }
     area(
