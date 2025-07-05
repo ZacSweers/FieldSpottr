@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DatePickerDefaults
-import androidx.compose.material3.LocalAbsoluteTonalElevation
 import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -57,10 +56,10 @@ import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
-import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
 import kotlinx.datetime.atStartOfDayIn
@@ -90,6 +89,7 @@ fun DateSelector(
     AdaptiveBottomSheet(
       onDismissRequest = { showDatePicker = false },
       adaptiveSheetState = sheetState,
+      containerColor = DatePickerDefaults.colors().containerColor,
     ) {
       val content = remember {
         movableContentOf {
@@ -98,13 +98,7 @@ fun DateSelector(
       }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
-        val absoluteElevation = LocalAbsoluteTonalElevation.current
-        val containerColorAtElevation =
-          surfaceColorAtElevation(
-            color = DatePickerDefaults.colors().containerColor,
-            elevation = absoluteElevation,
-          )
-        Box(Modifier.fillMaxSize().background(containerColorAtElevation)) {
+        Box(Modifier.fillMaxSize().background(DatePickerDefaults.colors().containerColor)) {
           Column(Modifier.fillMaxWidth()) { content() }
         }
       } else {
@@ -185,7 +179,7 @@ fun DateSelector(
         )
       }
       Text(
-        currentlySelectedDate.day.toString(),
+        currentlySelectedDate.dayOfMonth.toString(),
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         style = MaterialTheme.typography.labelLarge,
@@ -195,7 +189,7 @@ fun DateSelector(
   }
 }
 
-@Suppress("UnusedReceiverParameter")
+@Suppress("ComposeUnstableReceiver", "UnusedReceiverParameter")
 @Composable
 private fun ColumnScope.DatePickerSheetContent(
   current: Long,

@@ -158,7 +158,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       }
 
       /** Given an input sequence of reserved permits, pad the [Free] slots between them. */
-      fun List<Reserved>.padFreeSlots(): List<FieldState> {
+      fun List<Reserved>.padFreeSlots(fieldName: String): List<FieldState> {
         if (isEmpty()) return EMPTY
 
         // Don't use Sequence.sortedBy to avoid unnecessary intermediate list
@@ -189,6 +189,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
                 currentPermitIndex++
               }
             }
+
             permit.start > hour -> {
               // Pad free slots until next permit start
               repeat(permit.start - hour) {
@@ -196,17 +197,25 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
                 hour++
               }
             }
+
             else -> {
               // Overlapping permits. Unclear how this happens tbh, probably a mistake on their
-              // side. Skip it.
+              // side. Keep the longer one.
               println(
                 """
-                  Overlapping permits:
+                  Overlapping permits on $fieldName:
                   - Previous: ${sortedPermits[currentPermitIndex - 1].run { "$timeRange: $title" }}
-                  - Next:  ${permit.timeRange}: ${permit.title}
+                  - Next:     ${permit.timeRange}: ${permit.title}
                 """
                   .trimIndent()
               )
+              val prevPermit = sortedPermits[currentPermitIndex - 1]
+              if (permit.duration > prevPermit.duration) {
+                // Remove previous shorter permit and add this one
+                elements.removeLast()
+                elements += permit
+                hour = permit.end
+              }
               currentPermitIndex++
             }
           }
@@ -218,6 +227,8 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
 
   companion object {
     val EMPTY = fromPermits(emptyList(), Areas(persistentListOf()))
+    private const val NYC_PARKS_ORG = "NYC Parks and Recreation"
+    private val PERMIT_BLOCK_KEYWORDS = setOf("Permit Block", "Construction", "Closure", "Cutoff")
 
     fun fromPermits(dbPermits: List<DbPermit>, areas: Areas): PermitState {
       if (dbPermits.isEmpty()) return PermitState(emptyMap())
@@ -227,7 +238,12 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       //  get the group ID, get fields for each group, show those too
       val fields =
         dbPermits
-          .groupBy { areasByName.getValue(it.area).fieldMappings.getValue(it.fieldId) }
+          .groupBy { areasByName.getValue(it.area).fieldMappings[it.fieldId] }
+          .filterKeys { it != null }
+          .let {
+            @Suppress("UNCHECKED_CAST")
+            it as Map<Field, List<DbPermit>>
+          }
           .mapValues { (_, permits) -> FieldState.fromPermits(permits) }
           .let { permitsByField ->
             if (permitsByField.isEmpty()) return EMPTY
@@ -243,7 +259,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
 
             buildMap {
               for ((field, permits) in fullMap) {
-                put(field, permits.withOverlapsFrom(field, fullMap).padFreeSlots())
+                put(field, permits.withOverlapsFrom(field, fullMap).padFreeSlots(field.name))
               }
             }
           }
@@ -252,6 +268,8 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
     }
 
     val DbPermit.isBlocked: Boolean
-      get() = name == "Permit Block" && org == "NYC Parks and Recreation"
+      get() =
+        (org == NYC_PARKS_ORG || org.isEmpty()) &&
+          PERMIT_BLOCK_KEYWORDS.any { name.contains(it, ignoreCase = true) }
   }
 }

@@ -28,9 +28,7 @@ import io.ktor.client.request.prepareGet
 import io.ktor.http.userAgent
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
-import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
-import kotlin.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
@@ -40,6 +38,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.datetime.Clock.System
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
@@ -58,7 +58,7 @@ private val FORMATTER =
   LocalDateTime.Format {
     monthNumber(padding = Padding.NONE)
     char('/')
-    day(padding = Padding.NONE)
+    dayOfMonth(padding = Padding.NONE)
     char('/')
     year()
     char(' ')
@@ -94,7 +94,7 @@ class PermitRepository(
   private fun loadLocalAreas(): Areas {
     return try {
       json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
-    } catch (_: Exception) {
+    } catch (e: Exception) {
       Areas.default
     }
   }

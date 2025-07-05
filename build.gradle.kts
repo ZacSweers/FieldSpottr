@@ -15,6 +15,7 @@ plugins {
   alias(libs.plugins.spotless)
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
+  alias(libs.plugins.compose.hotReload)
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
@@ -113,7 +114,6 @@ kotlin {
     optIn.addAll(
       "androidx.compose.material3.ExperimentalMaterial3Api",
       "androidx.compose.foundation.ExperimentalFoundationApi",
-      "kotlin.time.ExperimentalTime",
     )
     freeCompilerArgs.addAll("-Xexpect-actual-classes")
   }
@@ -163,6 +163,7 @@ kotlin {
         implementation(compose.desktop.currentOs)
         implementation(libs.appDirs)
         implementation(libs.ktor.client.engine.okhttp)
+        implementation(libs.slf4jNop)
         implementation(libs.sqldelight.driver.jdbc)
         implementation(project.dependencies.platform(libs.kotlin.bom))
       }

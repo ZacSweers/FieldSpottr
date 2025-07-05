@@ -117,7 +117,7 @@ fun buildDefaultAreas(): Areas {
           sharedFields = setOf("Track field", "track field 1a"),
         )
         field(
-          csvName = "Soccer-01 East 6th Street",
+          csvName = "Soccer-04 East 6th Street",
           displayName = "Whole Field",
           sharedFields = setOf("Track field"),
         )
@@ -143,14 +143,39 @@ fun buildDefaultAreas(): Areas {
         )
       }
       group(
-        name = "Field 2 (Grand Street)",
+        name = "Grand Street (Field 2)",
         location =
           Location(
             "https://www.google.com/maps/place/40°42'44.2\"N+73°58'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
             "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20New%20York,%20NY%20%2010002,%20United%20States&ll=40.712206,-73.976992&q=Dropped%20Pin",
           ),
       ) {
-        field(csvName = "Soccer-02 Grand Street", displayName = "Whole Field")
+        field(
+          csvName = "Grand Street - Softball-01",
+          displayName = "Softball (south))",
+          sharedFields = setOf("field1"),
+        )
+        field(
+          csvName = "Grand Street - Soccer 01",
+          displayName = "Whole Field",
+          sharedFields = setOf("field1"),
+        )
+        field(
+          csvName = "Grand Street - Softball-02",
+          displayName = "Softball (north)",
+          sharedFields = setOf("field1"),
+        )
+      }
+      // TODO the site says 03 but the CSV says 02?
+      group(
+        name = "Grand Street Mini Field (Field 3)",
+        location =
+          Location(
+            "https://www.google.com/maps/place/East+River+Park+*+Grand+Street+Mini+Field/@40.7135106,-73.9766765,19.39z/data=!4m6!3m5!1s0x89c25b0020f63825:0x94cfd8ce67954ddd!8m2!3d40.7133945!4d-73.9768339!16s%2Fg%2F11yft3l7v2",
+            "https://maps.apple.com/place?coordinate=40.713506,-73.976811&name=Marked%20Location",
+          ),
+      ) {
+        field(csvName = "Grand Street Mini Field-Soccer-02", displayName = "Whole Field")
       }
     }
     area(

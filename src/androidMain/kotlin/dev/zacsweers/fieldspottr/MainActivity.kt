@@ -52,7 +52,7 @@ private fun GridPreview() {
                         isOverlap = false,
                       )
                     )
-                    .padFreeSlots()
+                    .padFreeSlots("Field")
               )
           ),
       )

@@ -21,7 +21,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.BottomCenter
 import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
@@ -39,6 +41,8 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
+import dev.zacsweers.fieldspottr.util.CurrentPlatform
+import dev.zacsweers.fieldspottr.util.Platform
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
@@ -199,13 +203,22 @@ fun PermitEvent(
         color = textColor,
       )
 
-      Text(
-        text = event.org,
-        style = MaterialTheme.typography.bodySmall,
-        fontWeight = FontWeight.Medium,
-        overflow = TextOverflow.Ellipsis,
-        color = textColor.copy(alpha = 0.5f),
-      )
+      var maxOrgLines by remember { mutableIntStateOf(3) }
+      if (maxOrgLines > 0) {
+        Text(
+          text = event.org,
+          style = MaterialTheme.typography.bodySmall,
+          fontWeight = FontWeight.Medium,
+          overflow = TextOverflow.Ellipsis,
+          color = textColor.copy(alpha = 0.5f),
+          maxLines = maxOrgLines,
+          onTextLayout = {
+            if (it.didOverflowHeight && CurrentPlatform != Platform.Android) {
+              maxOrgLines--
+            }
+          },
+        )
+      }
     }
   }
 }
