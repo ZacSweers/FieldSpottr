@@ -150,9 +150,21 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20New%20York,%20NY%20%2010002,%20United%20States&ll=40.712206,-73.976992&q=Dropped%20Pin",
           ),
       ) {
-        field(csvName = "Grand Street - Softball-01", displayName = "Softball (south))", sharedFields = setOf("field1"))
-        field(csvName = "Grand Street - Soccer 01", displayName = "Whole Field", sharedFields = setOf("field1"))
-        field(csvName = "Grand Street - Softball-02", displayName = "Softball (north)", sharedFields = setOf("field1"))
+        field(
+          csvName = "Grand Street - Softball-01",
+          displayName = "Softball (south))",
+          sharedFields = setOf("field1"),
+        )
+        field(
+          csvName = "Grand Street - Soccer 01",
+          displayName = "Whole Field",
+          sharedFields = setOf("field1"),
+        )
+        field(
+          csvName = "Grand Street - Softball-02",
+          displayName = "Softball (north)",
+          sharedFields = setOf("field1"),
+        )
       }
       // TODO the site says 03 but the CSV says 02?
       group(
