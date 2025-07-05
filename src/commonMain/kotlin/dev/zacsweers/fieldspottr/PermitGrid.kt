@@ -41,6 +41,8 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
+import dev.zacsweers.fieldspottr.util.CurrentPlatform
+import dev.zacsweers.fieldspottr.util.Platform
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
@@ -211,7 +213,7 @@ fun PermitEvent(
           color = textColor.copy(alpha = 0.5f),
           maxLines = maxOrgLines,
           onTextLayout = {
-            if (it.didOverflowHeight) {
+            if (it.didOverflowHeight && CurrentPlatform != Platform.Android) {
               maxOrgLines--
             }
           },

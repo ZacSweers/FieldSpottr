@@ -2,15 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Arrangement.spacedBy
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeightIn
@@ -51,6 +54,8 @@ import com.mohamedrejeb.calf.ui.datepicker.rememberAdaptiveDatePickerState
 import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
 import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
+import dev.zacsweers.fieldspottr.util.CurrentPlatform
+import dev.zacsweers.fieldspottr.util.Platform
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.datetime.Clock
@@ -91,7 +96,14 @@ fun DateSelector(
           DatePickerSheetContent(current, datePickerState, setCurrentSelection) { hideSheet = true }
         }
       }
-      content()
+      if (CurrentPlatform == Platform.Native) {
+        // Have to wrap in a filled box to make the background match
+        Box(Modifier.fillMaxSize().background(DatePickerDefaults.colors().containerColor)) {
+          Column(Modifier.fillMaxWidth()) { content() }
+        }
+      } else {
+        content()
+      }
     }
     if (hideSheet) {
       LaunchedEffect(Unit) {
