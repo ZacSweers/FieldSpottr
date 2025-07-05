@@ -113,7 +113,6 @@ kotlin {
     optIn.addAll(
       "androidx.compose.material3.ExperimentalMaterial3Api",
       "androidx.compose.foundation.ExperimentalFoundationApi",
-      "kotlin.time.ExperimentalTime",
     )
     freeCompilerArgs.addAll("-Xexpect-actual-classes")
   }
@@ -215,13 +214,13 @@ buildConfig {
 
 android {
   namespace = appId
-  compileSdk = 36
+  compileSdk = 35
 
   defaultConfig {
     versionCode = fsVersionCode.toInt()
     versionName = fsVersionName
     minSdk = 29
-    targetSdk = 36
+    targetSdk = 35
     // Here because Bugsnag requires it in manifests for some reason
     manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
   }
@@ -233,11 +232,7 @@ android {
     targetCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()
   }
 
-  lint {
-    lintConfig = file("lint.xml")
-    checkTestSources = true
-    disable += "ComposableNaming"
-  }
+  lint { checkTestSources = true }
 
   signingConfigs {
     if (rootProject.file("release/app-release.jks").exists()) {

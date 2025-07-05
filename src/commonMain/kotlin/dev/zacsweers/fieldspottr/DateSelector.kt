@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -57,10 +56,10 @@ import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
-import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
 import kotlinx.datetime.atStartOfDayIn
@@ -185,7 +184,7 @@ fun DateSelector(
         )
       }
       Text(
-        currentlySelectedDate.day.toString(),
+        currentlySelectedDate.dayOfMonth.toString(),
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         style = MaterialTheme.typography.labelLarge,
@@ -195,9 +194,8 @@ fun DateSelector(
   }
 }
 
-@Suppress("UnusedReceiverParameter")
 @Composable
-private fun ColumnScope.DatePickerSheetContent(
+private fun DatePickerSheetContent(
   current: Long,
   datePickerState: AdaptiveDatePickerState,
   updateSelection: (Long) -> Unit,
