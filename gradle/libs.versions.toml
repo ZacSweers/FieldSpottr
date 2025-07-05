@@ -6,6 +6,7 @@ agp = "8.11.0"
 calf = "0.8.0"
 circuit = "0.29.1"
 compose-jb = "1.8.2"
+compose-hotReload = "1.0.0-beta03"
 jdk = "23"
 jvmTarget = "11"
 kotlin = "2.2.0"
@@ -24,6 +25,7 @@ agp-application = { id = "com.android.application", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
 buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.6.7" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
+compose-hotReload = { id = "org.jetbrains.compose.hot-reload", version.ref = "compose-hotReload" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-plugin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }

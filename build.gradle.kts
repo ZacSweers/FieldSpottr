@@ -15,6 +15,7 @@ plugins {
   alias(libs.plugins.spotless)
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
+  alias(libs.plugins.compose.hotReload)
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
@@ -215,13 +216,13 @@ buildConfig {
 
 android {
   namespace = appId
-  compileSdk = 35
+  compileSdk = 36
 
   defaultConfig {
     versionCode = fsVersionCode.toInt()
     versionName = fsVersionName
     minSdk = 29
-    targetSdk = 35
+    targetSdk = 36
     // Here because Bugsnag requires it in manifests for some reason
     manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
   }
@@ -233,7 +234,11 @@ android {
     targetCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()
   }
 
-  lint { checkTestSources = true }
+  lint {
+    lintConfig = file("lint.xml")
+    checkTestSources = true
+    disable += "ComposableNaming"
+  }
 
   signingConfigs {
     if (rootProject.file("release/app-release.jks").exists()) {

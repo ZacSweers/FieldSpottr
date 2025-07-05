@@ -36,6 +36,7 @@ fun main() {
       title = "Field Spottr",
       state = windowState,
       onCloseRequest = ::exitApplication,
+      alwaysOnTop = true,
       // In lieu of a global shortcut handler, we best-effort with this
       // https://youtrack.jetbrains.com/issue/CMP-5337
       onKeyEvent = { event ->
