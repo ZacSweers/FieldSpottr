@@ -68,9 +68,12 @@ jobs:
         with:
           bundler-cache: true
 
+      - name: Read Xcode version
+        run: echo "XCODE_VERSION=$(cat .xcode-version)" >> $GITHUB_ENV
+
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '16.2'
+          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
