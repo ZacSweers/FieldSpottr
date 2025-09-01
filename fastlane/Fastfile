@@ -98,12 +98,15 @@ platform :ios do
       build_number: ENV['FS_BUILD_NUMBER']
     ) unless env_nil_or_blank('FS_BUILD_NUMBER')
 
+    # Build archive only, skip IPA packaging if building for production
+    # The IPA will be created directly from the archive when uploading
     build_app(
       project: "FieldSpottr/FieldSpottr.xcodeproj",
       scheme: options[:scheme],
       buildlog_path: "build/fastlane-buildlog",
-      skip_package_ipa: skip_certs,
-      skip_codesigning: skip_certs
+      skip_package_ipa: true,  # Skip IPA creation, just create archive
+      skip_codesigning: skip_certs,
+      archive_path: "build/FieldSpottr.xcarchive"
     )
   end
 
@@ -119,8 +122,12 @@ platform :ios do
 
     release_notes = File.read("./release_notes.txt")
 
+    # Upload archive directly without creating IPA first
     upload_to_testflight(
       app_identifier: "dev.zacsweers.FieldSpottr",
+      skip_submission: false,
+      skip_binary_upload: false,
+      ipa: "build/FieldSpottr.xcarchive",  # Point to archive created by build_prod
       changelog: release_notes,
       distribute_external: true,
       notify_external_testers: true,
