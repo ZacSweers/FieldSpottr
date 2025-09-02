@@ -22,14 +22,14 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
+import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
 import com.slack.circuit.foundation.CircuitContent
-import com.slack.circuit.overlay.OverlayEffect
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
-import com.slack.circuitx.overlays.BottomSheetOverlay
 import dev.zacsweers.fieldspottr.HomeScreen.Event.*
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
@@ -74,17 +74,8 @@ data object HomeScreen : Screen {
   }
 }
 
-/**
- * The CM implementation of ModalBottomSheet on non-android platforms is extremely janky and crashy,
- * so just make those go to new screens.
- *
- * TODO consider using AdaptiveBottomSheet from Calf once nested scrolling works
- * https://github.com/MohamedRejeb/Calf/issues/9
- */
-private val USE_BOTTOM_SHEETS = CurrentPlatform == Platform.Android
-
 @Composable
-fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScreen.State {
+fun HomePresenter(repository: PermitRepository): HomeScreen.State {
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
@@ -132,11 +123,7 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
         populateDb = true
       }
       is ShowInfo -> {
-        if (USE_BOTTOM_SHEETS) {
-          showInfo = event.show
-        } else {
-          navigator.goTo(ScaffoldScreen(title = "", contentScreen = AboutScreen))
-        }
+        showInfo = event.show
       }
       is FilterDate -> {
         selectedDate = event.date
@@ -146,22 +133,7 @@ fun HomePresenter(navigator: Navigator, repository: PermitRepository): HomeScree
       }
       ClearEventDetail -> currentlyDetailedEvent = null
       is ShowEventDetail -> {
-        if (USE_BOTTOM_SHEETS) {
-          currentlyDetailedEvent = event.event
-        } else {
-          navigator.goTo(
-            ScaffoldScreen(
-              title = "Permit Details",
-              contentScreen =
-                PermitDetailsScreen(
-                  name = event.event.title,
-                  description = event.event.description,
-                  group = selectedGroup,
-                  org = event.event.org,
-                ),
-            )
-          )
-        }
+        currentlyDetailedEvent = event.event
       }
 
       ShowLocation -> {
@@ -187,25 +159,50 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
+  // Info bottom sheet
   if (state.showInfo) {
-    OverlayEffect(state.showInfo) {
-      show(
-        BottomSheetOverlay(Unit, onDismiss = { state.eventSink(ShowInfo(false)) }) { _, _ ->
-          About()
-        }
-      )
+    val infoSheetState = rememberAdaptiveSheetState(
+      skipPartiallyExpanded = false,
+      confirmValueChange = { true }
+    )
+    
+    LaunchedEffect(state.showInfo) {
+      if (state.showInfo) {
+        infoSheetState.show()
+      }
     }
-  } else if (state.detailedEvent != null) {
-    OverlayEffect(state.detailedEvent) {
-      show(
-        BottomSheetOverlay(
-          state.detailedEvent,
-          onDismiss = { state.eventSink(ClearEventDetail) },
-        ) { model, _ ->
-          CircuitContent(
-            PermitDetailsScreen(model.title, model.description, state.selectedGroup, model.org)
-          )
-        }
+    
+    AdaptiveBottomSheet(
+      onDismissRequest = { state.eventSink(ShowInfo(false)) },
+      adaptiveSheetState = infoSheetState,
+    ) {
+      About(modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier)
+    }
+  }
+  
+  // Event detail bottom sheet
+  state.detailedEvent?.let { event ->
+    val detailSheetState = rememberAdaptiveSheetState(
+      skipPartiallyExpanded = false,
+      confirmValueChange = { true }
+    )
+    
+    LaunchedEffect(event) {
+      detailSheetState.show()
+    }
+    
+    AdaptiveBottomSheet(
+      onDismissRequest = { state.eventSink(ClearEventDetail) },
+      adaptiveSheetState = detailSheetState,
+    ) {
+      CircuitContent(
+        PermitDetailsScreen(
+          name = event.title,
+          description = event.description,
+          group = state.selectedGroup,
+          org = event.org
+        ),
+        modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier
       )
     }
   }

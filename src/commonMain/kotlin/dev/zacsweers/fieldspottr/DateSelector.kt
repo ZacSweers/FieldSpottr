@@ -23,6 +23,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.surfaceColorAtElevation
@@ -82,7 +83,10 @@ fun DateSelector(
     var hideSheet by remember { mutableStateOf(false) }
 
     val sheetState =
-      rememberAdaptiveSheetState(skipPartiallyExpanded = true, confirmValueChange = { true })
+      rememberAdaptiveSheetState(
+        skipPartiallyExpanded = false,
+        confirmValueChange = { value -> value != SheetValue.Expanded },
+      )
 
     // TODO track min/max dates available and limit to those
     val datePickerState = rememberAdaptiveDatePickerState(current)
