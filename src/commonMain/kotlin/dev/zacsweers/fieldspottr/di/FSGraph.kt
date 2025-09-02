@@ -41,8 +41,8 @@ interface FSGraph {
   @SingleIn(AppScope::class)
   fun provideCircuit(permitRepository: PermitRepository): Circuit {
     return Circuit.Builder()
-      .addPresenter<HomeScreen, HomeScreen.State> { _, navigator, _ ->
-        presenterOf { HomePresenter(navigator, permitRepository) }
+      .addPresenter<HomeScreen, HomeScreen.State> { _, _, _ ->
+        presenterOf { HomePresenter(permitRepository) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
       .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->

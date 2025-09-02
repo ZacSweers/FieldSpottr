@@ -43,11 +43,10 @@ private fun GridPreview() {
                       FieldState.Reserved(
                         start = 7,
                         end = 11,
-                        timeRange = "12-4",
+                        timeRange = "12—4",
                         title = "Title",
                         org = "Org",
                         status = "Approved",
-                        description = "Description",
                         isBlocked = false,
                         isOverlap = false,
                       )

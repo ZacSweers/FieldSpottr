@@ -19,8 +19,14 @@ private val EventTimeFormatter =
     amPmMarker("am", "pm")
   }
 
+private val EventTimeNoAmPmFormatter = LocalDateTime.Format { amPmHour(padding = Padding.NONE) }
+
 fun LocalDateTime.formatAmPm(): String {
   return EventTimeFormatter.format(this)
+}
+
+fun LocalDateTime.formatNoAmPm(): String {
+  return EventTimeNoAmPmFormatter.format(this)
 }
 
 fun LocalDateTime.toNyInstant(): Instant {

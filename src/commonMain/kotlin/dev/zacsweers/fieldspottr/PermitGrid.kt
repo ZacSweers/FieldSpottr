@@ -177,7 +177,7 @@ fun PermitEvent(
     } else if (isOverlap) {
       MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
     } else {
-      MaterialTheme.colorScheme.tertiaryContainer
+      MaterialTheme.colorScheme.secondaryContainer
     }
   Surface(
     enabled = onEventClick != null && !isOverlap,
@@ -192,7 +192,7 @@ fun PermitEvent(
         if (event.isBlocked) {
           MaterialTheme.colorScheme.onErrorContainer
         } else {
-          MaterialTheme.colorScheme.onTertiaryContainer
+          MaterialTheme.colorScheme.onSecondaryContainer
         }
 
       Text(

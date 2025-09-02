@@ -10,6 +10,9 @@ import androidx.compose.material3.lightColorScheme as m3LightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight.Companion.Bold
+import androidx.compose.ui.text.style.TextDecoration
 
 internal val lightScheme =
   m3LightColorScheme(
@@ -263,6 +266,15 @@ expect fun platformSpecificMaterialColorScheme(
 ): ColorScheme?
 
 @Composable expect fun PlatformSpecificThemeSideEffects()
+
+@get:Composable
+val FSLinkStyle
+  get() =
+    SpanStyle(
+      textDecoration = TextDecoration.Underline,
+      fontWeight = Bold,
+      color = MaterialTheme.colorScheme.secondary,
+    )
 
 @Composable
 fun FSTheme(
