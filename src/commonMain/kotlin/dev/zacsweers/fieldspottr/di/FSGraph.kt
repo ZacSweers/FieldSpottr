@@ -10,6 +10,9 @@ import dev.zacsweers.fieldspottr.AboutScreen
 import dev.zacsweers.fieldspottr.Home
 import dev.zacsweers.fieldspottr.HomePresenter
 import dev.zacsweers.fieldspottr.HomeScreen
+import dev.zacsweers.fieldspottr.LocationMap
+import dev.zacsweers.fieldspottr.LocationMapPresenter
+import dev.zacsweers.fieldspottr.LocationMapScreen
 import dev.zacsweers.fieldspottr.PermitDetails
 import dev.zacsweers.fieldspottr.PermitDetailsPresenter
 import dev.zacsweers.fieldspottr.PermitDetailsScreen
@@ -41,8 +44,8 @@ interface FSGraph {
   @SingleIn(AppScope::class)
   fun provideCircuit(permitRepository: PermitRepository): Circuit {
     return Circuit.Builder()
-      .addPresenter<HomeScreen, HomeScreen.State> { _, _, _ ->
-        presenterOf { HomePresenter(permitRepository) }
+      .addPresenter<HomeScreen, HomeScreen.State> { _, navigator, _ ->
+        presenterOf { HomePresenter(permitRepository, navigator) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
       .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->
@@ -56,6 +59,12 @@ interface FSGraph {
       }
       .addUi<ScaffoldScreen, ScaffoldScreen.State> { state, modifier ->
         ScaffoldScreenContent(state, modifier)
+      }
+      .addPresenter<LocationMapScreen, LocationMapScreen.State> { screen, _, _ ->
+        presenterOf { LocationMapPresenter(screen) }
+      }
+      .addUi<LocationMapScreen, LocationMapScreen.State> { state, modifier ->
+        LocationMap(state, modifier)
       }
       .addStaticUi<AboutScreen, CircuitUiState> { _, modifier -> About(modifier) }
       .build()
