@@ -72,6 +72,10 @@ done
 echo "Updating library definitions"
 ./gradlew exportLibraryDefinitions -PaboutLibraries.exportPath=src/commonMain/composeResources/files --quiet
 
+# Dedupe library entries by name key and minimize output
+# https://github.com/mikepenz/AboutLibraries/issues/1228
+jq -c '.libraries |= unique_by(.name)' src/commonMain/composeResources/files/aboutlibraries.json > src/commonMain/composeResources/files/aboutlibraries.json.tmp && mv src/commonMain/composeResources/files/aboutlibraries.json.tmp src/commonMain/composeResources/files/aboutlibraries.json
+
 # Increment version code
 echo "Incrementing version code"
 NEW_VERSION_CODE=$(increment_version_code gradle.properties)
