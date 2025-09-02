@@ -99,6 +99,25 @@ class AreasBuilder {
 fun buildDefaultAreas(): Areas {
   return buildAreas {
     area(
+      name = "Baruch",
+      displayName = "Baruch Playground",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
+    ) {
+      group(
+        name = "Baruch",
+        location =
+          Location(
+            "https://maps.app.goo.gl/S6x4PgTCGucMKnB9A",
+            "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground",
+          ),
+      ) {
+        field(csvName = "Softball-01", displayName = "Softball 1", sharedFields = setOf("field1"))
+        field(csvName = "Football-01", displayName = "Soccer 1", sharedFields = setOf("field1"))
+        field(csvName = "Football-02", displayName = "Soccer 2", sharedFields = setOf("field2"))
+        field(csvName = "Softball-02", displayName = "Softball 2", sharedFields = setOf("field2"))
+      }
+    }
+    area(
       name = "ERP",
       displayName = "East River Park",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
@@ -176,25 +195,6 @@ fun buildDefaultAreas(): Areas {
           ),
       ) {
         field(csvName = "Grand Street Mini Field-Soccer-02", displayName = "Whole Field")
-      }
-    }
-    area(
-      name = "Baruch",
-      displayName = "Baruch Playground",
-      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
-    ) {
-      group(
-        name = "Baruch",
-        location =
-          Location(
-            "https://maps.app.goo.gl/S6x4PgTCGucMKnB9A",
-            "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground",
-          ),
-      ) {
-        field(csvName = "Softball-01", displayName = "Softball 1", sharedFields = setOf("field1"))
-        field(csvName = "Football-01", displayName = "Soccer 1", sharedFields = setOf("field1"))
-        field(csvName = "Football-02", displayName = "Soccer 2", sharedFields = setOf("field2"))
-        field(csvName = "Softball-02", displayName = "Softball 2", sharedFields = setOf("field2"))
       }
     }
     area(
