@@ -25,11 +25,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.LinkAnnotation.Url
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontWeight.Companion.Bold
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
@@ -66,6 +70,7 @@ fun About(modifier: Modifier = Modifier) {
       showAuthor = true,
       showVersion = false,
       header = { item(key = "header") { Header(Modifier.fillMaxWidth()) } },
+      name = { Text(it, fontWeight = Bold) },
     )
   }
 }
@@ -98,10 +103,26 @@ private fun Header(modifier: Modifier = Modifier) {
       append(".")
       repeat(2) { appendLine() }
       append("By ")
-      append(" ")
-      withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") }
+      withStyle(
+        SpanStyle(
+          textDecoration = TextDecoration.Underline,
+          fontStyle = FontStyle.Italic,
+          fontWeight = Bold,
+          color = MaterialTheme.colorScheme.secondary,
+        )
+      ) {
+        withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") }
+      }
       append(" — ")
-      withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
+      withStyle(
+        SpanStyle(
+          textDecoration = TextDecoration.Underline,
+          fontWeight = Bold,
+          color = MaterialTheme.colorScheme.secondary,
+        )
+      ) {
+        withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
+      }
     }
     Text(
       text,
