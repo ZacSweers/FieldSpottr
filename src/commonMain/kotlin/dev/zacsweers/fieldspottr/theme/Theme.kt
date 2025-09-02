@@ -268,11 +268,13 @@ expect fun platformSpecificMaterialColorScheme(
 @Composable expect fun PlatformSpecificThemeSideEffects()
 
 @get:Composable
-val FSLinkStyle get() = SpanStyle(
-  textDecoration = TextDecoration.Underline,
-  fontWeight = Bold,
-  color = MaterialTheme.colorScheme.secondary,
-)
+val FSLinkStyle
+  get() =
+    SpanStyle(
+      textDecoration = TextDecoration.Underline,
+      fontWeight = Bold,
+      color = MaterialTheme.colorScheme.secondary,
+    )
 
 @Composable
 fun FSTheme(
