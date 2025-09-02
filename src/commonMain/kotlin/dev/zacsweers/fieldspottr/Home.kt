@@ -11,13 +11,34 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -28,14 +49,23 @@ import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
+import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
-import dev.zacsweers.fieldspottr.HomeScreen.Event.*
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ChangeGroup
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ClearEventDetail
+import dev.zacsweers.fieldspottr.HomeScreen.Event.FilterDate
+import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowLocation
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
+import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Native
+import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.LocalDate
@@ -73,7 +103,7 @@ data object HomeScreen : Screen {
 }
 
 @Composable
-fun HomePresenter(repository: PermitRepository): HomeScreen.State {
+fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScreen.State {
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
@@ -136,12 +166,31 @@ fun HomePresenter(repository: PermitRepository): HomeScreen.State {
 
       ShowLocation -> {
         val location = areas.groups.getValue(selectedGroup).location
-        val url =
-          when (CurrentPlatform) {
-            Native -> location.amaps
-            else -> location.gmaps
-          }
-        uriHandler.openUri(url)
+        val coords = extractCoordinatesFromUrl(location.gmaps, location.amaps)
+        if (CurrentPlatform != Platform.Jvm && coords != null) {
+          val (lat, lon) = coords
+          navigator.goTo(
+            ScaffoldScreen(
+              title = selectedGroup,
+              contentScreen =
+                LocationMapScreen(
+                  latitude = lat,
+                  longitude = lon,
+                  title = selectedGroup,
+                  gmapsUrl = location.gmaps,
+                  amapsUrl = location.amaps,
+                ),
+            )
+          )
+        } else {
+          // Fallback to opening URL if we can't extract coordinates
+          val url =
+            when (CurrentPlatform) {
+              Native -> location.amaps
+              else -> location.gmaps
+            }
+          uriHandler.openUri(url)
+        }
       }
     }
   }

@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
@@ -39,7 +40,14 @@ fun ScaffoldScreenContent(state: ScaffoldScreen.State, modifier: Modifier = Modi
     modifier = modifier,
     topBar = {
       CenterAlignedTopAppBar(
-        title = { Text(state.title, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic) },
+        title = {
+          Text(
+            state.title,
+            fontWeight = FontWeight.Black,
+            fontStyle = FontStyle.Italic,
+            textAlign = TextAlign.Center,
+          )
+        },
         navigationIcon = {
           IconButton(onClick = { state.onBackPressed() }) {
             Icon(Outlined.ArrowBack, contentDescription = "Back")
