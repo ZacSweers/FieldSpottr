@@ -2,7 +2,7 @@
 aboutLicenses = "12.2.4"
 androidx-activity = "1.10.1"
 androidx-appcompat = "1.7.1"
-agp = "8.12.2"
+agp = "8.13.0"
 calf = "0.8.0"
 circuit = "0.30.0"
 compose-jb = "1.8.2"
