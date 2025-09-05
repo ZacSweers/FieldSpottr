@@ -35,11 +35,14 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
+import com.mikepenz.aboutlibraries.entity.Library
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.runtime.screen.StaticScreen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.theme.FSLinkStyle
+import kotlinx.collections.immutable.mutate
+import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -56,7 +59,12 @@ fun About(modifier: Modifier = Modifier) {
       value =
         withContext(Dispatchers.IO) {
           val bytes = Res.readBytes("files/aboutlibraries.json")
-          Libs.Builder().withJson(bytes.decodeToString()).build()
+          Libs.Builder().withJson(bytes.decodeToString()).build().let { libs ->
+            libs.copy(
+              // https://github.com/mikepenz/AboutLibraries/issues/1228
+              libraries = libs.libraries.toPersistentList().mutate { it.distinctBy(Library::name) }
+            )
+          }
         }
     }
   if (libs == null) {
