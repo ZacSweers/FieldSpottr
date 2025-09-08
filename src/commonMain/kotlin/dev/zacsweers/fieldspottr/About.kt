@@ -41,7 +41,6 @@ import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.runtime.screen.StaticScreen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.theme.FSLinkStyle
-import kotlinx.collections.immutable.mutate
 import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -62,7 +61,7 @@ fun About(modifier: Modifier = Modifier) {
           Libs.Builder().withJson(bytes.decodeToString()).build().let { libs ->
             libs.copy(
               // https://github.com/mikepenz/AboutLibraries/issues/1228
-              libraries = libs.libraries.distinctBy(Library::name).toPersistentList(),
+              libraries = libs.libraries.distinctBy(Library::name).toPersistentList()
             )
           }
         }
