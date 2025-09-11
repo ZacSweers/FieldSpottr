@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.withOverlapsFr
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.util.formatAmPm
+import dev.zacsweers.fieldspottr.util.formatNoAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.collections.immutable.persistentListOf
@@ -26,7 +27,6 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       val title: String,
       val org: String,
       val status: String,
-      val description: String,
       /** Indicates this is a city permit block. Field is likely unusable. */
       val isBlocked: Boolean,
       /**
@@ -55,9 +55,9 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         val startHour = startDateTime.hour
         val durationHours = (permit.end - permit.start).milliseconds.inWholeHours.toInt()
         val endTime = startHour + durationHours
-        val startTimeString = startDateTime.formatAmPm()
+        val startTimeString = startDateTime.formatNoAmPm()
         val endTimeString = permit.end.toNyLocalDateTime().formatAmPm()
-        val timeRange = "$startTimeString - $endTimeString"
+        val timeRange = "$startTimeString—$endTimeString"
         return Reserved(
           start = startHour,
           end = endTime,
@@ -65,13 +65,6 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
           title = permit.name,
           org = permit.org,
           status = permit.status,
-          description =
-            """
-            $timeRange
-            Org: ${permit.org}
-            Status: ${permit.status}
-          """
-              .trimIndent(),
           isBlocked = permit.isBlocked,
           isOverlap = false,
         )

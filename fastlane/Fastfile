@@ -103,7 +103,7 @@ platform :ios do
       scheme: options[:scheme],
       buildlog_path: "build/fastlane-buildlog",
       skip_package_ipa: skip_certs,
-      skip_codesigning: skip_certs
+      skip_codesigning: skip_certs,
     )
   end
 

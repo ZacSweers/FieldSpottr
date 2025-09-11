@@ -156,6 +156,7 @@ kotlin {
         implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.sqldelight.driver.android)
         implementation(project.dependencies.platform(libs.kotlin.bom))
+        implementation(libs.maps.compose)
       }
     }
     jvmMain {
@@ -211,6 +212,7 @@ buildConfig {
     "BUGSNAG_NOTIFIER_KEY",
     providers.gradleProperty("fs_bugsnag_key").orNull,
   )
+  buildConfigField("String?", "MAPS_API_KEY", providers.gradleProperty("fs_maps_api_key").orNull)
   generateAtSync = true
 }
 
@@ -225,6 +227,7 @@ android {
     targetSdk = 36
     // Here because Bugsnag requires it in manifests for some reason
     manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
+    manifestPlaceholders["mapsApiKey"] = providers.gradleProperty("fs_maps_api_key").getOrElse("")
   }
 
   buildFeatures { compose = true }

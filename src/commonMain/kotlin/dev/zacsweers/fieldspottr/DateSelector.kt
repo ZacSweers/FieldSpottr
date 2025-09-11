@@ -82,7 +82,10 @@ fun DateSelector(
     var hideSheet by remember { mutableStateOf(false) }
 
     val sheetState =
-      rememberAdaptiveSheetState(skipPartiallyExpanded = true, confirmValueChange = { true })
+      rememberAdaptiveSheetState(
+        skipPartiallyExpanded = CurrentPlatform != Platform.Native,
+        confirmValueChange = { true },
+      )
 
     // TODO track min/max dates available and limit to those
     val datePickerState = rememberAdaptiveDatePickerState(current)
@@ -156,7 +159,7 @@ fun DateSelector(
     modifier =
       modifier.requiredHeightIn(max = 48.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
     shape = CircleShape,
-    color = MaterialTheme.colorScheme.primaryContainer,
+    color = MaterialTheme.colorScheme.secondaryContainer,
   ) {
     Column(
       modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp),
@@ -171,7 +174,7 @@ fun DateSelector(
         Text(
           ShortMonth.format(currentlySelectedDate),
           fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f),
+          color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
           style = MaterialTheme.typography.labelMedium,
           fontSize = fontSize,
           lineHeight = MaterialTheme.typography.labelMedium.fontSize,
@@ -181,7 +184,7 @@ fun DateSelector(
       Text(
         currentlySelectedDate.dayOfMonth.toString(),
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
         style = MaterialTheme.typography.labelLarge,
         lineHeight = MaterialTheme.typography.labelLarge.fontSize,
       )

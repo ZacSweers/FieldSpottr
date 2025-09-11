@@ -29,6 +29,9 @@
     <meta-data
         android:name="com.bugsnag.android.API_KEY"
         android:value="${bugsnagApiKey}" />
+    <meta-data
+        android:name="com.google.android.geo.API_KEY"
+        android:value="${mapsApiKey}" />
   </application>
 
   <uses-permission android:name="android.permission.INTERNET" />

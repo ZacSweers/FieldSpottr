@@ -23,19 +23,25 @@ import androidx.compose.ui.Alignment.Companion.Center
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.LinkAnnotation.Url
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontWeight.Companion.Bold
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
+import com.mikepenz.aboutlibraries.entity.Library
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.runtime.screen.StaticScreen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.fieldspottr.theme.FSLinkStyle
+import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -52,7 +58,12 @@ fun About(modifier: Modifier = Modifier) {
       value =
         withContext(Dispatchers.IO) {
           val bytes = Res.readBytes("files/aboutlibraries.json")
-          Libs.Builder().withJson(bytes.decodeToString()).build()
+          Libs.Builder().withJson(bytes.decodeToString()).build().let { libs ->
+            libs.copy(
+              // https://github.com/mikepenz/AboutLibraries/issues/1228
+              libraries = libs.libraries.distinctBy(Library::name).toPersistentList()
+            )
+          }
         }
     }
   if (libs == null) {
@@ -60,12 +71,15 @@ fun About(modifier: Modifier = Modifier) {
       AdaptiveCircularProgressIndicator()
     }
   } else {
+    val uriHandler = LocalUriHandler.current
     LibrariesContainer(
       libraries = libs,
       modifier = modifier.fillMaxSize(),
       showAuthor = true,
       showVersion = false,
       header = { item(key = "header") { Header(Modifier.fillMaxWidth()) } },
+      name = { Text(it, fontWeight = Bold) },
+      onLibraryClick = { it.website?.let(uriHandler::openUri) },
     )
   }
 }
@@ -94,14 +108,17 @@ private fun Header(modifier: Modifier = Modifier) {
     Spacer(modifier = Modifier.height(8.dp))
     val text = buildAnnotatedString {
       append("An app for checking field permit status from ")
-      withLink(Url("https://nycgovparks.org")) { append("nycgovparks.org") }
+      withStyle(FSLinkStyle) {
+        withLink(Url("https://nycgovparks.org")) { append("nycgovparks.org") }
+      }
       append(".")
       repeat(2) { appendLine() }
       append("By ")
-      append(" ")
-      withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") }
+      withStyle(FSLinkStyle) { withLink(Url("https://zacsweers.dev")) { append("Zac Sweers") } }
       append(" — ")
-      withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
+      withStyle(FSLinkStyle) {
+        withLink(Url("https://github.com/ZacSweers/FieldSpottr")) { append("Source code") }
+      }
     }
     Text(
       text,
