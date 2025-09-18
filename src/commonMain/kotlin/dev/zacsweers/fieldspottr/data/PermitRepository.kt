@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data
 
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
+import app.cash.sqldelight.db.SqlDriver
 import dev.zacsweers.fieldspottr.DbArea
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
@@ -73,19 +74,32 @@ private val FORMATTER =
     )
   }
 
-@Inject
+internal fun SqlDriver.createFSDatabase(): FSDatabase {
+  return FSDatabase(this)
+}
+
 @SingleIn(AppScope::class)
 class PermitRepository(
-  private val sqlDriverFactory: SqlDriverFactory,
   private val appDirs: FSAppDirs,
   private val json: Json,
+  private val db: suspend () -> FSDatabase,
 ) {
-  private val client = lazySuspend { HttpClient() }
 
-  private val db = lazySuspend {
-    val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
-    FSDatabase(driver)
-  }
+  @Inject
+  constructor(
+    sqlDriverFactory: SqlDriverFactory,
+    appDirs: FSAppDirs,
+    json: Json,
+  ) : this(
+    appDirs,
+    json,
+    lazySuspend {
+      val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
+      driver.createFSDatabase()
+    },
+  )
+
+  private val client = lazySuspend { HttpClient() }
 
   private val areasJson by lazy { appDirs.userData / "areas.json" }
 
@@ -213,7 +227,7 @@ class PermitRepository(
     return lastUpdate != null && Instant.fromEpochMilliseconds(lastUpdate) > now.minus(7.days)
   }
 
-  private suspend fun FSDatabase.populateDbFrom(area: Area): Boolean {
+  internal suspend fun FSDatabase.populateDbFrom(area: Area): Boolean {
     val now = System.now()
 
     val csvFile = fetchCsv(area) ?: return false
