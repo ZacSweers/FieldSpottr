@@ -3,6 +3,7 @@ aboutLicenses = "12.2.4"
 androidx-activity = "1.11.0"
 androidx-appcompat = "1.7.1"
 agp = "8.13.0"
+assertk = "0.28.1"
 calf = "0.8.0"
 circuit = "0.30.0"
 compose-jb = "1.9.0"
@@ -43,6 +44,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.0.1"
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.4.0"
+assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
 bugsnag-android = "com.bugsnag:bugsnag-android:6.18.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
@@ -57,6 +59,7 @@ compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data",
 compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-jb" }
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.5"
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
@@ -75,6 +78,7 @@ metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" 
 lints-compose = "com.slack.lint.compose:compose-lint-checks:1.4.2"
 
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
+okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
 
 slf4jNop = "org.slf4j:slf4j-nop:2.0.17"
 

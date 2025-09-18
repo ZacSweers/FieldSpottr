@@ -145,6 +145,15 @@ kotlin {
         implementation(libs.aboutLicenses)
       }
     }
+    commonTest {
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.assertk)
+        implementation(libs.coroutines.test)
+        implementation(libs.okio.fakefilesystem)
+        implementation(libs.sqldelight.driver.jdbc)
+      }
+    }
     androidMain {
       dependencies {
         implementation(libs.androidx.appCompat)
@@ -168,6 +177,15 @@ kotlin {
         implementation(libs.slf4jNop)
         implementation(libs.sqldelight.driver.jdbc)
         implementation(project.dependencies.platform(libs.kotlin.bom))
+      }
+    }
+    jvmTest {
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.assertk)
+        implementation(libs.coroutines.test)
+        implementation(libs.okio.fakefilesystem)
+        implementation(libs.sqldelight.driver.jdbc)
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
