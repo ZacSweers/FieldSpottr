@@ -10,6 +10,7 @@ compose-jb = "1.9.0"
 compose-hotReload = "1.0.0-beta07"
 jdk = "23"
 jvmTarget = "11"
+kermit = "2.0.8"
 kotlin = "2.2.20"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
@@ -61,6 +62,7 @@ coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.5"
+kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 

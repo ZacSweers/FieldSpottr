@@ -143,6 +143,7 @@ kotlin {
         implementation(libs.compose.material.icons)
         implementation(libs.ktor.client)
         implementation(libs.aboutLicenses)
+        implementation(libs.kermit)
       }
     }
     commonTest {
