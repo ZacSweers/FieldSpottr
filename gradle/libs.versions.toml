@@ -1,11 +1,11 @@
 [versions]
 aboutLicenses = "12.2.4"
-androidx-activity = "1.10.1"
+androidx-activity = "1.11.0"
 androidx-appcompat = "1.7.1"
 agp = "8.13.0"
 calf = "0.8.0"
 circuit = "0.30.0"
-compose-jb = "1.8.2"
+compose-jb = "1.9.0"
 compose-hotReload = "1.0.0-beta07"
 jdk = "23"
 jvmTarget = "11"
@@ -13,8 +13,8 @@ kotlin = "2.2.20"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
 ktfmt = "0.56"
-ktor = "3.2.3"
-mapsCompose = "6.9.0"
+ktor = "3.3.0"
+mapsCompose = "6.10.0"
 metro = "0.6.6"
 okio = "3.16.0"
 spotless = "7.2.1"
@@ -24,7 +24,7 @@ sqldelight = "2.1.0"
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
-buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.6.7" }
+buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.6.8" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
 compose-hotReload = { id = "org.jetbrains.compose.hot-reload", version.ref = "compose-hotReload" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
@@ -43,14 +43,14 @@ androidx-splash = "androidx.core:core-splashscreen:1.0.1"
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.4.0"
-bugsnag-android = "com.bugsnag:bugsnag-android:6.17.0"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.18.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }
 circuitx-gestureNav = { module = "com.slack.circuit:circuitx-gesture-navigation", version.ref = "circuit" }
 compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version = "1.7.3" }
-compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-jb" }
+compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.9.0-beta06" }
 # Tooling support (Previews, etc.)
 compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-jb" }
 compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data", version.ref = "compose-jb" }
@@ -61,8 +61,7 @@ desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.5"
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 
-# https://youtrack.jetbrains.com/issue/CMP-8519/Migrate-to-kotlinx-datetime-0.7.0
-kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.6.2"
+kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.7.1"
 kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0"
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
