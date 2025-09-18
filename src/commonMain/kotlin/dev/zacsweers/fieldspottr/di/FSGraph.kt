@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.di
 
+import co.touchlab.kermit.Logger
+import co.touchlab.kermit.loggerConfigInit
 import com.slack.circuit.foundation.Circuit
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.presenterOf
 import dev.zacsweers.fieldspottr.About
 import dev.zacsweers.fieldspottr.AboutScreen
+import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.Home
 import dev.zacsweers.fieldspottr.HomePresenter
 import dev.zacsweers.fieldspottr.HomeScreen
@@ -39,6 +42,17 @@ interface FSGraph {
     ignoreUnknownKeys = true
     isLenient = true
   }
+
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideLogger(): Logger =
+    if (BuildConfig.IS_RELEASE) {
+      object : Logger(loggerConfigInit()) {
+        // No op in release
+      }
+    } else {
+      Logger.Companion
+    }
 
   @Provides
   @SingleIn(AppScope::class)

@@ -143,6 +143,16 @@ kotlin {
         implementation(libs.compose.material.icons)
         implementation(libs.ktor.client)
         implementation(libs.aboutLicenses)
+        implementation(libs.kermit)
+      }
+    }
+    commonTest {
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.assertk)
+        implementation(libs.coroutines.test)
+        implementation(libs.okio.fakefilesystem)
+        implementation(libs.sqldelight.driver.jdbc)
       }
     }
     androidMain {
@@ -168,6 +178,15 @@ kotlin {
         implementation(libs.slf4jNop)
         implementation(libs.sqldelight.driver.jdbc)
         implementation(project.dependencies.platform(libs.kotlin.bom))
+      }
+    }
+    jvmTest {
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.assertk)
+        implementation(libs.coroutines.test)
+        implementation(libs.okio.fakefilesystem)
+        implementation(libs.sqldelight.driver.jdbc)
       }
     }
     nativeMain { dependencies { implementation(libs.sqldelight.driver.native) } }
