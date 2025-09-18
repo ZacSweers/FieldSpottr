@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.data
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.db.SqlDriver
+import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.DbArea
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
@@ -26,14 +27,18 @@ import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.prepareGet
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.userAgent
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,7 +60,13 @@ import okio.use
 /** The default buffer size when working with buffered streams. */
 private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
 
-private val FORMATTER =
+// Lie and say we're a browser. NYC parks doesn't like bots
+// Can't really easily get a "real" UA without spinning up UI and doing async JS calls
+// on iOS.
+private const val USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+
+internal val FORMATTER =
   LocalDateTime.Format {
     monthNumber(padding = Padding.NONE)
     char('/')
@@ -82,6 +93,7 @@ internal fun SqlDriver.createFSDatabase(): FSDatabase {
 class PermitRepository(
   private val appDirs: FSAppDirs,
   private val json: Json,
+  private val logger: Logger,
   private val db: suspend () -> FSDatabase,
 ) {
 
@@ -90,9 +102,11 @@ class PermitRepository(
     sqlDriverFactory: SqlDriverFactory,
     appDirs: FSAppDirs,
     json: Json,
+    logger: Logger,
   ) : this(
     appDirs,
     json,
+    logger.withTag("PermitRepository"),
     lazySuspend {
       val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
       driver.createFSDatabase()
@@ -105,6 +119,10 @@ class PermitRepository(
 
   private val areasStateFlow = MutableStateFlow(Areas.default)
 
+  private fun log(message: String) {
+    logger.i { message }
+  }
+
   private fun loadLocalAreas(): Areas {
     return try {
       json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
@@ -115,14 +133,21 @@ class PermitRepository(
 
   fun areasFlow(): StateFlow<Areas> = areasStateFlow
 
-  suspend fun populateDb(forceRefresh: Boolean, log: (String) -> Unit): Boolean =
+  suspend fun populateDb(forceRefresh: Boolean, uiLog: (String) -> Unit): Boolean =
     withContext(Dispatchers.IO) {
-      downloadFile(
-        "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
-        areasJson,
-        allowCachedVersion = !forceRefresh,
-      )
+      log("Starting populateDb with forceRefresh=$forceRefresh")
+      val successful =
+        prepareAndDownloadFile(
+          "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
+          areasJson,
+          allowCachedVersion = !forceRefresh,
+        )
+      if (!successful) {
+        return@withContext false
+      }
+      log("Downloaded areas.json")
       val newAreas = loadLocalAreas()
+      log("Loaded areas: ${newAreas.entries.map { it.areaName }}")
 
       areasStateFlow.compareAndSet(newAreas, newAreas)
 
@@ -136,19 +161,21 @@ class PermitRepository(
       if (outdated.isEmpty()) {
         return@withContext true
       } else {
-        log("Populating DB...")
+        uiLog("Populating DB...")
       }
 
       // Parallelize, but unfortunately we can't escape the try/catch here
       try {
         outdated.parallelForEach(parallelism = areas.entries.size) { area ->
+          log("Processing area: ${area.areaName}")
           val successful = db().populateDbFrom(area)
+          log("Area ${area.areaName} processing result: $successful")
           if (!successful) {
             throw Exception()
           }
         }
       } catch (e: Exception) {
-        println("Failed to populate DB:\n${e.stackTraceToString()}")
+        logger.e(e) { "Failed to populate DB" }
         return@withContext false
       }
       return@withContext true
@@ -157,6 +184,7 @@ class PermitRepository(
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
+    log("permitsFlow query: date=$date, group=$group, startTime=$startTime, endTime=$endTime")
     return flow {
       emitAll(
         db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
@@ -165,26 +193,17 @@ class PermitRepository(
   }
 
   private suspend fun fetchCsv(area: Area): Path? {
+    log("Fetching CSV for area ${area.areaName} from ${area.csvUrl}")
     val targetPath = appDirs.userCache / "${area.areaName}.csv"
-    val downloaded =
-      downloadFile(
-        area.csvUrl,
-        targetPath,
-        allowCachedVersion = false,
-        // Lie and say we're a browser. NYC parks doesn't like bots
-        // Can't really easily get a "real" UA without spinning up UI and doing async JS calls
-        // on iOS.
-        userAgent =
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
-      )
+    val downloaded = prepareAndDownloadFile(area.csvUrl, targetPath, allowCachedVersion = false)
+    log("CSV download for ${area.areaName}: $downloaded")
     return targetPath.takeIf { downloaded }
   }
 
-  private suspend fun downloadFile(
+  private suspend fun prepareAndDownloadFile(
     url: String,
     targetPath: Path,
     allowCachedVersion: Boolean,
-    userAgent: String? = null,
   ): Boolean {
     if (appDirs.fs.exists(targetPath)) {
       if (allowCachedVersion) {
@@ -195,11 +214,37 @@ class PermitRepository(
 
     appDirs.touch(targetPath)
 
+    val successful = downloadFile(url, targetPath)
+    if (!successful) {
+      appDirs.delete(targetPath)
+    }
+    return successful
+  }
+
+  private suspend fun downloadFile(
+    url: String,
+    targetPath: Path,
+    attempt: Int = 0,
+    maxAttempts: Int = 5,
+  ): Boolean {
     try {
       appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
         client()
-          .prepareGet(url) { userAgent?.let { userAgent(it) } }
+          .prepareGet(url) { userAgent(USER_AGENT) }
           .execute { httpResponse ->
+            if (httpResponse.status == HttpStatusCode.Accepted) {
+              if (attempt == maxAttempts) {
+                error("Too many retries for $url, giving up")
+              }
+              val retryAfterSec = httpResponse.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
+              val wait = retryAfterSec?.seconds ?: 2.seconds
+              var url = url
+              // Some servers hint a follow-up endpoint while work completes.
+              httpResponse.headers[HttpHeaders.Location]?.let { url = it }
+              log("Retrying $url after $retryAfterSec seconds")
+              delay(wait)
+              downloadFile(url, targetPath, attempt + 1, maxAttempts)
+            }
             val channel = httpResponse.body<ByteReadChannel>()
             while (!channel.isClosedForRead) {
               val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
@@ -211,8 +256,7 @@ class PermitRepository(
           }
       }
     } catch (e: Exception) {
-      println("Failed to download file:\n${e.stackTraceToString()}")
-      appDirs.delete(targetPath)
+      logger.e(e) { "Failed to download file" }
       return false
     }
 
@@ -231,6 +275,7 @@ class PermitRepository(
     val now = System.now()
 
     val csvFile = fetchCsv(area) ?: return false
+    log("Processing CSV file for ${area.areaName}: $csvFile")
 
     // One single transaction for all ops so it's atomic
     transaction {
@@ -239,12 +284,15 @@ class PermitRepository(
 
       // Insert the new entries
       appDirs.fs.source(csvFile).buffer().useLines { lines ->
+        var lineCount = 0
+        var permitCount = 0
         lines.drop(1).forEach { line ->
+          lineCount++
           val lineSegments = line.split(",").map { it.removeSurrounding("\"").trim() }
           // Sometimes the city just breaks a specific park's permits and return a CSV that says
           // "There is no field usage information available for this park."
           if (lineSegments.size < 7) {
-            println("Skipping broken CSV entry $line ($lineSegments) in area $area")
+            log("Skipping broken CSV entry $line ($lineSegments) in area $area")
             return@forEach
           }
           val (start, end, field, type, name, org, status) = lineSegments
@@ -261,7 +309,7 @@ class PermitRepository(
           if (startTime == endTime) {
             // It's... unclear how this happens, but they do exist. Probably mistakes. Toss them
             // out.
-            println("Skipping zero-duration permit: $line")
+            log("Skipping zero-duration permit: $line")
             return@forEach
           }
 
@@ -279,7 +327,9 @@ class PermitRepository(
               status = status,
             )
           )
+          permitCount++
         }
+        log("Area ${area.areaName}: processed $lineCount lines, created $permitCount permits")
       }
 
       // Log last update time
