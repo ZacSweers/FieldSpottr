@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleVersion</key>
-	<string>33</string>
+	<string>34</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.5.0</string>
+	<string>2.5.1</string>
 	<key>CFBundleIdentifier</key>
 	<string>dev.zacsweers.FieldSpottr</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
