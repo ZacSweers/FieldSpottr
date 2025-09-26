@@ -39,11 +39,11 @@ import dev.zacsweers.fieldspottr.ui.Schedule
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.formatNoAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
-import kotlinx.datetime.Clock.System
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.datetime.Clock.System
 import kotlinx.datetime.number
 
 @CommonParcelize
