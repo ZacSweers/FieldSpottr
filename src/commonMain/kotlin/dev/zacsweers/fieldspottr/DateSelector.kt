@@ -50,10 +50,10 @@ import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
-import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
 import kotlinx.datetime.atStartOfDayIn
@@ -176,7 +176,7 @@ fun DateSelector(
         )
       }
       Text(
-        currentlySelectedDate.day.toString(),
+        currentlySelectedDate.dayOfMonth.toString(),
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSecondaryContainer,
         style = MaterialTheme.typography.labelLarge,

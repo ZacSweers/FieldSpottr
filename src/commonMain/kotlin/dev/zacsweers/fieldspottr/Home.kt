@@ -2,15 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -66,8 +69,8 @@ import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
-import kotlin.time.Clock.System
 import kotlinx.coroutines.flow.map
+import kotlinx.datetime.Clock.System
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -236,16 +239,18 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       onDismissRequest = { state.eventSink(ClearEventDetail) },
       adaptiveSheetState = detailSheetState,
     ) {
-      CircuitContent(
-        PermitDetailsScreen(
-          name = event.title,
-          group = state.selectedGroup,
-          timeRange = event.timeRange,
-          status = event.status,
-          org = event.org,
-        ),
-        modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier,
-      )
+      Box(Modifier.fillMaxSize().background(BottomSheetDefaults.ContainerColor)) {
+        CircuitContent(
+          PermitDetailsScreen(
+            name = event.title,
+            group = state.selectedGroup,
+            timeRange = event.timeRange,
+            status = event.status,
+            org = event.org,
+          ),
+          modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier,
+        )
+      }
     }
   }
 
