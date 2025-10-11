@@ -18,7 +18,7 @@ ktfmt = "0.56"
 ktor = "3.3.1"
 mapsCompose = "6.12.1"
 metro = "0.6.9"
-okio = "3.16.0"
+okio = "3.16.1"
 spotless = "7.2.1"
 sqldelight = "2.1.0"
 
