@@ -53,7 +53,7 @@ circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = 
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }
 circuitx-gestureNav = { module = "com.slack.circuit:circuitx-gesture-navigation", version.ref = "circuit" }
 compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version = "1.7.3" }
-compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.8.2" }
+compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.9.0" }
 # Tooling support (Previews, etc.)
 compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-jb" }
 compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data", version.ref = "compose-jb" }
