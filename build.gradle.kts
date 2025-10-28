@@ -152,7 +152,6 @@ kotlin {
         implementation(libs.assertk)
         implementation(libs.coroutines.test)
         implementation(libs.okio.fakefilesystem)
-        implementation(libs.sqldelight.driver.jdbc)
       }
     }
     androidMain {
