@@ -50,7 +50,7 @@ jobs:
 
   build-ios:
     # https://github.com/actions/runner-images/blob/main/images/macos
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
       - name: Checkout
