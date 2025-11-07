@@ -4,9 +4,9 @@ androidx-activity = "1.11.0"
 androidx-appcompat = "1.7.1"
 agp = "8.13.0"
 assertk = "0.28.1"
-calf = "0.8.0"
-circuit = "0.30.0"
-compose-jb = "1.9.2"
+calf = "0.9.0"
+circuit = "0.31.0"
+compose-jb = "1.9.3"
 compose-hotReload = "1.0.0-rc02"
 jdk = "24"
 jvmTarget = "11"
@@ -15,9 +15,9 @@ kotlin = "2.2.21"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
 ktfmt = "0.56"
-ktor = "3.3.1"
+ktor = "3.3.2"
 mapsCompose = "6.12.1"
-metro = "0.7.2"
+metro = "0.7.5"
 okio = "3.16.2"
 spotless = "8.0.0"
 sqldelight = "2.1.0"
@@ -41,7 +41,7 @@ sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 aboutLicenses = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutLicenses" }
 androidx-appCompat = { module = "androidx.appcompat:appcompat", version.ref = "androidx-appcompat" }
 androidx-compose-integration-activity = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
-androidx-splash = "androidx.core:core-splashscreen:1.0.1"
+androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
