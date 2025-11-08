@@ -131,7 +131,6 @@ kotlin {
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
         implementation(libs.okio)
-        implementation(libs.metro.runtime)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)
         implementation(libs.kotlinx.serialization.core)
@@ -152,7 +151,6 @@ kotlin {
         implementation(libs.assertk)
         implementation(libs.coroutines.test)
         implementation(libs.okio.fakefilesystem)
-        implementation(libs.sqldelight.driver.jdbc)
       }
     }
     androidMain {

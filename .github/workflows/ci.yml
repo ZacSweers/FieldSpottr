@@ -27,7 +27,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
-          java-version: '23'
+          java-version: '24'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
@@ -50,7 +50,7 @@ jobs:
 
   build-ios:
     # https://github.com/actions/runner-images/blob/main/images/macos
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
       - name: Checkout
