@@ -2,7 +2,7 @@
 aboutLicenses = "13.1.0"
 androidx-activity = "1.11.0"
 androidx-appcompat = "1.7.1"
-agp = "8.13.0"
+agp = "8.13.1"
 assertk = "0.28.1"
 calf = "0.9.0"
 circuit = "0.31.0"
