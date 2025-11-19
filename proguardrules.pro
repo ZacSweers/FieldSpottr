@@ -37,3 +37,14 @@
 
 # Weirdly referenced by compose resources
 -dontwarn androidx.test.platform.app.InstrumentationRegistry
+
+# New convertchecknotnull to optimize known null-check patterns
+-convertchecknotnull class kotlin.jvm.internal.Intrinsics {
+  void checkNotNull(...);
+  void checkExpressionValueIsNotNull(...);
+  void checkNotNullExpressionValue(...);
+  void checkReturnedValueIsNotNull(...);
+  void checkFieldIsNotNull(...);
+  void checkParameterIsNotNull(...);
+  void checkNotNullParameter(...);
+}
