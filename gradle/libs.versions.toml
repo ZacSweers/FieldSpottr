@@ -26,7 +26,7 @@ sqldelight = "2.2.1"
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
-buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.7.1" }
+buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.0" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
 compose-hotReload = { id = "org.jetbrains.compose.hot-reload", version.ref = "compose-hotReload" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
