@@ -27,7 +27,7 @@ plugins {
 val ktfmtVersion = libs.versions.ktfmt.get()
 
 metro {
-  generateJvmContributionHintsInFir.set(true)
+  generateContributionHintsInFir.set(true)
 }
 
 spotless {
