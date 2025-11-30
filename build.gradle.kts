@@ -26,6 +26,10 @@ plugins {
 
 val ktfmtVersion = libs.versions.ktfmt.get()
 
+metro {
+  generateJvmContributionHintsInFir.set(true)
+}
+
 spotless {
   lineEndings = LineEnding.PLATFORM_NATIVE
 

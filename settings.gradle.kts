@@ -13,6 +13,8 @@ dependencyResolutionManagement {
       mavenContent { snapshotsOnly() }
     }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    maven("https://packages.jetbrains.team/maven/p/kt/dev/")
+    mavenLocal()
   }
 }
 
@@ -29,6 +31,8 @@ pluginManagement {
       mavenContent { snapshotsOnly() }
     }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    maven("https://packages.jetbrains.team/maven/p/kt/dev/")
+    mavenLocal()
     // Gradle's plugin portal proxies jcenter, which we don't want. To avoid this, we specify
     // exactly which dependencies to pull from here.
     exclusiveContent {
