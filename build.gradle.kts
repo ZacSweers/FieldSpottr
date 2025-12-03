@@ -3,6 +3,7 @@
 import com.diffplug.spotless.LineEnding
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.konan.target.Family
 
@@ -68,13 +69,11 @@ kotlin {
         "-P",
         "plugin:org.jetbrains.kotlin.parcelize:additionalAnnotation=dev.zacsweers.fieldspottr.parcel.CommonParcelize",
       )
+      jvmDefault.set(JvmDefaultMode.NO_COMPATIBILITY)
       freeCompilerArgs.addAll(
         "-Xjsr305=strict",
         // Potentially useful for static analysis tools or annotation processors.
         "-Xemit-jvm-type-annotations",
-        // Enable new jvm-default behavior
-        // https://blog.jetbrains.com/kotlin/2020/07/kotlin-1-4-m3-generating-default-methods-in-interfaces/
-        "-Xjvm-default=all",
         // https://kotlinlang.org/docs/whatsnew1520.html#support-for-jspecify-nullness-annotations
         "-Xjspecify-annotations=strict",
         // Match JVM assertion behavior:
@@ -87,13 +86,11 @@ kotlin {
   jvm {
     mainRun { mainClass.set("dev.zacsweers.fieldspottr.MainKt") }
     compilerOptions {
+      jvmDefault.set(JvmDefaultMode.NO_COMPATIBILITY)
       freeCompilerArgs.addAll(
         "-Xjsr305=strict",
         // Potentially useful for static analysis tools or annotation processors.
         "-Xemit-jvm-type-annotations",
-        // Enable new jvm-default behavior
-        // https://blog.jetbrains.com/kotlin/2020/07/kotlin-1-4-m3-generating-default-methods-in-interfaces/
-        "-Xjvm-default=all",
         // https://kotlinlang.org/docs/whatsnew1520.html#support-for-jspecify-nullness-annotations
         "-Xjspecify-annotations=strict",
         // Match JVM assertion behavior:
@@ -105,7 +102,6 @@ kotlin {
   }
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
-  iosX64()
   iosArm64()
   iosSimulatorArm64()
 
