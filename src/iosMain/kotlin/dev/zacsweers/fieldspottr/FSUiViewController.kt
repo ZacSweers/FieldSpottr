@@ -7,5 +7,5 @@ import dev.zacsweers.fieldspottr.di.FSGraph
 import platform.UIKit.UIViewController
 
 fun makeUiViewController(graph: FSGraph): UIViewController = ComposeUIViewController {
-  FieldSpottrApp(graph.circuit, onRootPop = {})
+  graph.fieldSpottrApp(onRootPop = {})
 }

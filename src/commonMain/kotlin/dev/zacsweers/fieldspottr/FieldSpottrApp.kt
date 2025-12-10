@@ -15,10 +15,13 @@ import com.slack.circuit.overlay.ContentWithOverlays
 import com.slack.circuit.sharedelements.SharedElementTransitionLayout
 import com.slack.circuitx.gesturenavigation.GestureNavigationDecorationFactory
 import dev.zacsweers.fieldspottr.theme.FSTheme
+import dev.zacsweers.metro.Assisted
+import dev.zacsweers.metro.Inject
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-fun FieldSpottrApp(circuit: Circuit, onRootPop: () -> Unit) {
+@Inject
+fun FieldSpottr(circuit: Circuit, @Assisted onRootPop: () -> Unit) {
   CircuitCompositionLocals(circuit) {
     FSTheme {
       SharedElementTransitionLayout {
