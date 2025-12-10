@@ -52,10 +52,10 @@ fun buildAreas(block: AreasBuilder.() -> Unit): Areas {
   return Areas(areas.toImmutableList())
 }
 
+@AreaDSL
 class AreasBuilder {
   private val areas = mutableListOf<Area>()
 
-  @AreaDSL
   fun area(name: String, displayName: String, csvUrl: String, block: AreaBuilder.() -> Unit) {
     val builder = AreaBuilder(name, displayName, csvUrl)
     builder.block()
@@ -69,7 +69,6 @@ class AreasBuilder {
   class AreaBuilder(val name: String, val displayName: String, val csvUrl: String) {
     private val fieldGroups = mutableListOf<FieldGroup>()
 
-    @AreaDSL
     fun group(name: String, location: Location, block: FieldGroupBuilder.() -> Unit) {
       val builder = FieldGroupBuilder(name, this.name, location)
       builder.block()
@@ -83,7 +82,6 @@ class AreasBuilder {
     class FieldGroupBuilder(val name: String, val areaName: String, val location: Location) {
       private val fields = mutableListOf<Field>()
 
-      @AreaDSL
       fun field(csvName: String, displayName: String, sharedFields: Set<String> = setOf(csvName)) {
         fields.add(Field(csvName, displayName, this.name, sharedFields.toImmutableSet()))
       }
