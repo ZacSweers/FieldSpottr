@@ -4,12 +4,8 @@ dependencyResolutionManagement {
   repositories {
     mavenCentral()
     google()
-    maven("https://oss.sonatype.org/content/repositories/snapshots") {
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
       name = "snapshots-maven-central"
-      mavenContent { snapshotsOnly() }
-    }
-    maven("https://s01.oss.sonatype.org/content/repositories/snapshots") {
-      name = "snapshots-maven-central-s01"
       mavenContent { snapshotsOnly() }
     }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
@@ -22,12 +18,8 @@ pluginManagement {
   repositories {
     mavenCentral()
     google()
-    maven("https://oss.sonatype.org/content/repositories/snapshots") {
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
       name = "snapshots-maven-central"
-      mavenContent { snapshotsOnly() }
-    }
-    maven("https://s01.oss.sonatype.org/content/repositories/snapshots") {
-      name = "snapshots-maven-central-s01"
       mavenContent { snapshotsOnly() }
     }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
