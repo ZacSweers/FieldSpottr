@@ -4,15 +4,13 @@ dependencyResolutionManagement {
   repositories {
     mavenCentral()
     google()
-    maven("https://oss.sonatype.org/content/repositories/snapshots") {
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
       name = "snapshots-maven-central"
       mavenContent { snapshotsOnly() }
     }
-    maven("https://s01.oss.sonatype.org/content/repositories/snapshots") {
-      name = "snapshots-maven-central-s01"
-      mavenContent { snapshotsOnly() }
-    }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    maven("https://packages.jetbrains.team/maven/p/kt/dev/")
+    mavenLocal()
   }
 }
 
@@ -20,15 +18,13 @@ pluginManagement {
   repositories {
     mavenCentral()
     google()
-    maven("https://oss.sonatype.org/content/repositories/snapshots") {
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
       name = "snapshots-maven-central"
       mavenContent { snapshotsOnly() }
     }
-    maven("https://s01.oss.sonatype.org/content/repositories/snapshots") {
-      name = "snapshots-maven-central-s01"
-      mavenContent { snapshotsOnly() }
-    }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    maven("https://packages.jetbrains.team/maven/p/kt/dev/")
+    mavenLocal()
     // Gradle's plugin portal proxies jcenter, which we don't want. To avoid this, we specify
     // exactly which dependencies to pull from here.
     exclusiveContent {
