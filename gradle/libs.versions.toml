@@ -1,6 +1,6 @@
 [versions]
 aboutLicenses = "13.1.0"
-androidx-activity = "1.12.1"
+androidx-activity = "1.12.2"
 androidx-appcompat = "1.7.1"
 agp = "8.13.2"
 assertk = "0.28.1"
