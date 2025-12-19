@@ -6,6 +6,7 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import com.slack.circuit.backstack.rememberSaveableBackStack
 import com.slack.circuit.foundation.Circuit
 import com.slack.circuit.foundation.CircuitCompositionLocals
@@ -21,10 +22,10 @@ import dev.zacsweers.metro.Inject
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 @Inject
-fun FieldSpottr(circuit: Circuit, @Assisted onRootPop: () -> Unit) {
+fun FieldSpottrApp(circuit: Circuit, @Assisted modifier: Modifier = Modifier, @Assisted onRootPop: () -> Unit) {
   CircuitCompositionLocals(circuit) {
     FSTheme {
-      SharedElementTransitionLayout {
+      SharedElementTransitionLayout(modifier) {
         Surface(color = MaterialTheme.colorScheme.background) {
           val backStack = rememberSaveableBackStack(HomeScreen)
           val navigator = rememberCircuitNavigator(backStack) { onRootPop() }

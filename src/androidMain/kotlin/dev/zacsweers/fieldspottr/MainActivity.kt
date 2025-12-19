@@ -20,7 +20,7 @@ class MainActivity : AppCompatActivity() {
     installSplashScreen()
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
-    val FieldSpottrApp = (application as FieldSpottrApplication).fsGraph.fieldSpottrApp
+    val FieldSpottrApp = (application as FieldSpottrApplication).fsGraph.app
     setContent { FieldSpottrApp(onRootPop = ::finish) }
   }
 }

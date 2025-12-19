@@ -7,7 +7,7 @@ import co.touchlab.kermit.loggerConfigInit
 import com.slack.circuit.foundation.Circuit
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.presenterOf
-import dev.zacsweers.fieldspottr.FieldSpottrClass
+import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.About
 import dev.zacsweers.fieldspottr.AboutScreen
 import dev.zacsweers.fieldspottr.BuildConfig
@@ -33,7 +33,7 @@ import okio.SYSTEM
 
 @SingleIn(AppScope::class)
 interface FSGraph {
-  val fieldSpottrApp: FieldSpottrClass
+  val app: FieldSpottrApp
 
   @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM
 
