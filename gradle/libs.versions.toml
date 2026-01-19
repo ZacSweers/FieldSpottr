@@ -46,7 +46,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
-bugsnag-android = "com.bugsnag:bugsnag-android:6.21.0"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.22.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
