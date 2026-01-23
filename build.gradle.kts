@@ -16,7 +16,6 @@ plugins {
   alias(libs.plugins.spotless)
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
-  alias(libs.plugins.compose.hotReload)
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
@@ -120,7 +119,7 @@ kotlin {
       dependencies {
         // API for klib reasons
         api(libs.calf.ui)
-        implementation(compose.components.resources)
+        implementation(libs.compose.components.resources)
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
