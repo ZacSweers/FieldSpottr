@@ -1,38 +1,3 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
-  <application
-      android:name="dev.zacsweers.fieldspottr.FieldSpottrApplication"
-      android:enableOnBackInvokedCallback="true"
-      android:icon="@mipmap/ic_launcher"
-      android:label="FieldSpottr"
-      android:roundIcon="@mipmap/ic_launcher"
-      android:theme="@style/Theme.App.Starting">
-    <activity
-        android:name="dev.zacsweers.fieldspottr.MainActivity"
-        android:configChanges="colorMode|density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
-        android:exported="true">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN" />
-        <category android:name="android.intent.category.LAUNCHER" />
-      </intent-filter>
-      <intent-filter tools:ignore="AppLinkUrlError">
-        <action android:name="android.intent.action.VIEW" />
-
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-      </intent-filter>
-    </activity>
-
-    <meta-data
-        android:name="com.bugsnag.android.API_KEY"
-        android:value="${bugsnagApiKey}" />
-    <meta-data
-        android:name="com.google.android.geo.API_KEY"
-        android:value="${mapsApiKey}" />
-  </application>
-
-  <uses-permission android:name="android.permission.INTERNET" />
-</manifest>
+<manifest />
