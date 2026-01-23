@@ -2,7 +2,7 @@
 aboutLicenses = "13.2.1"
 androidx-activity = "1.12.4"
 androidx-appcompat = "1.7.1"
-agp = "8.13.2"
+agp = "9.0.0"
 assertk = "0.28.1"
 calf = "0.9.0"
 circuit = "0.33.0"
@@ -24,6 +24,7 @@ sqldelight = "2.2.1"
 [plugins]
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
+agp-kotlin-multiplatform = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
 buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.7" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
