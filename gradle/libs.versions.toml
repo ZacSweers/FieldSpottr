@@ -24,7 +24,6 @@ sqldelight = "2.2.1"
 [plugins]
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
-agp-library = { id = "com.android.library", version.ref = "agp" }
 agp-kotlin-multiplatform = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
 buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.7" }
