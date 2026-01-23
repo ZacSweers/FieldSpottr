@@ -65,3 +65,4 @@ develocity {
 }
 
 rootProject.name = "field-spottr-root"
+include(":shared")
