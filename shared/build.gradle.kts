@@ -8,8 +8,8 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.konan.target.Family
 
 plugins {
+    alias(libs.plugins.agp.library)
     alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.agp.application)
     alias(libs.plugins.kotlin.plugin.parcelize)
     alias(libs.plugins.spotless)
     alias(libs.plugins.compose)
@@ -228,20 +228,8 @@ buildConfig {
 }
 
 android {
-    namespace = appId
+    namespace = "dev.zacsweers.fieldspottr.shared"
     compileSdk = 36
-
-    defaultConfig {
-        versionCode = fsVersionCode.toInt()
-        versionName = fsVersionName
-        minSdk = 29
-        targetSdk = 36
-        // Here because Bugsnag requires it in manifests for some reason
-        manifestPlaceholders["bugsnagApiKey"] =
-            providers.gradleProperty("fs_bugsnag_key").getOrElse("")
-        manifestPlaceholders["mapsApiKey"] =
-            providers.gradleProperty("fs_maps_api_key").getOrElse("")
-    }
 
     buildFeatures { compose = true }
 
@@ -254,40 +242,6 @@ android {
         lintConfig = file("lint.xml")
         checkTestSources = true
         disable += "ComposableNaming"
-    }
-
-    signingConfigs {
-        if (rootProject.file("release/app-release.jks").exists()) {
-            create("release") {
-                storeFile = rootProject.file("release/app-release.jks")
-                storePassword = providers.gradleProperty("fs_release_keystore_pwd").orNull
-                keyAlias = "zacsweers-fieldspottr"
-                keyPassword = providers.gradleProperty("fs_release_key_pwd").orNull
-            }
-        }
-    }
-
-    buildTypes {
-        maybeCreate("debug").apply {
-            versionNameSuffix = "-dev"
-            applicationIdSuffix = ".debug"
-            matchingFallbacks += listOf("release")
-        }
-        maybeCreate("release").apply {
-            isDebuggable = false
-            isMinifyEnabled = true
-            matchingFallbacks += listOf("release")
-            proguardFiles("proguardrules.pro")
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs["debug"]
-        }
-    }
-
-    bundle {}
-
-    compileOptions { isCoreLibraryDesugaringEnabled = true }
-    dependencies {
-        add("coreLibraryDesugaring", libs.desugarJdkLibs)
-        add("lintChecks", libs.lints.compose)
     }
 }
 
