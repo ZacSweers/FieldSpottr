@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.agp.application)
+    alias(libs.plugins.compose)
 }
 
 val appId = "dev.zacsweers.fieldspottr"
@@ -24,8 +25,6 @@ android {
         manifestPlaceholders["mapsApiKey"] =
             providers.gradleProperty("fs_maps_api_key").getOrElse("")
     }
-
-    buildFeatures { compose = true }
 
     compileOptions {
         sourceCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()

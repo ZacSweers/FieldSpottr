@@ -8,7 +8,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.konan.target.Family
 
 plugins {
-    alias(libs.plugins.agp.library)
+    alias(libs.plugins.agp.kotlin.multiplatform)
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.plugin.parcelize)
     alias(libs.plugins.spotless)
@@ -60,7 +60,16 @@ spotless {
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
-    androidTarget {
+    androidLibrary {
+        namespace = "dev.zacsweers.fieldspottr.shared"
+        compileSdk = 36
+
+        lint {
+            lintConfig = file("lint.xml")
+            checkTestSources = true
+            disable += "ComposableNaming"
+        }
+
         compilerOptions {
             freeCompilerArgs.addAll(
                 "-P",
@@ -225,24 +234,6 @@ buildConfig {
     )
     buildConfigField("String?", "MAPS_API_KEY", providers.gradleProperty("fs_maps_api_key").orNull)
     generateAtSync = true
-}
-
-android {
-    namespace = "dev.zacsweers.fieldspottr.shared"
-    compileSdk = 36
-
-    buildFeatures { compose = true }
-
-    compileOptions {
-        sourceCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()
-        targetCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()
-    }
-
-    lint {
-        lintConfig = file("lint.xml")
-        checkTestSources = true
-        disable += "ComposableNaming"
-    }
 }
 
 bugsnag { enabled = !providers.gradleProperty("fs_bugsnag_key").orNull.isNullOrBlank() }
