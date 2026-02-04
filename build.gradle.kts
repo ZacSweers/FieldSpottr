@@ -78,7 +78,6 @@ kotlin {
         // Match JVM assertion behavior:
         // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
         "-Xassertions=jvm",
-        "-Xtype-enhancement-improvements-strict-mode",
       )
     }
   }
@@ -95,7 +94,6 @@ kotlin {
         // Match JVM assertion behavior:
         // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
         "-Xassertions=jvm",
-        "-Xtype-enhancement-improvements-strict-mode",
       )
     }
   }
