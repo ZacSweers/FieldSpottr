@@ -1,6 +1,6 @@
 [versions]
 aboutLicenses = "13.2.1"
-androidx-activity = "1.12.2"
+androidx-activity = "1.12.3"
 androidx-appcompat = "1.7.1"
 agp = "8.13.2"
 assertk = "0.28.1"
@@ -15,8 +15,8 @@ kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.10.0"
 ktfmt = "0.56"
 ktor = "3.4.0"
-mapsCompose = "7.0.0"
-metro = "0.10.1"
+mapsCompose = "8.0.1"
+metro = "0.10.2"
 okio = "3.16.4"
 spotless = "8.2.0"
 sqldelight = "2.2.1"
@@ -44,7 +44,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
-bugsnag-android = "com.bugsnag:bugsnag-android:6.22.0"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.23.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
