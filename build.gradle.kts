@@ -99,8 +99,9 @@ kotlin {
   }
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
-  iosArm64()
-  iosSimulatorArm64()
+  listOf(iosArm64(), iosSimulatorArm64()).forEach {
+    it.compilerOptions.freeCompilerArgs.add("-Xbinary=bundleId=dev.zacsweers.FieldSpottr")
+  }
 
   compilerOptions {
     progressiveMode = true
