@@ -30,7 +30,7 @@ android {
   }
 
   lint {
-    lintConfig = file("lint.xml")
+    lintConfig = rootProject.file("lint.xml")
     checkTestSources = true
     disable += "ComposableNaming"
   }

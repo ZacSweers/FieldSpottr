@@ -65,7 +65,7 @@ kotlin {
     compileSdk = 36
 
     lint {
-      lintConfig = file("lint.xml")
+      lintConfig = rootProject.file("lint.xml")
       checkTestSources = true
       disable += "ComposableNaming"
     }
