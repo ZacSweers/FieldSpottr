@@ -63,7 +63,7 @@ fun main() {
 @OptIn(ExperimentalSerializationApi::class)
 private fun dumpAreasJson(json: Json) {
   val workingDir = Paths.get("").toAbsolutePath()
-  val path = workingDir.resolve("areas.json")
+  val path = workingDir.resolve("../areas.json")
   val prettyPrintingJson =
     Json(json) {
       prettyPrint = true
