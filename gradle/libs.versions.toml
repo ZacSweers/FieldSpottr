@@ -1,29 +1,30 @@
 [versions]
 aboutLicenses = "13.2.1"
-androidx-activity = "1.12.3"
+androidx-activity = "1.12.4"
 androidx-appcompat = "1.7.1"
-agp = "8.13.2"
+agp = "9.0.1"
 assertk = "0.28.1"
 calf = "0.9.0"
-circuit = "0.32.0"
-compose-jb = "1.10.0"
-jdk = "24"
+circuit = "0.33.0"
+compose-jb = "1.10.1"
+jdk = "25"
 jvmTarget = "11"
 kermit = "2.0.8"
-kotlin = "2.3.0"
+kotlin = "2.3.10"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.10.0"
 ktfmt = "0.56"
 ktor = "3.4.0"
-mapsCompose = "8.0.1"
-metro = "0.10.2"
+mapsCompose = "8.1.0"
+metro = "0.10.4"
 okio = "3.16.4"
-spotless = "8.2.0"
+spotless = "8.2.1"
 sqldelight = "2.2.1"
 
 [plugins]
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
 agp-application = { id = "com.android.application", version.ref = "agp" }
+agp-kotlin-multiplatform = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
 buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.7" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
@@ -44,7 +45,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
-bugsnag-android = "com.bugsnag:bugsnag-android:6.23.0"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.24.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
