@@ -55,7 +55,7 @@ fun main() {
         }
       },
     ) {
-      FieldSpottrApp(fsGraph.circuit, ::exitApplication)
+      fsGraph.fsApp(onRootPop = ::exitApplication)
     }
   }
 }

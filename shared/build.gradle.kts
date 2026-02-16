@@ -85,7 +85,6 @@ kotlin {
         // Match JVM assertion behavior:
         // https://publicobject.com/2019/11/18/kotlins-assert-is-not-like-javas-assert/
         "-Xassertions=jvm",
-        "-Xtype-enhancement-improvements-strict-mode",
       )
     }
   }
@@ -108,8 +107,9 @@ kotlin {
   }
   jvmToolchain(libs.versions.jvmTarget.get().toInt())
 
-  iosArm64()
-  iosSimulatorArm64()
+  listOf(iosArm64(), iosSimulatorArm64()).forEach {
+    it.compilerOptions.freeCompilerArgs.add("-Xbinary=bundleId=dev.zacsweers.FieldSpottr")
+  }
 
   compilerOptions {
     progressiveMode = true

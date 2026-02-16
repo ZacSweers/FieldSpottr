@@ -45,7 +45,6 @@ data class Area(
 
 @DslMarker annotation class AreaDSL
 
-@AreaDSL
 fun buildAreas(block: AreasBuilder.() -> Unit): Areas {
   val builder = AreasBuilder()
   builder.block()
