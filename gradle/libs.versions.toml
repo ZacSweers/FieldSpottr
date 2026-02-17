@@ -7,6 +7,7 @@ assertk = "0.28.1"
 calf = "0.9.0"
 circuit = "0.33.0"
 compose-jb = "1.10.1"
+androidCompileSdk = "36"
 jdk = "25"
 jvmTarget = "11"
 kermit = "2.0.8"
@@ -28,6 +29,7 @@ agp-kotlin-multiplatform = { id = "com.android.kotlin.multiplatform.library", ve
 bugsnag = { id = "com.bugsnag.android.gradle", version = "8.2.0" }
 buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.7" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-plugin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }
@@ -38,6 +40,7 @@ sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 
 [libraries]
 aboutLicenses = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutLicenses" }
+agp-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 androidx-appCompat = { module = "androidx.appcompat:appcompat", version.ref = "androidx-appcompat" }
 androidx-compose-integration-activity = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
 androidx-splash = "androidx.core:core-splashscreen:1.2.0"
@@ -64,6 +67,7 @@ coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", ve
 desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.5"
 kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
+kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 
 kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.7.1"
@@ -88,4 +92,5 @@ sqldelight-driver-android = { module = "app.cash.sqldelight:android-driver", ver
 sqldelight-driver-jdbc = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
 sqldelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqldelight" }
 sqldelight-async = { module = "app.cash.sqldelight:async-extensions", version.ref = "sqldelight" }
+spotless-gradlePlugin = { module = "com.diffplug.spotless:spotless-plugin-gradle", version.ref = "spotless" }
 sqldelight-coroutines = { module = "app.cash.sqldelight:coroutines-extensions", version.ref = "sqldelight" }

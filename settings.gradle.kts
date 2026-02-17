@@ -17,6 +17,7 @@ dependencyResolutionManagement {
 }
 
 pluginManagement {
+  includeBuild("build-logic")
   repositories {
     mavenCentral()
     google()
@@ -47,7 +48,7 @@ pluginManagement {
   }
 }
 
-plugins { id("com.gradle.develocity") version "4.1" }
+plugins { id("com.gradle.develocity") version "4.3.2" }
 
 develocity {
   buildScan {
@@ -65,5 +66,7 @@ develocity {
 }
 
 rootProject.name = "field-spottr-root"
+
 include(":android")
+
 include(":shared")
