@@ -1,6 +1,9 @@
+// Copyright (C) 2026 Zac Sweers
+// SPDX-License-Identifier: Apache-2.0
 plugins {
   alias(libs.plugins.agp.application)
   alias(libs.plugins.compose)
+  id("fs.android")
 }
 
 val appId = "dev.zacsweers.fieldspottr"
@@ -12,27 +15,13 @@ val isReleasing = providers.environmentVariable("RELEASING").map(String::toBoole
 
 android {
   namespace = appId
-  compileSdk = 36
 
   defaultConfig {
     versionCode = fsVersionCode.toInt()
     versionName = fsVersionName
-    minSdk = 29
-    targetSdk = 36
     // Here because Bugsnag requires it in manifests for some reason
     manifestPlaceholders["bugsnagApiKey"] = providers.gradleProperty("fs_bugsnag_key").getOrElse("")
     manifestPlaceholders["mapsApiKey"] = providers.gradleProperty("fs_maps_api_key").getOrElse("")
-  }
-
-  compileOptions {
-    sourceCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()
-    targetCompatibility = libs.versions.jvmTarget.map(JavaVersion::toVersion).get()
-  }
-
-  lint {
-    lintConfig = rootProject.file("lint.xml")
-    checkTestSources = true
-    disable += "ComposableNaming"
   }
 
   signingConfigs {
@@ -50,7 +39,6 @@ android {
     maybeCreate("debug").apply {
       versionNameSuffix = "-dev"
       applicationIdSuffix = ".debug"
-      matchingFallbacks += listOf("release")
     }
     maybeCreate("release").apply {
       isDebuggable = false
