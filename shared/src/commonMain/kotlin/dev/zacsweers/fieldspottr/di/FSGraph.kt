@@ -10,6 +10,7 @@ import com.slack.circuit.runtime.presenter.presenterOf
 import dev.zacsweers.fieldspottr.About
 import dev.zacsweers.fieldspottr.AboutScreen
 import dev.zacsweers.fieldspottr.BuildConfig
+import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.Home
 import dev.zacsweers.fieldspottr.HomePresenter
 import dev.zacsweers.fieldspottr.HomeScreen
@@ -30,9 +31,8 @@ import kotlinx.serialization.json.Json
 import okio.FileSystem
 import okio.SYSTEM
 
-@SingleIn(AppScope::class)
 interface FSGraph {
-  val circuit: Circuit
+  val fsApp: FieldSpottrApp
 
   @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM
 

@@ -35,8 +35,9 @@ kotlin {
   }
   jvm { mainRun { mainClass.set("dev.zacsweers.fieldspottr.MainKt") } }
 
-  iosArm64()
-  iosSimulatorArm64()
+  listOf(iosArm64(), iosSimulatorArm64()).forEach {
+    it.compilerOptions.freeCompilerArgs.add("-Xbinary=bundleId=dev.zacsweers.FieldSpottr")
+  }
 
   sourceSets {
     commonMain {
