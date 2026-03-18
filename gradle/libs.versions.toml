@@ -19,7 +19,7 @@ ktor = "3.4.1"
 mapsCompose = "8.2.2"
 metro = "0.11.3"
 okio = "3.17.0"
-spotless = "8.3.0"
+spotless = "8.4.0"
 sqldelight = "2.3.2"
 
 [plugins]
