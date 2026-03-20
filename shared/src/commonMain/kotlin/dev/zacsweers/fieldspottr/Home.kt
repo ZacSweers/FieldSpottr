@@ -42,6 +42,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -326,6 +328,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       // Shrink date selector text while dragging, pop back on release
       val datePulse = remember { Animatable(1f) }
       val scope = rememberCoroutineScope()
+      val haptics = LocalHapticFeedback.current
 
       val cornerSlot =
         remember(state.date) {
@@ -358,8 +361,10 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
             },
             onDragStopped = {
               if (dragOffset > 100f) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 state.eventSink(FilterDate(state.date.minus(1, DateTimeUnit.DAY)))
               } else if (dragOffset < -100f) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 state.eventSink(FilterDate(state.date.plus(1, DateTimeUnit.DAY)))
               }
               dragOffset = 0f
