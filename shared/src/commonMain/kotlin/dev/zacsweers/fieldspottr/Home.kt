@@ -413,6 +413,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
               orientation = Orientation.Horizontal,
               onDragStarted = {
                 dragOffset = 0f
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 scope.launch { datePulse.animateTo(0.8f, tween(150)) }
               },
               onDragStopped = {
