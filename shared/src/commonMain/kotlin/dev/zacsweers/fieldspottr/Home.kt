@@ -2,8 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
@@ -28,8 +35,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
@@ -71,8 +80,12 @@ import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
 import kotlin.time.Clock.System
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.minus
+import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
 @CommonParcelize
@@ -310,19 +323,54 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       GroupSelector(state.selectedGroup, state.areas) { newGroup ->
         state.eventSink(ChangeGroup(newGroup))
       }
+      // Shrink date selector text while dragging, pop back on release
+      val datePulse = remember { Animatable(1f) }
+      val scope = rememberCoroutineScope()
+
       val cornerSlot =
         remember(state.date) {
           movableContentOf {
-            DateSelector(state.date) { newDate -> state.eventSink(FilterDate(newDate)) }
+            DateSelector(
+              state.date,
+              contentScale = datePulse.value,
+            ) { newDate ->
+              state.eventSink(FilterDate(newDate))
+            }
           }
         }
+
+      // Swipe left/right to navigate days
+      var dragOffset by remember { mutableFloatStateOf(0f) }
+      val draggableState = rememberDraggableState { delta -> dragOffset += delta }
 
       PermitGrid(
         state.selectedGroup,
         state.permits,
         state.areas,
         cornerSlot = cornerSlot,
-        modifier = Modifier.align(CenterHorizontally).weight(1f),
+        modifier =
+          Modifier.align(CenterHorizontally).weight(1f).draggable(
+            state = draggableState,
+            orientation = Orientation.Horizontal,
+            onDragStarted = {
+              dragOffset = 0f
+              scope.launch { datePulse.animateTo(0.8f, tween(150)) }
+            },
+            onDragStopped = {
+              if (dragOffset > 100f) {
+                state.eventSink(FilterDate(state.date.minus(1, DateTimeUnit.DAY)))
+              } else if (dragOffset < -100f) {
+                state.eventSink(FilterDate(state.date.plus(1, DateTimeUnit.DAY)))
+              }
+              dragOffset = 0f
+              scope.launch {
+                datePulse.animateTo(
+                  1f,
+                  spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                )
+              }
+            },
+          ),
       ) { event ->
         state.eventSink(ShowEventDetail(event))
       }

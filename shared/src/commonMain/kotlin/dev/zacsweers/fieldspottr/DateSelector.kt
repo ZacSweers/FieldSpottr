@@ -39,6 +39,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,6 +65,7 @@ import kotlinx.datetime.toLocalDateTime
 fun DateSelector(
   currentlySelectedDate: LocalDate,
   modifier: Modifier = Modifier,
+  contentScale: Float = 1f,
   onDateSelected: (LocalDate) -> Unit,
 ) {
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
@@ -156,7 +158,11 @@ fun DateSelector(
     color = MaterialTheme.colorScheme.secondaryContainer,
   ) {
     Column(
-      modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp),
+      modifier =
+        Modifier.padding(vertical = 4.dp, horizontal = 4.dp).graphicsLayer {
+          scaleX = contentScale
+          scaleY = contentScale
+        },
       horizontalAlignment = CenterHorizontally,
       verticalArrangement = Arrangement.Center,
     ) {
