@@ -1,6 +1,55 @@
 {
   "entries": [
     {
+      "areaName": "Baruch",
+      "displayName": "Baruch Playground",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
+      "fieldGroups": [
+        {
+          "name": "Baruch",
+          "fields": [
+            {
+              "name": "Softball-01",
+              "displayName": "Softball 1",
+              "group": "Baruch",
+              "sharedFields": [
+                "field1"
+              ]
+            },
+            {
+              "name": "Football-01",
+              "displayName": "Soccer 1",
+              "group": "Baruch",
+              "sharedFields": [
+                "field1"
+              ]
+            },
+            {
+              "name": "Football-02",
+              "displayName": "Soccer 2",
+              "group": "Baruch",
+              "sharedFields": [
+                "field2"
+              ]
+            },
+            {
+              "name": "Softball-02",
+              "displayName": "Softball 2",
+              "group": "Baruch",
+              "sharedFields": [
+                "field2"
+              ]
+            }
+          ],
+          "area": "Baruch",
+          "location": {
+            "gmaps": "https://maps.app.goo.gl/S6x4PgTCGucMKnB9A",
+            "amaps": "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground"
+          }
+        }
+      ]
+    },
+    {
       "areaName": "ERP",
       "displayName": "East River Park",
       "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
@@ -114,55 +163,6 @@
           "location": {
             "gmaps": "https://www.google.com/maps/place/East+River+Park+*+Grand+Street+Mini+Field/@40.7135106,-73.9766765,19.39z/data=!4m6!3m5!1s0x89c25b0020f63825:0x94cfd8ce67954ddd!8m2!3d40.7133945!4d-73.9768339!16s%2Fg%2F11yft3l7v2",
             "amaps": "https://maps.apple.com/place?coordinate=40.713506,-73.976811&name=Marked%20Location"
-          }
-        }
-      ]
-    },
-    {
-      "areaName": "Baruch",
-      "displayName": "Baruch Playground",
-      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M165/csv",
-      "fieldGroups": [
-        {
-          "name": "Baruch",
-          "fields": [
-            {
-              "name": "Softball-01",
-              "displayName": "Softball 1",
-              "group": "Baruch",
-              "sharedFields": [
-                "field1"
-              ]
-            },
-            {
-              "name": "Football-01",
-              "displayName": "Soccer 1",
-              "group": "Baruch",
-              "sharedFields": [
-                "field1"
-              ]
-            },
-            {
-              "name": "Football-02",
-              "displayName": "Soccer 2",
-              "group": "Baruch",
-              "sharedFields": [
-                "field2"
-              ]
-            },
-            {
-              "name": "Softball-02",
-              "displayName": "Softball 2",
-              "group": "Baruch",
-              "sharedFields": [
-                "field2"
-              ]
-            }
-          ],
-          "area": "Baruch",
-          "location": {
-            "gmaps": "https://maps.app.goo.gl/S6x4PgTCGucMKnB9A",
-            "amaps": "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground"
           }
         }
       ]
@@ -351,6 +351,39 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/ji38JTioKTi1aCZu8",
             "amaps": "https://maps.apple.com/?address=729%20E%2016th%20St,%20New%20York,%20NY%20%2010009,%20United%20States&auid=6845864669219202528&ll=40.730238,-73.973458&lsp=9902&q=Murphy%20Brothers%20Playground"
+          }
+        }
+      ]
+    },
+    {
+      "areaName": "St. Vartan Park",
+      "displayName": "St. Vartan Park",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M076/csv",
+      "fieldGroups": [
+        {
+          "name": "St. Vartan Park",
+          "fields": [
+            {
+              "name": "Soccer-01",
+              "displayName": "Soccer",
+              "group": "St. Vartan Park",
+              "sharedFields": [
+                "stvartan"
+              ]
+            },
+            {
+              "name": "Softball-01",
+              "displayName": "Softball",
+              "group": "St. Vartan Park",
+              "sharedFields": [
+                "stvartan"
+              ]
+            }
+          ],
+          "area": "St. Vartan Park",
+          "location": {
+            "gmaps": "http://maps.google.com/maps?t=h&daddr=40.74512959480%2C%20-73.97369761560%20%28Center%20of%20St%20Vartan%20Park%29",
+            "amaps": "https://maps.apple.com/?ll=40.745130,-73.973698&q=St%20Vartan%20Park"
           }
         }
       ]
