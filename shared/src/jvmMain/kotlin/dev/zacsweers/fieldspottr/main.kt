@@ -23,8 +23,12 @@ import kotlin.io.path.writeText
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
-fun main() {
+fun main(args: Array<String>) {
   val fsGraph = createGraph<JvmFSGraph>()
+  if ("--dump" in args) {
+    dumpAreasJson(fsGraph.json)
+    return
+  }
   application {
     val windowState =
       rememberWindowState(
