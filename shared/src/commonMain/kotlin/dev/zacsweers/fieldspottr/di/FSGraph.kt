@@ -23,6 +23,7 @@ import dev.zacsweers.fieldspottr.PermitDetailsScreen
 import dev.zacsweers.fieldspottr.ScaffoldPresenter
 import dev.zacsweers.fieldspottr.ScaffoldScreen
 import dev.zacsweers.fieldspottr.ScaffoldScreenContent
+import dev.zacsweers.fieldspottr.data.FSPreferencesStore
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Provides
@@ -56,10 +57,13 @@ interface FSGraph {
 
   @Provides
   @SingleIn(AppScope::class)
-  fun provideCircuit(permitRepository: PermitRepository): Circuit {
+  fun provideCircuit(
+    permitRepository: PermitRepository,
+    preferencesStore: FSPreferencesStore,
+  ): Circuit {
     return Circuit.Builder()
       .addPresenter<HomeScreen, HomeScreen.State> { _, navigator, _ ->
-        presenterOf { HomePresenter(permitRepository, navigator) }
+        presenterOf { HomePresenter(permitRepository, preferencesStore, navigator) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
       .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->

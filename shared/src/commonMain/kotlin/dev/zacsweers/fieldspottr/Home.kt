@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.BottomSheetDefaults
@@ -25,6 +26,7 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -42,10 +44,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -53,6 +54,7 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -72,8 +74,10 @@ import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowLocation
+import dev.zacsweers.fieldspottr.HomeScreen.Event.ToggleDefaultGroup
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
+import dev.zacsweers.fieldspottr.data.FSPreferencesStore
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -81,6 +85,7 @@ import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
 import kotlin.time.Clock.System
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.DateTimeUnit
@@ -97,7 +102,9 @@ data object HomeScreen : Screen {
     val date: LocalDate,
     val areas: Areas,
     val selectedGroup: String,
+    val isDefaultGroup: Boolean,
     val loadingMessage: String?,
+    val defaultGroupMessage: String?,
     val permits: PermitState?,
     val detailedEvent: Reserved?,
     val eventSink: (Event) -> Unit = {},
@@ -117,11 +124,17 @@ data object HomeScreen : Screen {
     data class ChangeGroup(val group: String) : Event
 
     data object ShowLocation : Event
+
+    data object ToggleDefaultGroup : Event
   }
 }
 
 @Composable
-fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScreen.State {
+fun HomePresenter(
+  repository: PermitRepository,
+  preferencesStore: FSPreferencesStore,
+  navigator: Navigator,
+): HomeScreen.State {
   var selectedDate by rememberRetained {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
@@ -131,8 +144,17 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
   var populateDb by rememberRetained { mutableStateOf(true) }
   var forceRefresh by rememberRetained { mutableStateOf(false) }
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
+  val defaultGroup by preferencesStore.defaultGroup.collectAsRetainedState(null)
   var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
+  // Apply the persisted default group once DataStore has loaded
+  LaunchedEffect(Unit) {
+    val saved = preferencesStore.defaultGroup.first()
+    if (saved != null && saved in areas.groups) {
+      selectedGroup = saved
+    }
+  }
   var currentlyDetailedEvent by rememberRetained { mutableStateOf<Reserved?>(null) }
+  var defaultGroupMessage by rememberRetained { mutableStateOf<String?>(null) }
 
   val permitsFlow =
     rememberRetained(selectedDate, selectedGroup) {
@@ -153,13 +175,16 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
       populateDb = false
     }
   }
+  val scope = rememberCoroutineScope()
   val uriHandler = LocalUriHandler.current
   return HomeScreen.State(
     showInfo = showInfo,
     areas = areas,
     date = selectedDate,
     selectedGroup = selectedGroup,
+    isDefaultGroup = defaultGroup == selectedGroup,
     loadingMessage = loadingMessage,
+    defaultGroupMessage = defaultGroupMessage,
     permits = permits,
     detailedEvent = currentlyDetailedEvent,
   ) { event ->
@@ -181,7 +206,17 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
       is ShowEventDetail -> {
         currentlyDetailedEvent = event.event
       }
-
+      ToggleDefaultGroup -> {
+        val isClearing = defaultGroup == selectedGroup
+        val newDefault = if (isClearing) null else selectedGroup
+        defaultGroupMessage =
+          if (isClearing) {
+            "Cleared default group"
+          } else {
+            "Set $selectedGroup as default"
+          }
+        scope.launch { preferencesStore.setDefaultGroup(newDefault) }
+      }
       ShowLocation -> {
         val location = areas.groups.getValue(selectedGroup).location
         val coords = extractCoordinatesFromUrl(location.gmaps, location.amaps)
@@ -221,6 +256,11 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   LaunchedEffect(state.loadingMessage) {
     state.loadingMessage?.let {
       snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Indefinite)
+    }
+  }
+  LaunchedEffect(state.defaultGroupMessage) {
+    state.defaultGroupMessage?.let {
+      snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
     }
   }
 
@@ -301,6 +341,23 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
           }
         },
         actions = {
+          IconButton(onClick = { state.eventSink(ToggleDefaultGroup) }) {
+            Icon(
+              Icons.Filled.Star,
+              contentDescription =
+                if (state.isDefaultGroup) {
+                  "Clear default group"
+                } else {
+                  "Set ${state.selectedGroup} as default"
+                },
+              tint =
+                if (state.isDefaultGroup) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                },
+            )
+          }
           IconButton(onClick = { state.eventSink(ShowLocation) }) {
             Icon(Icons.Outlined.Place, contentDescription = "Location")
           }
@@ -333,10 +390,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       val cornerSlot =
         remember(state.date) {
           movableContentOf {
-            DateSelector(
-              state.date,
-              contentScale = datePulse.value,
-            ) { newDate ->
+            DateSelector(state.date, contentScale = datePulse.value) { newDate ->
               state.eventSink(FilterDate(newDate))
             }
           }
@@ -352,30 +406,29 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         state.areas,
         cornerSlot = cornerSlot,
         modifier =
-          Modifier.align(CenterHorizontally).weight(1f).draggable(
-            state = draggableState,
-            orientation = Orientation.Horizontal,
-            onDragStarted = {
-              dragOffset = 0f
-              scope.launch { datePulse.animateTo(0.8f, tween(150)) }
-            },
-            onDragStopped = {
-              if (dragOffset > 100f) {
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                state.eventSink(FilterDate(state.date.minus(1, DateTimeUnit.DAY)))
-              } else if (dragOffset < -100f) {
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                state.eventSink(FilterDate(state.date.plus(1, DateTimeUnit.DAY)))
-              }
-              dragOffset = 0f
-              scope.launch {
-                datePulse.animateTo(
-                  1f,
-                  spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                )
-              }
-            },
-          ),
+          Modifier.align(CenterHorizontally)
+            .weight(1f)
+            .draggable(
+              state = draggableState,
+              orientation = Orientation.Horizontal,
+              onDragStarted = {
+                dragOffset = 0f
+                scope.launch { datePulse.animateTo(0.8f, tween(150)) }
+              },
+              onDragStopped = {
+                if (dragOffset > 100f) {
+                  haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  state.eventSink(FilterDate(state.date.minus(1, DateTimeUnit.DAY)))
+                } else if (dragOffset < -100f) {
+                  haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  state.eventSink(FilterDate(state.date.plus(1, DateTimeUnit.DAY)))
+                }
+                dragOffset = 0f
+                scope.launch {
+                  datePulse.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                }
+              },
+            ),
       ) { event ->
         state.eventSink(ShowEventDetail(event))
       }
