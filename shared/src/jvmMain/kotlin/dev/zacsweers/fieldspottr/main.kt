@@ -23,8 +23,12 @@ import kotlin.io.path.writeText
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
-fun main() {
+fun main(args: Array<String>) {
   val fsGraph = createGraph<JvmFSGraph>()
+  if ("--dump" in args) {
+    dumpAreasJson(fsGraph.json)
+    return
+  }
   application {
     val windowState =
       rememberWindowState(
@@ -40,17 +44,18 @@ fun main() {
       // In lieu of a global shortcut handler, we best-effort with this
       // https://youtrack.jetbrains.com/issue/CMP-5337
       onKeyEvent = { event ->
-        when {
+        when (event.key) {
           // Cmd+W
-          event.key == Key.W && event.isMetaPressed && event.type == KeyEventType.KeyDown -> {
+          Key.W if event.isMetaPressed && event.type == KeyEventType.KeyDown -> {
             exitApplication()
             true
           }
           // Cmd+D
-          event.key == Key.D && event.isMetaPressed && event.type == KeyEventType.KeyDown -> {
+          Key.D if event.isMetaPressed && event.type == KeyEventType.KeyDown -> {
             dumpAreasJson(fsGraph.json)
             true
           }
+
           else -> false
         }
       },

@@ -3,6 +3,7 @@ aboutLicenses = "13.2.1"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.7.1"
 agp = "9.1.0"
+androidx-datastore = "1.2.1"
 assertk = "0.28.1"
 calf = "0.9.0"
 circuit = "0.33.1"
@@ -43,6 +44,7 @@ aboutLicenses = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref
 agp-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 androidx-appCompat = { module = "androidx.appcompat:appcompat", version.ref = "androidx-appcompat" }
 androidx-compose-integration-activity = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences-core", version.ref = "androidx-datastore" }
 androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -29,6 +32,7 @@ import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -145,6 +149,7 @@ fun PermitGrid(
       for (field in group.fields) {
         val fieldStates = fields[field] ?: FieldState.EMPTY
         Column(Modifier.weight(columnWeight)) {
+          var reservedIndex = 0
           for (fieldState in fieldStates) {
             val height =
               when (fieldState) {
@@ -153,7 +158,24 @@ fun PermitGrid(
               }
             Box(Modifier.height(height)) {
               if (fieldState is Reserved) {
-                PermitEvent(event = fieldState, onEventClick = { onEventClick(fieldState) })
+                key(permits) {
+                  val staggerDelay = reservedIndex * 30L
+                  val animProgress = remember { Animatable(0f) }
+                  LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(staggerDelay)
+                    animProgress.animateTo(1f, tween(300))
+                  }
+                  PermitEvent(
+                    event = fieldState,
+                    modifier =
+                      Modifier.graphicsLayer {
+                        alpha = animProgress.value
+                        translationY = (1f - animProgress.value) * 12f
+                      },
+                    onEventClick = { onEventClick(fieldState) },
+                  )
+                }
+                reservedIndex++
               }
               HorizontalDivider(modifier = Modifier.align(BottomCenter))
             }

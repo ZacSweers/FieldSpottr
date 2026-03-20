@@ -50,6 +50,7 @@ kotlin {
         implementation(libs.circuit.overlay)
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
+        implementation(libs.androidx.datastore.preferences)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
         implementation(libs.kotlinx.datetime)

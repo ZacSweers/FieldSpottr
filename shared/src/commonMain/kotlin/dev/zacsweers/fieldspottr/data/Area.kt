@@ -324,6 +324,23 @@ fun buildDefaultAreas(): Areas {
         )
       }
     }
+    area(
+      name = "St. Vartan Park",
+      displayName = "St. Vartan Park",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M076/csv",
+    ) {
+      group(
+        name = "St. Vartan Park",
+        location =
+          Location(
+            "http://maps.google.com/maps?t=h&daddr=40.74512959480%2C%20-73.97369761560%20%28Center%20of%20St%20Vartan%20Park%29",
+            "https://maps.apple.com/?ll=40.745130,-73.973698&q=St%20Vartan%20Park",
+          ),
+      ) {
+        field(csvName = "Soccer-01", displayName = "Soccer", sharedFields = setOf("stvartan"))
+        field(csvName = "Softball-01", displayName = "Softball", sharedFields = setOf("stvartan"))
+      }
+    }
   }
 }
 
