@@ -33,6 +33,7 @@ data class Area(
   val displayName: String,
   val csvUrl: String,
   @Serializable(with = ImmutableListSerializer::class) val fieldGroups: ImmutableList<FieldGroup>,
+  val subtitle: String? = null,
 ) {
   val fieldMappings: ImmutableMap<String, Field> by lazy {
     fieldGroups
@@ -56,8 +57,14 @@ fun buildAreas(block: AreasBuilder.() -> Unit): Areas {
 class AreasBuilder {
   private val areas = mutableListOf<Area>()
 
-  fun area(name: String, displayName: String, csvUrl: String, block: AreaBuilder.() -> Unit) {
-    val builder = AreaBuilder(name, displayName, csvUrl)
+  fun area(
+    name: String,
+    displayName: String,
+    csvUrl: String,
+    subtitle: String? = null,
+    block: AreaBuilder.() -> Unit,
+  ) {
+    val builder = AreaBuilder(name, displayName, csvUrl, subtitle)
     builder.block()
     areas.add(builder.build())
   }
@@ -66,20 +73,35 @@ class AreasBuilder {
     return areas
   }
 
-  class AreaBuilder(val name: String, val displayName: String, val csvUrl: String) {
+  class AreaBuilder(
+    val name: String,
+    val displayName: String,
+    val csvUrl: String,
+    val subtitle: String?,
+  ) {
     private val fieldGroups = mutableListOf<FieldGroup>()
 
-    fun group(name: String, location: Location, block: FieldGroupBuilder.() -> Unit) {
-      val builder = FieldGroupBuilder(name, this.name, location)
+    fun group(
+      name: String,
+      location: Location,
+      closed: String? = null,
+      block: FieldGroupBuilder.() -> Unit,
+    ) {
+      val builder = FieldGroupBuilder(name, this.name, location, closed)
       builder.block()
       fieldGroups.add(builder.build())
     }
 
     fun build(): Area {
-      return Area(name, displayName, csvUrl, fieldGroups.toImmutableList())
+      return Area(name, displayName, csvUrl, fieldGroups.toImmutableList(), subtitle)
     }
 
-    class FieldGroupBuilder(val name: String, val areaName: String, val location: Location) {
+    class FieldGroupBuilder(
+      val name: String,
+      val areaName: String,
+      val location: Location,
+      val closed: String?,
+    ) {
       private val fields = mutableListOf<Field>()
 
       fun field(csvName: String, displayName: String, sharedFields: Set<String> = setOf(csvName)) {
@@ -87,7 +109,7 @@ class AreasBuilder {
       }
 
       fun build(): FieldGroup {
-        return FieldGroup(name, fields.toImmutableList(), areaName, location)
+        return FieldGroup(name, fields.toImmutableList(), areaName, location, closed)
       }
     }
   }
@@ -118,9 +140,11 @@ fun buildDefaultAreas(): Areas {
       name = "ERP",
       displayName = "East River Park",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
+      subtitle = "Partially closed",
     ) {
       group(
         name = "Track",
+        closed = "Reconstruction",
         location =
           Location(
             "https://maps.app.goo.gl/bFmVPr5st28os4vQA",
@@ -145,6 +169,7 @@ fun buildDefaultAreas(): Areas {
       }
       group(
         name = "Field 6",
+        closed = "Reconstruction",
         location =
           Location(
             "https://maps.app.goo.gl/KD27oHCF6Jw1UhX58",
@@ -168,7 +193,7 @@ fun buildDefaultAreas(): Areas {
       ) {
         field(
           csvName = "Grand Street - Softball-01",
-          displayName = "Softball (south))",
+          displayName = "Softball (south)",
           sharedFields = setOf("field1"),
         )
         field(
@@ -351,6 +376,10 @@ data class FieldGroup(
   @Serializable(with = ImmutableListSerializer::class) val fields: ImmutableList<Field>,
   val area: String,
   val location: Location,
+  /**
+   * If non-null, this field group is closed and the value is the reason (e.g. "Reconstruction").
+   */
+  val closed: String? = null,
 )
 
 @Serializable @Immutable data class Location(val gmaps: String, val amaps: String)
