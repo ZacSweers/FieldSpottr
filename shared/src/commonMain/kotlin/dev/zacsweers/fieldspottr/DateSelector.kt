@@ -66,6 +66,7 @@ fun DateSelector(
   currentlySelectedDate: LocalDate,
   modifier: Modifier = Modifier,
   contentScale: Float = 1f,
+  permitDateRange: Pair<LocalDate, LocalDate>? = null,
   onDateSelected: (LocalDate) -> Unit,
 ) {
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
@@ -83,17 +84,30 @@ fun DateSelector(
         confirmValueChange = { true },
       )
 
-    // TODO track min/max dates available and limit to those
-    val datePickerState = rememberAdaptiveDatePickerState(current)
+    val yearRange =
+      if (permitDateRange != null) {
+        permitDateRange.first.year..permitDateRange.second.year
+      } else {
+        DatePickerDefaults.YearRange
+      }
+    val datePickerState = rememberAdaptiveDatePickerState(current, yearRange = yearRange)
+
+    // Auto-confirm when a new date is selected
+    LaunchedEffect(datePickerState.selectedDateMillis) {
+      val selected = datePickerState.selectedDateMillis
+      if (selected != null && selected != current) {
+        setCurrentSelection(selected)
+        hideSheet = true
+      }
+    }
+
     AdaptiveBottomSheet(
       onDismissRequest = { showDatePicker = false },
       adaptiveSheetState = sheetState,
       containerColor = DatePickerDefaults.colors().containerColor,
     ) {
       val content = remember {
-        movableContentOf {
-          DatePickerSheetContent(current, datePickerState, setCurrentSelection) { hideSheet = true }
-        }
+        movableContentOf { DatePickerSheetContent(datePickerState) { hideSheet = true } }
       }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
@@ -195,9 +209,7 @@ fun DateSelector(
 @Suppress("ComposeUnstableReceiver", "UnusedReceiverParameter")
 @Composable
 private fun ColumnScope.DatePickerSheetContent(
-  current: Long,
   datePickerState: AdaptiveDatePickerState,
-  updateSelection: (Long) -> Unit,
   modifier: Modifier = Modifier,
   hideSheet: () -> Unit,
 ) {
@@ -209,18 +221,6 @@ private fun ColumnScope.DatePickerSheetContent(
   Row(Modifier.padding(bottom = 16.dp, end = 16.dp), horizontalArrangement = spacedBy(16.dp)) {
     Spacer(Modifier.weight(1f))
     Button(onClick = hideSheet) { Text("Cancel") }
-    val confirmEnabled by remember {
-      derivedStateOf { datePickerState.selectedDateMillis != current }
-    }
-    Button(
-      onClick = {
-        updateSelection(datePickerState.selectedDateMillis ?: current)
-        hideSheet()
-      },
-      enabled = confirmEnabled,
-    ) {
-      Text("Confirm")
-    }
   }
 }
 

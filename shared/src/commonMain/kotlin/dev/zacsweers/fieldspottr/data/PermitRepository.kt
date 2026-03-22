@@ -49,8 +49,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
+import kotlinx.datetime.TimeZone
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import okio.Path
@@ -133,6 +135,11 @@ class PermitRepository(
 
   fun areasFlow(): StateFlow<Areas> = areasStateFlow
 
+  fun useBuiltInAreas() {
+    log("Forcing built-in areas")
+    areasStateFlow.value = Areas.default
+  }
+
   suspend fun populateDb(forceRefresh: Boolean, uiLog: (String) -> Unit): Boolean =
     withContext(Dispatchers.IO) {
       log("Starting populateDb with forceRefresh=$forceRefresh")
@@ -180,6 +187,31 @@ class PermitRepository(
       }
       return@withContext true
     }
+
+  fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {
+    return flow {
+        val result = db().fsdbQueries.permitDateRange().executeAsOne()
+        val minMillis = result.minDate
+        val maxMillis = result.maxDate
+        if (minMillis != null && maxMillis != null) {
+          val tz = TimeZone.currentSystemDefault()
+          val min = Instant.fromEpochMilliseconds(minMillis).toLocalDateTime(tz).date
+          val max = Instant.fromEpochMilliseconds(maxMillis).toLocalDateTime(tz).date
+          emit(min to max)
+        } else {
+          emit(null)
+        }
+      }
+      .flowOn(Dispatchers.IO)
+  }
+
+  fun lastUpdateFlow(areaName: String): Flow<Instant?> {
+    return flow {
+        val millis = db().fsdbQueries.lastAreaUpdate(areaName).executeAsOneOrNull()
+        emit(millis?.let { Instant.fromEpochMilliseconds(it) })
+      }
+      .flowOn(Dispatchers.IO)
+  }
 
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()

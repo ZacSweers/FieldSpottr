@@ -48,3 +48,6 @@ VALUES ?;
 
 lastAreaUpdate:
 SELECT lastUpdated FROM dbArea WHERE name = ?;
+
+permitDateRange:
+SELECT MIN(start) AS minDate, MAX(start) AS maxDate FROM dbPermit;
