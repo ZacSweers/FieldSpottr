@@ -149,7 +149,7 @@ class PermitRepository(
       val newAreas = loadLocalAreas()
       log("Loaded areas: ${newAreas.entries.map { it.areaName }}")
 
-      areasStateFlow.compareAndSet(newAreas, newAreas)
+      areasStateFlow.value = newAreas
 
       val areas = areasStateFlow.value
       val outdated =
