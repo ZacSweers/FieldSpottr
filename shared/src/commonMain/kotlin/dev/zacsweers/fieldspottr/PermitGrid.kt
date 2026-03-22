@@ -25,6 +25,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment.Companion.BottomCenter
@@ -32,11 +33,16 @@ import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.times
@@ -47,6 +53,11 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
+import kotlin.time.Clock
+import kotlinx.coroutines.delay
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
@@ -55,6 +66,7 @@ fun PermitGrid(
   selectedGroup: String,
   permits: PermitState?,
   areas: Areas,
+  selectedDate: LocalDate,
   modifier: Modifier = Modifier,
   cornerSlot: (@Composable () -> Unit)? = null,
   onEventClick: (Reserved) -> Unit = {},
@@ -65,10 +77,23 @@ fun PermitGrid(
   val columnWeight = (1f - TIME_COLUMN_WEIGHT) / numColumns
   val itemHeight = 50.dp
 
-  // Start at the earliest available permit or 9am because permits aren't possible before
-  // that anyway
-  val scrollState = rememberScrollState()
+  // Start at the earliest available permit or 8am
   val density = LocalDensity.current
+  val initialEarliestPermit =
+    remember(permits) {
+      permits
+        ?.fields
+        ?.values
+        ?.flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
+        ?.minOrNull() ?: 8
+    }
+
+  val initialScrollPx =
+    remember(initialEarliestPermit) {
+      density.run { (initialEarliestPermit * itemHeight).roundToPx() }
+    }
+
+  val scrollState = rememberScrollState(initial = initialScrollPx)
   LaunchedEffect(permits) {
     if (permits == null) return@LaunchedEffect
     val earliestPermit =
@@ -124,7 +149,9 @@ fun PermitGrid(
 
     Row(
       modifier =
-        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp).verticalScroll(scrollState)
+        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+          .verticalScroll(scrollState)
+          .nowIndicator(selectedDate, itemHeight)
     ) {
       // Time column
       Column(Modifier.weight(TIME_COLUMN_WEIGHT)) {
@@ -162,7 +189,7 @@ fun PermitGrid(
                   val staggerDelay = reservedIndex * 30L
                   val animProgress = remember { Animatable(0f) }
                   LaunchedEffect(Unit) {
-                    kotlinx.coroutines.delay(staggerDelay)
+                    delay(staggerDelay)
                     animProgress.animateTo(1f, tween(300))
                   }
                   PermitEvent(
@@ -183,6 +210,53 @@ fun PermitGrid(
         }
       }
     }
+  }
+}
+
+@Composable
+private inline fun <T> withDensity(block: Density.() -> T): T {
+  val density = LocalDensity.current
+  return with(density) { block() }
+}
+
+/** Draws a dashed "now" indicator line at the current time, animated in left-to-right. */
+@Composable
+private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modifier {
+  val now = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }
+  val isToday = selectedDate == now.date
+  if (!isToday) return this
+
+  val nowOffsetPx = withDensity { ((now.hour + now.minute / 60f) * itemHeight).toPx() }
+  val lineColor = MaterialTheme.colorScheme.secondaryContainer
+  val strokePx = withDensity { 2.dp.toPx() }
+  val dashPx = withDensity { 6.dp.toPx() }
+  val gapPx = withDensity { 4.dp.toPx() }
+
+  var previousDate by remember { mutableStateOf(selectedDate) }
+  val progress = remember { Animatable(if (isToday) 1f else 0f) }
+  LaunchedEffect(selectedDate) {
+    val dateChanged = selectedDate != previousDate
+    previousDate = selectedDate
+    if (dateChanged) {
+      progress.snapTo(0f)
+      delay(150L)
+      progress.animateTo(1f, tween(400))
+    } else {
+      progress.snapTo(1f)
+    }
+  }
+
+  return drawWithContent {
+    drawContent()
+    val endX = size.width * progress.value
+    drawLine(
+      color = lineColor,
+      start = Offset(0f, nowOffsetPx),
+      end = Offset(endX, nowOffsetPx),
+      strokeWidth = strokePx,
+      pathEffect =
+        PathEffect.dashPathEffect(floatArrayOf(dashPx, gapPx)),
+    )
   }
 }
 
