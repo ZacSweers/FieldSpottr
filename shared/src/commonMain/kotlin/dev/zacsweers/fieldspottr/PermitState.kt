@@ -223,7 +223,38 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
     private const val NYC_PARKS_ORG = "NYC Parks and Recreation"
     private val PERMIT_BLOCK_KEYWORDS = setOf("Permit Block", "Construction", "Closure", "Cutoff")
 
-    fun fromPermits(dbPermits: List<DbPermit>, areas: Areas): PermitState {
+    fun fromPermits(
+      dbPermits: List<DbPermit>,
+      areas: Areas,
+      selectedGroup: String? = null,
+    ): PermitState {
+      // If the selected group is closed, show all-day blocked permits for every field
+      if (selectedGroup != null) {
+        val group = areas.groups[selectedGroup]
+        if (group?.closed != null) {
+          val closedFields = buildMap {
+            for (field in group.fields) {
+              put(
+                field,
+                listOf<FieldState>(
+                  FieldState.Reserved(
+                    start = 0,
+                    end = 24,
+                    timeRange = "All day",
+                    title = group.closed,
+                    org = "",
+                    status = "Closed",
+                    isBlocked = true,
+                    isOverlap = false,
+                  )
+                ),
+              )
+            }
+          }
+          return PermitState(closedFields)
+        }
+      }
+
       if (dbPermits.isEmpty()) return PermitState(emptyMap())
 
       val areasByName = areas.entries.associateBy { it.areaName }
