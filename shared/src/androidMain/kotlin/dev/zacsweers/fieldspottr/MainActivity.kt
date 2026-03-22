@@ -14,6 +14,7 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.theme.FSTheme
+import kotlinx.datetime.LocalDate
 
 class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,6 +35,7 @@ private fun GridPreview() {
       PermitGrid(
         selectedGroup = areas.entries[0].fieldGroups[0].name,
         areas = areas,
+        selectedDate = LocalDate(2024, 1, 1),
         permits =
           PermitState(
             fields =
