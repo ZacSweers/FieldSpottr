@@ -46,6 +46,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.times
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import com.slack.circuit.sharedelements.SharedElementTransitionScope
+import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import dev.zacsweers.fieldspottr.PermitState.FieldState
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
@@ -260,12 +265,13 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
   }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun PermitEvent(
   event: Reserved,
   modifier: Modifier = Modifier,
   onEventClick: ((Reserved) -> Unit)? = null,
-) {
+) = SharedElementTransitionScope {
   val isOverlap = event.isOverlap
   val containerColor =
     if (event.isBlocked) {
@@ -275,10 +281,24 @@ fun PermitEvent(
     } else {
       MaterialTheme.colorScheme.secondaryContainer
     }
+  val isClickable = onEventClick != null && !isOverlap && !event.isBlocked
+  val sharedBoundsModifier =
+    if (isClickable) {
+      val sharedBoundsKey =
+    PermitSharedElementKey(event.title, event.timeRange, event.org, isOverlap = isOverlap)
+      Modifier.sharedBounds(
+        sharedContentState = rememberSharedContentState(sharedBoundsKey),
+        animatedVisibilityScope = requireAnimatedScope(Navigation),
+        enter = fadeIn(),
+        exit = fadeOut(),
+      )
+    } else {
+      Modifier
+    }
   Surface(
-    enabled = onEventClick != null && !isOverlap,
+    enabled = isClickable,
     onClick = { onEventClick!!(event) },
-    modifier = modifier.fillMaxSize().padding(4.dp).clipToBounds(),
+    modifier = modifier.fillMaxSize().padding(4.dp).clipToBounds().then(sharedBoundsModifier),
     color = containerColor,
     shape = RoundedCornerShape(4.dp),
   ) {

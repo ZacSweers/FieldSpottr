@@ -6,7 +6,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
@@ -16,13 +15,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -63,14 +60,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
 import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
-import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ChangeGroup
-import dev.zacsweers.fieldspottr.HomeScreen.Event.ClearEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.FilterDate
 import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
@@ -112,7 +107,6 @@ data object HomeScreen : Screen {
     val loadingMessage: String?,
     val defaultGroupMessage: String?,
     val permits: PermitState?,
-    val detailedEvent: Reserved?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val isDebug: Boolean,
@@ -123,8 +117,6 @@ data object HomeScreen : Screen {
     data object Refresh : Event
 
     data object UseBuiltInAreas : Event
-
-    data object ClearEventDetail : Event
 
     data class ShowInfo(val show: Boolean) : Event
 
@@ -164,7 +156,6 @@ fun HomePresenter(
       selectedGroup = saved
     }
   }
-  var currentlyDetailedEvent by rememberRetained { mutableStateOf<Reserved?>(null) }
   var defaultGroupMessage by rememberRetained { mutableStateOf<String?>(null) }
 
   val permitsFlow =
@@ -224,7 +215,6 @@ fun HomePresenter(
     loadingMessage = loadingMessage,
     defaultGroupMessage = defaultGroupMessage,
     permits = permits,
-    detailedEvent = currentlyDetailedEvent,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     isDebug = !BuildConfig.IS_RELEASE,
@@ -246,9 +236,17 @@ fun HomePresenter(
       is ChangeGroup -> {
         selectedGroup = event.group
       }
-      ClearEventDetail -> currentlyDetailedEvent = null
       is ShowEventDetail -> {
-        currentlyDetailedEvent = event.event
+        val reservation = event.event
+        navigator.goTo(
+          PermitDetailsScreen(
+            name = reservation.title,
+            group = selectedGroup,
+            timeRange = reservation.timeRange,
+            org = reservation.org,
+            status = reservation.status,
+          )
+        )
       }
       ToggleDefaultGroup -> {
         val isClearing = defaultGroup == selectedGroup
@@ -324,32 +322,6 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       adaptiveSheetState = infoSheetState,
     ) {
       About(modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier)
-    }
-  }
-
-  // Event detail bottom sheet
-  state.detailedEvent?.let { event ->
-    val detailSheetState =
-      rememberAdaptiveSheetState(skipPartiallyExpanded = false, confirmValueChange = { true })
-
-    LaunchedEffect(event) { detailSheetState.show() }
-
-    AdaptiveBottomSheet(
-      onDismissRequest = { state.eventSink(ClearEventDetail) },
-      adaptiveSheetState = detailSheetState,
-    ) {
-      Box(Modifier.fillMaxSize().background(BottomSheetDefaults.ContainerColor)) {
-        CircuitContent(
-          PermitDetailsScreen(
-            name = event.title,
-            group = state.selectedGroup,
-            timeRange = event.timeRange,
-            status = event.status,
-            org = event.org,
-          ),
-          modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier,
-        )
-      }
     }
   }
 
