@@ -377,7 +377,8 @@ data class FieldGroup(
   val area: String,
   val location: Location,
   /**
-   * If non-null, this field group is closed and the value is the reason (e.g. "Closed for reconstruction").
+   * If non-null, this field group is closed and the value is the reason (e.g. "Closed for
+   * reconstruction").
    */
   val closed: String? = null,
 )

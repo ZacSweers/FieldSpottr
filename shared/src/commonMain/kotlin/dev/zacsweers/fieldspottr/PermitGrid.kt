@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,9 +49,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.times
-import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import dev.zacsweers.fieldspottr.PermitState.FieldState
@@ -259,8 +259,7 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
       start = Offset(0f, nowOffsetPx),
       end = Offset(endX, nowOffsetPx),
       strokeWidth = strokePx,
-      pathEffect =
-        PathEffect.dashPathEffect(floatArrayOf(dashPx, gapPx)),
+      pathEffect = PathEffect.dashPathEffect(floatArrayOf(dashPx, gapPx)),
     )
   }
 }
@@ -285,7 +284,7 @@ fun PermitEvent(
   val sharedBoundsModifier =
     if (isClickable) {
       val sharedBoundsKey =
-    PermitSharedElementKey(event.title, event.timeRange, event.org, isOverlap = isOverlap)
+        PermitSharedElementKey(event.title, event.timeRange, event.org, isOverlap = isOverlap)
       Modifier.sharedBounds(
         sharedContentState = rememberSharedContentState(sharedBoundsKey),
         animatedVisibilityScope = requireAnimatedScope(Navigation),

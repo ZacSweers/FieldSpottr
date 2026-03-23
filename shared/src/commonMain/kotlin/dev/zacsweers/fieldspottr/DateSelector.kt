@@ -102,9 +102,7 @@ fun DateSelector(
       adaptiveSheetState = sheetState,
       containerColor = DatePickerDefaults.colors().containerColor,
     ) {
-      val content = remember {
-        movableContentOf { DatePickerSheetContent(datePickerState) }
-      }
+      val content = remember { movableContentOf { DatePickerSheetContent(datePickerState) } }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
         Box(Modifier.fillMaxSize().background(DatePickerDefaults.colors().containerColor)) {

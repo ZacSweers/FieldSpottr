@@ -35,7 +35,6 @@ private const val DRAG_DIVISOR = 1000f
  *
  * Combines [draggable] (for direct drag on non-scrollable areas like headers) with [nestedScroll]
  * (to capture overscroll from inner scrollable content like LazyColumn).
- *
  * - Dragging down scales content from 1.0 down to [MIN_SCALE].
  * - Releasing past [DRAG_DISMISS_THRESHOLD] triggers [onDismiss].
  * - Releasing before the threshold springs the scale back to 1.0.
@@ -59,10 +58,7 @@ fun DragToDismiss(
       scope.launch {
         dragDismissAnim.snapTo(dragProgress)
         dragProgress = 0f
-        dragDismissAnim.animateTo(
-          0f,
-          spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        )
+        dragDismissAnim.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
       }
     }
   }

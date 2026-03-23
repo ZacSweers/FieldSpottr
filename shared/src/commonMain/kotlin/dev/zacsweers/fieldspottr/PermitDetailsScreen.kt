@@ -32,7 +32,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment.Companion.Center
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -48,10 +47,10 @@ import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import dev.zacsweers.fieldspottr.data.PermitRepository
-import dev.zacsweers.fieldspottr.util.DragToDismiss
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.ui.Group
 import dev.zacsweers.fieldspottr.ui.Schedule
+import dev.zacsweers.fieldspottr.util.DragToDismiss
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.formatNoAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
@@ -60,7 +59,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import kotlinx.datetime.number
 
 @CommonParcelize
@@ -142,102 +140,99 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
             ),
         color = MaterialTheme.colorScheme.surface,
       ) {
-      Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-          CenterAlignedTopAppBar(
-            title = {},
-            navigationIcon = {
-              IconButton(onClick = state.onBack) {
-                Icon(
-                  Icons.AutoMirrored.Outlined.ArrowBack,
-                  contentDescription = "Back",
-                )
-              }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-          )
-        },
-      ) { innerPadding ->
-        Column(Modifier.padding(innerPadding).padding(horizontal = 16.dp)) {
-          Surface(
-            Modifier.fillMaxWidth(),
-            shadowElevation = 2.dp,
-            shape = MaterialTheme.shapes.large,
-          ) {
-            Box(Modifier.padding(16.dp)) {
-              Column(verticalArrangement = spacedBy(16.dp)) {
-                Text(
-                  text = state.name,
-                  style = MaterialTheme.typography.titleLarge,
-                  fontWeight = FontWeight.Bold,
-                  overflow = TextOverflow.Ellipsis,
-                )
-
-                Row(horizontalArrangement = spacedBy(4.dp)) {
-                  Icon(Icons.Schedule, contentDescription = "Schedule icon")
-                  Text(text = state.timeRange, style = MaterialTheme.typography.bodyLarge)
+        Scaffold(
+          containerColor = Color.Transparent,
+          topBar = {
+            CenterAlignedTopAppBar(
+              title = {},
+              navigationIcon = {
+                IconButton(onClick = state.onBack) {
+                  Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                 }
-
-                Row(horizontalArrangement = spacedBy(4.dp)) {
-                  Icon(Icons.Group, contentDescription = "Group icon")
-                  Text(text = "Org: " + state.org, style = MaterialTheme.typography.bodyLarge)
-                }
-
-                Row(horizontalArrangement = spacedBy(4.dp)) {
-                  Icon(
-                    Icons.Default.Check,
-                    contentDescription = "Check icon",
-                    tint = MaterialTheme.colorScheme.secondary,
-                  )
+              },
+              colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+            )
+          },
+        ) { innerPadding ->
+          Column(Modifier.padding(innerPadding).padding(horizontal = 16.dp)) {
+            Surface(
+              Modifier.fillMaxWidth(),
+              shadowElevation = 2.dp,
+              shape = MaterialTheme.shapes.large,
+            ) {
+              Box(Modifier.padding(16.dp)) {
+                Column(verticalArrangement = spacedBy(16.dp)) {
                   Text(
-                    text = "Status: " + state.status,
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = state.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    overflow = TextOverflow.Ellipsis,
                   )
-                }
-              }
-            }
-          }
 
-          Spacer(Modifier.height(16.dp))
-
-          if (state.otherPermits == null) {
-            Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
-              AdaptiveCircularProgressIndicator()
-            }
-          } else if (state.otherPermits.isNotEmpty()) {
-            LazyColumn {
-              for ((date, otherPermits) in state.otherPermits) {
-                item(key = date) {
-                  Box(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
-                    Text(
-                      text = date,
-                      style = MaterialTheme.typography.titleLarge,
-                      fontWeight = FontWeight.Medium,
-                    )
+                  Row(horizontalArrangement = spacedBy(4.dp)) {
+                    Icon(Icons.Schedule, contentDescription = "Schedule icon")
+                    Text(text = state.timeRange, style = MaterialTheme.typography.bodyLarge)
                   }
-                }
-                items(otherPermits, key = { it.key }) { permit ->
-                  Column(Modifier.animateItem().fillMaxWidth().padding(start = 16.dp)) {
-                    Text(
-                      text = permit.timeRange,
-                      fontWeight = FontWeight.Medium,
-                      color = MaterialTheme.colorScheme.onSurface,
-                      style = MaterialTheme.typography.titleMedium,
+
+                  Row(horizontalArrangement = spacedBy(4.dp)) {
+                    Icon(Icons.Group, contentDescription = "Group icon")
+                    Text(text = "Org: " + state.org, style = MaterialTheme.typography.bodyLarge)
+                  }
+
+                  Row(horizontalArrangement = spacedBy(4.dp)) {
+                    Icon(
+                      Icons.Default.Check,
+                      contentDescription = "Check icon",
+                      tint = MaterialTheme.colorScheme.secondary,
                     )
                     Text(
-                      permit.name,
-                      color = MaterialTheme.colorScheme.onSurface,
-                      style = MaterialTheme.typography.bodyMedium,
+                      text = "Status: " + state.status,
+                      style = MaterialTheme.typography.bodyLarge,
                     )
                   }
                 }
               }
             }
+
             Spacer(Modifier.height(16.dp))
+
+            if (state.otherPermits == null) {
+              Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
+                AdaptiveCircularProgressIndicator()
+              }
+            } else if (state.otherPermits.isNotEmpty()) {
+              LazyColumn {
+                for ((date, otherPermits) in state.otherPermits) {
+                  item(key = date) {
+                    Box(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
+                      Text(
+                        text = date,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Medium,
+                      )
+                    }
+                  }
+                  items(otherPermits, key = { it.key }) { permit ->
+                    Column(Modifier.animateItem().fillMaxWidth().padding(start = 16.dp)) {
+                      Text(
+                        text = permit.timeRange,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleMedium,
+                      )
+                      Text(
+                        permit.name,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                      )
+                    }
+                  }
+                }
+              }
+              Spacer(Modifier.height(16.dp))
+            }
           }
         }
-      }
       }
     }
   }
