@@ -3,6 +3,8 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -52,6 +54,7 @@ import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.ui.Group
 import dev.zacsweers.fieldspottr.ui.Schedule
 import dev.zacsweers.fieldspottr.util.DragToDismiss
+import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.formatNoAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
@@ -138,10 +141,15 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
     val headerTextColor = MaterialTheme.colorScheme.onSecondaryContainer
 
     DragToDismiss(onDismiss = state.onBack) {
+      // Fade out non-hero elements quickly — fully gone by 40% of the transition progress.
+      // With predictive back this is gesture-driven, so we use easing rather than duration.
+      val earlyFadeOut = fadeOut(tween(easing = Easing { (it / 0.35f).coerceAtMost(1f) }))
       val fadeModifier =
-        with(animatedScope) { Modifier.animateEnterExit(enter = fadeIn(), exit = fadeOut()) }
-      // Background that fades with the transition, behind the hero card
+        with(animatedScope) {
+          Modifier.animateEnterExit(enter = fadeIn(), exit = earlyFadeOut)
+        }
       Box(modifier.fillMaxSize()) {
+        // Background that fades with the transition, behind the hero card
         Box(
           Modifier.matchParentSize()
             .then(fadeModifier)
@@ -162,25 +170,27 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
             )
           },
         ) { innerPadding ->
+          val cardShape = MaterialTheme.shapes.large
           Column(Modifier.padding(innerPadding).padding(horizontal = 16.dp)) {
             // Hero header card — shared bounds target, green to match grid item
             Surface(
+              onClick = state.onBack,
               modifier =
                 Modifier.fillMaxWidth()
                   .sharedBounds(
                     sharedContentState = rememberSharedContentState(sharedBoundsKey),
                     animatedVisibilityScope = animatedScope,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                    clipInOverlayDuringTransition = OverlayClip(cardShape),
                   ),
               shadowElevation = 2.dp,
-              shape = MaterialTheme.shapes.large,
+              shape = cardShape,
               color = MaterialTheme.colorScheme.secondaryContainer,
             ) {
               Box(Modifier.padding(16.dp)) {
                 Column(verticalArrangement = spacedBy(16.dp)) {
-                  Text(
+                  ReflowText(
                     text = state.name,
+                    sharedElementKey = "permit-${state.fieldName}-${state.index}-title",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     overflow = TextOverflow.Ellipsis,
