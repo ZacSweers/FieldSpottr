@@ -2,6 +2,62 @@
 
 set -exo pipefail
 
+# --- Preflight checks ---
+echo "Running preflight checks..."
+
+# Check we're in the repo root
+if [[ ! -f "gradle.properties" ]]; then
+  echo "ERROR: Must run from the repository root."
+  exit 1
+fi
+
+# Check for clean git state
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERROR: Working directory is not clean. Commit or stash changes first."
+  exit 1
+fi
+
+# Check required tools
+for cmd in java ruby bundle xcrun git fastlane; do
+  if ! command -v "$cmd" &> /dev/null; then
+    echo "ERROR: Required command '$cmd' not found."
+    exit 1
+  fi
+done
+
+# Check Ruby version matches .ruby-version
+if [[ -f ".ruby-version" ]]; then
+  expected_ruby=$(cat .ruby-version)
+  actual_ruby=$(ruby -e 'puts RUBY_VERSION')
+  if [[ "$actual_ruby" != "$expected_ruby" ]]; then
+    echo "ERROR: Ruby version mismatch. Expected $expected_ruby, got $actual_ruby."
+    exit 1
+  fi
+fi
+
+# Check Xcode / xcrun is functional
+if ! xcrun --find agvtool &> /dev/null; then
+  echo "ERROR: Xcode command line tools not available (xcrun agvtool not found)."
+  exit 1
+fi
+
+# Check the Xcode project exists
+if [[ ! -d "FieldSpottr/FieldSpottr.xcodeproj" ]]; then
+  echo "ERROR: Xcode project not found at FieldSpottr/FieldSpottr.xcodeproj."
+  exit 1
+fi
+
+# Check gradle.properties has required keys
+for key in fs_versioncode fs_versionname; do
+  if ! grep -q "^${key}=" gradle.properties; then
+    echo "ERROR: gradle.properties missing required key '$key'."
+    exit 1
+  fi
+done
+
+echo "Preflight checks passed."
+# --- End preflight checks ---
+
 # Gets a property out of a .properties file
 # usage: getProperty $key $filename
 function getProperty() {
@@ -70,7 +126,7 @@ done
 
 # Update libraries
 echo "Updating library definitions"
-./gradlew exportLibraryDefinitions -PaboutLibraries.exportPath=src/commonMain/composeResources/files --quiet
+./gradlew :shared:exportLibraryDefinitions -PaboutLibraries.exportPath=shared/src/commonMain/composeResources/files --quiet
 
 # Increment version code
 echo "Incrementing version code"
