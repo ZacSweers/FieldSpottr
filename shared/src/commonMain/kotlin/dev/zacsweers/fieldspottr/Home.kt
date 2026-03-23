@@ -86,7 +86,6 @@ import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.DateTimeUnit
@@ -149,14 +148,17 @@ fun HomePresenter(
   var loadingMessage by rememberRetained { mutableStateOf<String?>(null) }
   val defaultGroup by preferencesStore.defaultGroup.collectAsRetainedState(null)
   var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
-  // Apply the persisted default group once DataStore has loaded
-  LaunchedEffect(Unit) {
-    val saved = preferencesStore.defaultGroup.first()
-    if (saved != null && saved in areas.groups) {
+  // Track whether the user has manually changed the group this session
+  var userHasChangedGroup by rememberRetained { mutableStateOf(false) }
+  // Apply the persisted default group once DataStore has loaded,
+  // but only if the user hasn't manually selected a different group
+  LaunchedEffect(defaultGroup) {
+    val saved = defaultGroup
+    if (!userHasChangedGroup && saved != null && saved in areas.groups) {
       selectedGroup = saved
     }
   }
-  var defaultGroupMessage by rememberRetained { mutableStateOf<String?>(null) }
+  var defaultGroupMessage by remember { mutableStateOf<String?>(null) }
 
   val permitsFlow =
     rememberRetained(selectedDate, selectedGroup) {
@@ -235,6 +237,7 @@ fun HomePresenter(
       }
       is ChangeGroup -> {
         selectedGroup = event.group
+        userHasChangedGroup = true
       }
       is ShowEventDetail -> {
         val reservation = event.event
