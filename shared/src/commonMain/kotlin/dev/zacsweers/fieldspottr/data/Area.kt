@@ -144,7 +144,7 @@ fun buildDefaultAreas(): Areas {
     ) {
       group(
         name = "Track",
-        closed = "Reconstruction",
+        closed = "Closed for reconstruction",
         location =
           Location(
             "https://maps.app.goo.gl/bFmVPr5st28os4vQA",
@@ -169,7 +169,7 @@ fun buildDefaultAreas(): Areas {
       }
       group(
         name = "Field 6",
-        closed = "Reconstruction",
+        closed = "Closed for reconstruction",
         location =
           Location(
             "https://maps.app.goo.gl/KD27oHCF6Jw1UhX58",
@@ -377,7 +377,7 @@ data class FieldGroup(
   val area: String,
   val location: Location,
   /**
-   * If non-null, this field group is closed and the value is the reason (e.g. "Reconstruction").
+   * If non-null, this field group is closed and the value is the reason (e.g. "Closed for reconstruction").
    */
   val closed: String? = null,
 )
