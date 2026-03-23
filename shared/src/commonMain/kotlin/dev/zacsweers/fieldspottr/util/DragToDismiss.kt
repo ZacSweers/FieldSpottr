@@ -95,8 +95,13 @@ fun DragToDismiss(
       }
 
       override suspend fun onPreFling(available: Velocity): Velocity {
-        settle()
-        return available
+        // Only consume velocity when actively dragging to dismiss.
+        // Otherwise, let the inner scrollable content handle the fling.
+        if (dragProgress > 0f) {
+          settle()
+          return available
+        }
+        return Velocity.Zero
       }
     }
   }
