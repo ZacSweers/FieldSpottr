@@ -8,8 +8,8 @@ platform :android do
       package_name: "dev.zacsweers.fieldspottr",
       track: "beta", # Open testing
       release_status: "completed", # Auto-publish to beta
-      aab: "build/outputs/bundle/release/field-spottr-root-release.aab",
-      mapping: "build/outputs/mapping/release/mapping.txt",
+      aab: "android/build/outputs/bundle/release/android-release.aab",
+      mapping: "android/build/outputs/mapping/release/mapping.txt",
       json_key: "release/play-account.json",
       version_code: ENV['FS_VERSION_CODE'],
       version_name: ENV['FS_VERSION_NAME']
