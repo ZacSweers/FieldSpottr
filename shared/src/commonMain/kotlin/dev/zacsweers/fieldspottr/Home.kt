@@ -6,8 +6,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -15,13 +15,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -33,6 +31,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,20 +60,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
 import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
-import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ChangeGroup
-import dev.zacsweers.fieldspottr.HomeScreen.Event.ClearEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.FilterDate
 import dev.zacsweers.fieldspottr.HomeScreen.Event.Refresh
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowEventDetail
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowInfo
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ShowLocation
 import dev.zacsweers.fieldspottr.HomeScreen.Event.ToggleDefaultGroup
+import dev.zacsweers.fieldspottr.HomeScreen.Event.UseBuiltInAreas
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
@@ -85,6 +83,9 @@ import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
 import kotlin.time.Clock.System
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -106,14 +107,16 @@ data object HomeScreen : Screen {
     val loadingMessage: String?,
     val defaultGroupMessage: String?,
     val permits: PermitState?,
-    val detailedEvent: Reserved?,
+    val lastUpdated: String?,
+    val permitDateRange: Pair<LocalDate, LocalDate>?,
+    val isDebug: Boolean,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
 
   sealed interface Event {
     data object Refresh : Event
 
-    data object ClearEventDetail : Event
+    data object UseBuiltInAreas : Event
 
     data class ShowInfo(val show: Boolean) : Event
 
@@ -153,14 +156,40 @@ fun HomePresenter(
       selectedGroup = saved
     }
   }
-  var currentlyDetailedEvent by rememberRetained { mutableStateOf<Reserved?>(null) }
   var defaultGroupMessage by rememberRetained { mutableStateOf<String?>(null) }
 
   val permitsFlow =
     rememberRetained(selectedDate, selectedGroup) {
-      repository.permitsFlow(selectedDate, selectedGroup).map { PermitState.fromPermits(it, areas) }
+      repository.permitsFlow(selectedDate, selectedGroup).map {
+        PermitState.fromPermits(it, areas, selectedGroup)
+      }
     }
   val permits by permitsFlow.collectAsRetainedState(null)
+
+  // Last updated time for the current area
+  val currentAreaName = remember(selectedGroup, areas) { areas.groups[selectedGroup]?.area }
+  val lastUpdateFlow =
+    rememberRetained(currentAreaName) {
+      if (currentAreaName != null) repository.lastUpdateFlow(currentAreaName)
+      else kotlinx.coroutines.flow.flowOf(null)
+    }
+  val lastUpdateInstant by lastUpdateFlow.collectAsRetainedState(null)
+  val lastUpdatedText =
+    remember(lastUpdateInstant) {
+      lastUpdateInstant?.let { instant ->
+        val elapsed = System.now() - instant
+        when {
+          elapsed < 1.minutes -> "Updated just now"
+          elapsed < 1.hours -> "Updated ${elapsed.inWholeMinutes}m ago"
+          elapsed < 1.days -> "Updated ${elapsed.inWholeHours}h ago"
+          else -> "Updated ${elapsed.inWholeDays}d ago"
+        }
+      }
+    }
+
+  // Permit date range for constraining date picker
+  val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
+  val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
   if (populateDb) {
     LaunchedEffect(Unit) {
@@ -186,12 +215,17 @@ fun HomePresenter(
     loadingMessage = loadingMessage,
     defaultGroupMessage = defaultGroupMessage,
     permits = permits,
-    detailedEvent = currentlyDetailedEvent,
+    lastUpdated = lastUpdatedText,
+    permitDateRange = permitDateRange,
+    isDebug = !BuildConfig.IS_RELEASE,
   ) { event ->
     when (event) {
       is Refresh -> {
         forceRefresh = true
         populateDb = true
+      }
+      UseBuiltInAreas -> {
+        repository.useBuiltInAreas()
       }
       is ShowInfo -> {
         showInfo = event.show
@@ -202,9 +236,17 @@ fun HomePresenter(
       is ChangeGroup -> {
         selectedGroup = event.group
       }
-      ClearEventDetail -> currentlyDetailedEvent = null
       is ShowEventDetail -> {
-        currentlyDetailedEvent = event.event
+        val reservation = event.event
+        navigator.goTo(
+          PermitDetailsScreen(
+            name = reservation.title,
+            group = selectedGroup,
+            timeRange = reservation.timeRange,
+            org = reservation.org,
+            status = reservation.status,
+          )
+        )
       }
       ToggleDefaultGroup -> {
         val isClearing = defaultGroup == selectedGroup
@@ -283,32 +325,6 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
-  // Event detail bottom sheet
-  state.detailedEvent?.let { event ->
-    val detailSheetState =
-      rememberAdaptiveSheetState(skipPartiallyExpanded = false, confirmValueChange = { true })
-
-    LaunchedEffect(event) { detailSheetState.show() }
-
-    AdaptiveBottomSheet(
-      onDismissRequest = { state.eventSink(ClearEventDetail) },
-      adaptiveSheetState = detailSheetState,
-    ) {
-      Box(Modifier.fillMaxSize().background(BottomSheetDefaults.ContainerColor)) {
-        CircuitContent(
-          PermitDetailsScreen(
-            name = event.title,
-            group = state.selectedGroup,
-            timeRange = event.timeRange,
-            status = event.status,
-            org = event.org,
-          ),
-          modifier = if (CurrentPlatform == Native) Modifier.padding(top = 24.dp) else Modifier,
-        )
-      }
-    }
-  }
-
   val focusRequester = remember { FocusRequester() }
 
   LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -361,8 +377,26 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
           IconButton(onClick = { state.eventSink(ShowLocation) }) {
             Icon(Icons.Outlined.Place, contentDescription = "Location")
           }
-          IconButton(onClick = { state.eventSink(Refresh) }) {
-            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
+          if (state.isDebug) {
+            val haptics = LocalHapticFeedback.current
+            Box(
+              modifier =
+                Modifier.minimumInteractiveComponentSize()
+                  .combinedClickable(
+                    onLongClick = {
+                      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                      state.eventSink(UseBuiltInAreas)
+                    },
+                    onClick = { state.eventSink(Refresh) },
+                  ),
+              contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+              Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
+            }
+          } else {
+            IconButton(onClick = { state.eventSink(Refresh) }) {
+              Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
+            }
           }
         },
       )
@@ -382,6 +416,14 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       GroupSelector(state.selectedGroup, state.areas) { newGroup ->
         state.eventSink(ChangeGroup(newGroup))
       }
+      state.lastUpdated?.let { lastUpdated ->
+        Text(
+          lastUpdated,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(horizontal = 16.dp),
+        )
+      }
       // Shrink date selector text while dragging, pop back on release
       val datePulse = remember { Animatable(1f) }
       val scope = rememberCoroutineScope()
@@ -390,7 +432,11 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
       val cornerSlot =
         remember(state.date) {
           movableContentOf {
-            DateSelector(state.date, contentScale = datePulse.value) { newDate ->
+            DateSelector(
+              state.date,
+              contentScale = datePulse.value,
+              permitDateRange = state.permitDateRange,
+            ) { newDate ->
               state.eventSink(FilterDate(newDate))
             }
           }
@@ -404,6 +450,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         state.selectedGroup,
         state.permits,
         state.areas,
+        state.date,
         cornerSlot = cornerSlot,
         modifier =
           Modifier.align(CenterHorizontally)

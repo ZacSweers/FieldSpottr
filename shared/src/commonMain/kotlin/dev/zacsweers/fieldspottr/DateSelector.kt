@@ -6,19 +6,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -66,6 +62,7 @@ fun DateSelector(
   currentlySelectedDate: LocalDate,
   modifier: Modifier = Modifier,
   contentScale: Float = 1f,
+  permitDateRange: Pair<LocalDate, LocalDate>? = null,
   onDateSelected: (LocalDate) -> Unit,
 ) {
   var showDatePicker by rememberSaveable { mutableStateOf(false) }
@@ -83,18 +80,29 @@ fun DateSelector(
         confirmValueChange = { true },
       )
 
-    // TODO track min/max dates available and limit to those
-    val datePickerState = rememberAdaptiveDatePickerState(current)
+    val yearRange =
+      if (permitDateRange != null) {
+        permitDateRange.first.year..permitDateRange.second.year
+      } else {
+        DatePickerDefaults.YearRange
+      }
+    val datePickerState = rememberAdaptiveDatePickerState(current, yearRange = yearRange)
+
+    // Auto-confirm when a new date is selected
+    LaunchedEffect(datePickerState.selectedDateMillis) {
+      val selected = datePickerState.selectedDateMillis
+      if (selected != null && selected != current) {
+        setCurrentSelection(selected)
+        hideSheet = true
+      }
+    }
+
     AdaptiveBottomSheet(
       onDismissRequest = { showDatePicker = false },
       adaptiveSheetState = sheetState,
       containerColor = DatePickerDefaults.colors().containerColor,
     ) {
-      val content = remember {
-        movableContentOf {
-          DatePickerSheetContent(current, datePickerState, setCurrentSelection) { hideSheet = true }
-        }
-      }
+      val content = remember { movableContentOf { DatePickerSheetContent(datePickerState) } }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
         Box(Modifier.fillMaxSize().background(DatePickerDefaults.colors().containerColor)) {
@@ -195,33 +203,14 @@ fun DateSelector(
 @Suppress("ComposeUnstableReceiver", "UnusedReceiverParameter")
 @Composable
 private fun ColumnScope.DatePickerSheetContent(
-  current: Long,
   datePickerState: AdaptiveDatePickerState,
-  updateSelection: (Long) -> Unit,
   modifier: Modifier = Modifier,
-  hideSheet: () -> Unit,
 ) {
   AdaptiveDatePicker(
     datePickerState,
     modifier = modifier.fillMaxWidth(),
     headline = { Text("Select a date", Modifier.padding(start = 16.dp)) },
   )
-  Row(Modifier.padding(bottom = 16.dp, end = 16.dp), horizontalArrangement = spacedBy(16.dp)) {
-    Spacer(Modifier.weight(1f))
-    Button(onClick = hideSheet) { Text("Cancel") }
-    val confirmEnabled by remember {
-      derivedStateOf { datePickerState.selectedDateMillis != current }
-    }
-    Button(
-      onClick = {
-        updateSelection(datePickerState.selectedDateMillis ?: current)
-        hideSheet()
-      },
-      enabled = confirmEnabled,
-    ) {
-      Text("Confirm")
-    }
-  }
 }
 
 private val ShortMonth = LocalDate.Format { monthName(MonthNames.ENGLISH_ABBREVIATED) }

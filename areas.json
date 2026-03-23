@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "entries": [
     {
       "areaName": "Baruch",
@@ -53,9 +54,11 @@
       "areaName": "ERP",
       "displayName": "East River Park",
       "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
+      "subtitle": "Partially closed",
       "fieldGroups": [
         {
           "name": "Track",
+          "closed": "Reconstruction",
           "fields": [
             {
               "name": "Soccer-01A East 6th Street",
@@ -92,6 +95,7 @@
         },
         {
           "name": "Field 6",
+          "closed": "Reconstruction",
           "fields": [
             {
               "name": "Baseball-06",

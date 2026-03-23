@@ -28,9 +28,11 @@ fun GroupSelector(
     horizontalArrangement = Arrangement.spacedBy(16.dp),
   ) {
     val selectedArea by
-      remember(selectedGroup) {
-        val areaName = areas.groups.getValue(selectedGroup).area
-        mutableStateOf(areas.entries.first { it.areaName == areaName })
+      remember(selectedGroup, areas) {
+        val areaName = areas.groups[selectedGroup]?.area
+        mutableStateOf(
+          areas.entries.firstOrNull { it.areaName == areaName } ?: areas.entries.first()
+        )
       }
     val areasList = remember { areas.entries.sortedBy { it.displayName } }
     TextFieldDropdown(
@@ -40,17 +42,19 @@ fun GroupSelector(
       modifier = Modifier.weight(1f),
       setValue = { area -> onGroupSelected(area.fieldGroups.first().name) },
       displayName = { it.displayName },
+      subtitle = { it.subtitle },
     )
     if (selectedArea.fieldGroups.size > 1) {
-      val sortedGroups =
-        remember(selectedArea) { selectedArea.fieldGroups.sortedBy { it.name }.map { it.name } }
+      val sortedGroups = remember(selectedArea) { selectedArea.fieldGroups.sortedBy { it.name } }
+      val selectedFieldGroup = remember(selectedGroup) { areas.groups.getValue(selectedGroup) }
       TextFieldDropdown(
         label = "Field",
-        currentValue = selectedGroup,
+        currentValue = selectedFieldGroup,
         allValues = sortedGroups,
         modifier = Modifier.weight(1f),
-        setValue = { group -> onGroupSelected(group) },
-        displayName = { it },
+        setValue = { group -> onGroupSelected(group.name) },
+        displayName = { it.name },
+        subtitle = { it.closed?.let { reason -> "Closed: $reason" } },
       )
     }
   }

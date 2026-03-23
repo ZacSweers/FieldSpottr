@@ -20,11 +20,13 @@ package dev.zacsweers.fieldspottr.util
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.OutlinedTextFieldDefaults.Container
 import androidx.compose.material3.Text
@@ -50,6 +52,7 @@ fun <T> TextFieldDropdown(
   setValue: (T) -> Unit,
   displayName: (T) -> String,
   modifier: Modifier = Modifier,
+  subtitle: (T) -> String? = { null },
 ) {
   var isShowingDropdownMenu by remember { mutableStateOf(false) }
 
@@ -89,7 +92,17 @@ fun <T> TextFieldDropdown(
             DropdownMenuItem(
               text = {
                 val isSelected = value == currentValue
-                Text(displayName(value), fontWeight = if (isSelected) FontWeight.Black else null)
+                Column {
+                  Text(displayName(value), fontWeight = if (isSelected) FontWeight.Black else null)
+                  val sub = subtitle(value)
+                  if (sub != null) {
+                    Text(
+                      sub,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
               },
               onClick = {
                 setValue(value)

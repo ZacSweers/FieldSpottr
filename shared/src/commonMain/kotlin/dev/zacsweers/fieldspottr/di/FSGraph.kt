@@ -66,8 +66,8 @@ interface FSGraph {
         presenterOf { HomePresenter(permitRepository, preferencesStore, navigator) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
-      .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, _, _ ->
-        presenterOf { PermitDetailsPresenter(screen, permitRepository) }
+      .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, navigator, _ ->
+        presenterOf { PermitDetailsPresenter(screen, permitRepository, navigator) }
       }
       .addUi<PermitDetailsScreen, PermitDetailsScreen.State> { state, modifier ->
         PermitDetails(state, modifier)
