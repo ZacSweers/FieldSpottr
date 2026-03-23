@@ -6,19 +6,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -107,7 +103,7 @@ fun DateSelector(
       containerColor = DatePickerDefaults.colors().containerColor,
     ) {
       val content = remember {
-        movableContentOf { DatePickerSheetContent(datePickerState) { hideSheet = true } }
+        movableContentOf { DatePickerSheetContent(datePickerState) }
       }
       if (CurrentPlatform == Platform.Native) {
         // Have to wrap in a filled box to make the background match
@@ -211,17 +207,12 @@ fun DateSelector(
 private fun ColumnScope.DatePickerSheetContent(
   datePickerState: AdaptiveDatePickerState,
   modifier: Modifier = Modifier,
-  hideSheet: () -> Unit,
 ) {
   AdaptiveDatePicker(
     datePickerState,
     modifier = modifier.fillMaxWidth(),
     headline = { Text("Select a date", Modifier.padding(start = 16.dp)) },
   )
-  Row(Modifier.padding(bottom = 16.dp, end = 16.dp), horizontalArrangement = spacedBy(16.dp)) {
-    Spacer(Modifier.weight(1f))
-    Button(onClick = hideSheet) { Text("Cancel") }
-  }
 }
 
 private val ShortMonth = LocalDate.Format { monthName(MonthNames.ENGLISH_ABBREVIATED) }
