@@ -101,7 +101,7 @@ cd ..
 
 # Build Android release
 echo "Building Android"
-./gradlew :bundleRelease --quiet
+./gradlew :android:bundleRelease --quiet
 
 # Build iOS release
 echo "Building iOS"
