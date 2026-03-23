@@ -7,6 +7,8 @@ import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
@@ -141,25 +143,41 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
     val headerTextColor = MaterialTheme.colorScheme.onSecondaryContainer
 
     DragToDismiss(onDismiss = state.onBack) {
-      // Fade out non-hero elements quickly — fully gone by 40% of the transition progress.
+      // Non-hero elements exit quickly — fully gone by 35% of the transition progress.
       // With predictive back this is gesture-driven, so we use easing rather than duration.
-      val earlyFadeOut = fadeOut(tween(easing = Easing { (it / 0.35f).coerceAtMost(1f) }))
-      val fadeModifier =
+      val earlyEasing = Easing { (it / 0.35f).coerceAtMost(1f) }
+      val earlyFadeOut = fadeOut(tween(easing = earlyEasing))
+      // Background just fades
+      val bgModifier =
+        with(animatedScope) { Modifier.animateEnterExit(enter = fadeIn(), exit = earlyFadeOut) }
+
+      // Top bar slides up from behind the header and back down on exit
+      val topBarModifier =
         with(animatedScope) {
-          Modifier.animateEnterExit(enter = fadeIn(), exit = earlyFadeOut)
+          Modifier.animateEnterExit(
+            enter = fadeIn() + slideInVertically { it },
+            exit = earlyFadeOut + slideOutVertically(tween(easing = earlyEasing)) { it },
+          )
+        }
+
+      // Bottom content slides down and fades
+      val bottomContentModifier =
+        with(animatedScope) {
+          Modifier.animateEnterExit(
+            enter = fadeIn() + slideInVertically { it / 3 },
+            exit = earlyFadeOut + slideOutVertically(tween(easing = earlyEasing)) { it / 3 },
+          )
         }
       Box(modifier.fillMaxSize()) {
         // Background that fades with the transition, behind the hero card
         Box(
-          Modifier.matchParentSize()
-            .then(fadeModifier)
-            .background(MaterialTheme.colorScheme.surface)
+          Modifier.matchParentSize().then(bgModifier).background(MaterialTheme.colorScheme.surface)
         )
         Scaffold(
           containerColor = Color.Transparent,
           topBar = {
             CenterAlignedTopAppBar(
-              modifier = fadeModifier,
+              modifier = topBarModifier,
               title = {},
               navigationIcon = {
                 IconButton(onClick = state.onBack) {
@@ -235,7 +253,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
               }
             }
 
-            Column(fadeModifier) {
+            Column(bottomContentModifier) {
               Spacer(Modifier.height(16.dp))
 
               if (state.otherPermits == null) {
