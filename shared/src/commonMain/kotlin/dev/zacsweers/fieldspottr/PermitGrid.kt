@@ -294,7 +294,14 @@ fun PermitEvent(
   val sharedBoundsModifier =
     if (isClickable) {
       val sharedBoundsKey =
-        PermitSharedElementKey(fieldName, index, event.title, event.timeRange, event.org, isOverlap = isOverlap)
+        PermitSharedElementKey(
+          fieldName,
+          index,
+          event.title,
+          event.timeRange,
+          event.org,
+          isOverlap = isOverlap,
+        )
       Modifier.sharedBounds(
         sharedContentState = rememberSharedContentState(sharedBoundsKey),
         animatedVisibilityScope = requireAnimatedScope(Navigation),

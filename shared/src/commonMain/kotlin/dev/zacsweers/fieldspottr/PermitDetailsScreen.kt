@@ -131,7 +131,8 @@ fun PermitDetailsPresenter(
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) =
   SharedElementTransitionScope {
-    val sharedBoundsKey = PermitSharedElementKey(state.fieldName, state.index, state.name, state.timeRange, state.org)
+    val sharedBoundsKey =
+      PermitSharedElementKey(state.fieldName, state.index, state.name, state.timeRange, state.org)
 
     DragToDismiss(onDismiss = state.onBack) {
       Surface(
