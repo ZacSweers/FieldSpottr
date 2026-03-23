@@ -120,7 +120,7 @@ data object HomeScreen : Screen {
 
     data class ShowInfo(val show: Boolean) : Event
 
-    data class ShowEventDetail(val event: Reserved) : Event
+    data class ShowEventDetail(val fieldName: String, val index: Int, val event: Reserved) : Event
 
     data class FilterDate(val date: LocalDate) : Event
 
@@ -240,6 +240,8 @@ fun HomePresenter(
         val reservation = event.event
         navigator.goTo(
           PermitDetailsScreen(
+            fieldName = event.fieldName,
+            index = event.index,
             name = reservation.title,
             group = selectedGroup,
             timeRange = reservation.timeRange,
@@ -477,8 +479,8 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
                 }
               },
             ),
-      ) { event ->
-        state.eventSink(ShowEventDetail(event))
+      ) { fieldName, index, event ->
+        state.eventSink(ShowEventDetail(fieldName, index, event))
       }
     }
   }

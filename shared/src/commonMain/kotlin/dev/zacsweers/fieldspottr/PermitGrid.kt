@@ -66,6 +66,7 @@ import kotlinx.datetime.toLocalDateTime
 
 const val TIME_COLUMN_WEIGHT = 0.15f
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun PermitGrid(
   selectedGroup: String,
@@ -74,7 +75,7 @@ fun PermitGrid(
   selectedDate: LocalDate,
   modifier: Modifier = Modifier,
   cornerSlot: (@Composable () -> Unit)? = null,
-  onEventClick: (Reserved) -> Unit = {},
+  onEventClick: (fieldName: String, index: Int, Reserved) -> Unit = { _, _, _ -> },
 ) {
   val group = areas.groups.getValue(selectedGroup)
   val numColumns = group.fields.size
@@ -190,22 +191,29 @@ fun PermitGrid(
               }
             Box(Modifier.height(height)) {
               if (fieldState is Reserved) {
+                val currentIndex = reservedIndex
                 key(permits) {
-                  val staggerDelay = reservedIndex * 30L
-                  val animProgress = remember { Animatable(0f) }
-                  LaunchedEffect(Unit) {
-                    delay(staggerDelay)
-                    animProgress.animateTo(1f, tween(300))
+                  SharedElementTransitionScope {
+                    val skipEntryAnimation = isTransitionActive
+                    val staggerDelay = currentIndex * 30L
+                    val animProgress = remember { Animatable(if (skipEntryAnimation) 1f else 0f) }
+                    LaunchedEffect(Unit) {
+                      if (skipEntryAnimation) return@LaunchedEffect
+                      delay(staggerDelay)
+                      animProgress.animateTo(1f, tween(300))
+                    }
+                    PermitEvent(
+                      fieldName = field.displayName,
+                      index = currentIndex,
+                      event = fieldState,
+                      modifier =
+                        Modifier.graphicsLayer {
+                          alpha = animProgress.value
+                          translationY = (1f - animProgress.value) * 12f
+                        },
+                      onEventClick = { onEventClick(field.displayName, currentIndex, fieldState) },
+                    )
                   }
-                  PermitEvent(
-                    event = fieldState,
-                    modifier =
-                      Modifier.graphicsLayer {
-                        alpha = animProgress.value
-                        translationY = (1f - animProgress.value) * 12f
-                      },
-                    onEventClick = { onEventClick(fieldState) },
-                  )
                 }
                 reservedIndex++
               }
@@ -267,6 +275,8 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun PermitEvent(
+  fieldName: String,
+  index: Int,
   event: Reserved,
   modifier: Modifier = Modifier,
   onEventClick: ((Reserved) -> Unit)? = null,
@@ -284,7 +294,7 @@ fun PermitEvent(
   val sharedBoundsModifier =
     if (isClickable) {
       val sharedBoundsKey =
-        PermitSharedElementKey(event.title, event.timeRange, event.org, isOverlap = isOverlap)
+        PermitSharedElementKey(fieldName, index, event.title, event.timeRange, event.org, isOverlap = isOverlap)
       Modifier.sharedBounds(
         sharedContentState = rememberSharedContentState(sharedBoundsKey),
         animatedVisibilityScope = requireAnimatedScope(Navigation),

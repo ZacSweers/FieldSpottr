@@ -63,6 +63,8 @@ import kotlinx.datetime.number
 
 @CommonParcelize
 data class PermitDetailsScreen(
+  val fieldName: String,
+  val index: Int,
   val name: String,
   val group: String,
   val timeRange: String,
@@ -70,6 +72,8 @@ data class PermitDetailsScreen(
   val status: String,
 ) : Screen {
   data class State(
+    val fieldName: String,
+    val index: Int,
     val name: String,
     val group: String,
     val timeRange: String,
@@ -111,6 +115,8 @@ fun PermitDetailsPresenter(
   }
   val permits by permitsFlow.collectAsRetainedState(null)
   return PermitDetailsScreen.State(
+    screen.fieldName,
+    screen.index,
     screen.name,
     screen.group,
     screen.timeRange,
@@ -125,7 +131,7 @@ fun PermitDetailsPresenter(
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) =
   SharedElementTransitionScope {
-    val sharedBoundsKey = PermitSharedElementKey(state.name, state.timeRange, state.org)
+    val sharedBoundsKey = PermitSharedElementKey(state.fieldName, state.index, state.name, state.timeRange, state.org)
 
     DragToDismiss(onDismiss = state.onBack) {
       Surface(
