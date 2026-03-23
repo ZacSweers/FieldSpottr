@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -133,24 +134,24 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
   SharedElementTransitionScope {
     val sharedBoundsKey =
       PermitSharedElementKey(state.fieldName, state.index, state.name, state.timeRange, state.org)
+    val animatedScope = requireAnimatedScope(Navigation)
+    val headerTextColor = MaterialTheme.colorScheme.onSecondaryContainer
 
     DragToDismiss(onDismiss = state.onBack) {
-      Surface(
-        modifier =
-          modifier
-            .fillMaxSize()
-            .sharedBounds(
-              sharedContentState = rememberSharedContentState(sharedBoundsKey),
-              animatedVisibilityScope = requireAnimatedScope(Navigation),
-              enter = fadeIn(),
-              exit = fadeOut(),
-            ),
-        color = MaterialTheme.colorScheme.surface,
-      ) {
+      val fadeModifier =
+        with(animatedScope) { Modifier.animateEnterExit(enter = fadeIn(), exit = fadeOut()) }
+      // Background that fades with the transition, behind the hero card
+      Box(modifier.fillMaxSize()) {
+        Box(
+          Modifier.matchParentSize()
+            .then(fadeModifier)
+            .background(MaterialTheme.colorScheme.surface)
+        )
         Scaffold(
           containerColor = Color.Transparent,
           topBar = {
             CenterAlignedTopAppBar(
+              modifier = fadeModifier,
               title = {},
               navigationIcon = {
                 IconButton(onClick = state.onBack) {
@@ -162,10 +163,19 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
           },
         ) { innerPadding ->
           Column(Modifier.padding(innerPadding).padding(horizontal = 16.dp)) {
+            // Hero header card — shared bounds target, green to match grid item
             Surface(
-              Modifier.fillMaxWidth(),
+              modifier =
+                Modifier.fillMaxWidth()
+                  .sharedBounds(
+                    sharedContentState = rememberSharedContentState(sharedBoundsKey),
+                    animatedVisibilityScope = animatedScope,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                  ),
               shadowElevation = 2.dp,
               shape = MaterialTheme.shapes.large,
+              color = MaterialTheme.colorScheme.secondaryContainer,
             ) {
               Box(Modifier.padding(16.dp)) {
                 Column(verticalArrangement = spacedBy(16.dp)) {
@@ -174,69 +184,85 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     overflow = TextOverflow.Ellipsis,
+                    color = headerTextColor,
                   )
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
-                    Icon(Icons.Schedule, contentDescription = "Schedule icon")
-                    Text(text = state.timeRange, style = MaterialTheme.typography.bodyLarge)
+                    Icon(
+                      Icons.Schedule,
+                      contentDescription = "Schedule icon",
+                      tint = headerTextColor,
+                    )
+                    Text(
+                      text = state.timeRange,
+                      style = MaterialTheme.typography.bodyLarge,
+                      color = headerTextColor,
+                    )
                   }
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
-                    Icon(Icons.Group, contentDescription = "Group icon")
-                    Text(text = "Org: " + state.org, style = MaterialTheme.typography.bodyLarge)
+                    Icon(Icons.Group, contentDescription = "Group icon", tint = headerTextColor)
+                    Text(
+                      text = "Org: " + state.org,
+                      style = MaterialTheme.typography.bodyLarge,
+                      color = headerTextColor,
+                    )
                   }
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
                     Icon(
                       Icons.Default.Check,
                       contentDescription = "Check icon",
-                      tint = MaterialTheme.colorScheme.secondary,
+                      tint = headerTextColor,
                     )
                     Text(
                       text = "Status: " + state.status,
                       style = MaterialTheme.typography.bodyLarge,
+                      color = headerTextColor,
                     )
                   }
                 }
               }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Column(fadeModifier) {
+              Spacer(Modifier.height(16.dp))
 
-            if (state.otherPermits == null) {
-              Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
-                AdaptiveCircularProgressIndicator()
-              }
-            } else if (state.otherPermits.isNotEmpty()) {
-              LazyColumn {
-                for ((date, otherPermits) in state.otherPermits) {
-                  item(key = date) {
-                    Box(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
-                      Text(
-                        text = date,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Medium,
-                      )
+              if (state.otherPermits == null) {
+                Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
+                  AdaptiveCircularProgressIndicator()
+                }
+              } else if (state.otherPermits.isNotEmpty()) {
+                LazyColumn {
+                  for ((date, otherPermits) in state.otherPermits) {
+                    item(key = date) {
+                      Box(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
+                        Text(
+                          text = date,
+                          style = MaterialTheme.typography.titleLarge,
+                          fontWeight = FontWeight.Medium,
+                        )
+                      }
                     }
-                  }
-                  items(otherPermits, key = { it.key }) { permit ->
-                    Column(Modifier.animateItem().fillMaxWidth().padding(start = 16.dp)) {
-                      Text(
-                        text = permit.timeRange,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.titleMedium,
-                      )
-                      Text(
-                        permit.name,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                      )
+                    items(otherPermits, key = { it.key }) { permit ->
+                      Column(Modifier.animateItem().fillMaxWidth().padding(start = 16.dp)) {
+                        Text(
+                          text = permit.timeRange,
+                          fontWeight = FontWeight.Medium,
+                          color = MaterialTheme.colorScheme.onSurface,
+                          style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                          permit.name,
+                          color = MaterialTheme.colorScheme.onSurface,
+                          style = MaterialTheme.typography.bodyMedium,
+                        )
+                      }
                     }
                   }
                 }
+                Spacer(Modifier.height(16.dp))
               }
-              Spacer(Modifier.height(16.dp))
             }
           }
         }
