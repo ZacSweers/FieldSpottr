@@ -3,8 +3,13 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +56,7 @@ import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.ui.Group
 import dev.zacsweers.fieldspottr.ui.Schedule
 import dev.zacsweers.fieldspottr.util.DragToDismiss
+import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.formatNoAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
@@ -133,24 +139,45 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
   SharedElementTransitionScope {
     val sharedBoundsKey =
       PermitSharedElementKey(state.fieldName, state.index, state.name, state.timeRange, state.org)
+    val animatedScope = requireAnimatedScope(Navigation)
+    val headerTextColor = MaterialTheme.colorScheme.onSecondaryContainer
 
     DragToDismiss(onDismiss = state.onBack) {
-      Surface(
-        modifier =
-          modifier
-            .fillMaxSize()
-            .sharedBounds(
-              sharedContentState = rememberSharedContentState(sharedBoundsKey),
-              animatedVisibilityScope = requireAnimatedScope(Navigation),
-              enter = fadeIn(),
-              exit = fadeOut(),
-            ),
-        color = MaterialTheme.colorScheme.surface,
-      ) {
+      // Non-hero elements exit quickly — fully gone by 35% of the transition progress.
+      // With predictive back this is gesture-driven, so we use easing rather than duration.
+      val earlyEasing = Easing { (it / 0.35f).coerceAtMost(1f) }
+      val earlyFadeOut = fadeOut(tween(easing = earlyEasing))
+      // Background just fades
+      val bgModifier =
+        with(animatedScope) { Modifier.animateEnterExit(enter = fadeIn(), exit = earlyFadeOut) }
+
+      // Top bar slides up from behind the header and back down on exit
+      val topBarModifier =
+        with(animatedScope) {
+          Modifier.animateEnterExit(
+            enter = fadeIn() + slideInVertically { it },
+            exit = earlyFadeOut + slideOutVertically(tween(easing = earlyEasing)) { it },
+          )
+        }
+
+      // Bottom content slides down and fades
+      val bottomContentModifier =
+        with(animatedScope) {
+          Modifier.animateEnterExit(
+            enter = fadeIn() + slideInVertically { it / 3 },
+            exit = earlyFadeOut + slideOutVertically(tween(easing = earlyEasing)) { it / 3 },
+          )
+        }
+      Box(modifier.fillMaxSize()) {
+        // Background that fades with the transition, behind the hero card
+        Box(
+          Modifier.matchParentSize().then(bgModifier).background(MaterialTheme.colorScheme.surface)
+        )
         Scaffold(
           containerColor = Color.Transparent,
           topBar = {
             CenterAlignedTopAppBar(
+              modifier = topBarModifier,
               title = {},
               navigationIcon = {
                 IconButton(onClick = state.onBack) {
@@ -161,82 +188,109 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
             )
           },
         ) { innerPadding ->
+          val cardShape = MaterialTheme.shapes.large
           Column(Modifier.padding(innerPadding).padding(horizontal = 16.dp)) {
+            // Hero header card — shared bounds target, green to match grid item
             Surface(
-              Modifier.fillMaxWidth(),
+              onClick = state.onBack,
+              modifier =
+                Modifier.fillMaxWidth()
+                  .sharedBounds(
+                    sharedContentState = rememberSharedContentState(sharedBoundsKey),
+                    animatedVisibilityScope = animatedScope,
+                    clipInOverlayDuringTransition = OverlayClip(cardShape),
+                  ),
               shadowElevation = 2.dp,
-              shape = MaterialTheme.shapes.large,
+              shape = cardShape,
+              color = MaterialTheme.colorScheme.secondaryContainer,
             ) {
               Box(Modifier.padding(16.dp)) {
                 Column(verticalArrangement = spacedBy(16.dp)) {
-                  Text(
+                  ReflowText(
                     text = state.name,
+                    sharedElementKey = "permit-${state.fieldName}-${state.index}-title",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     overflow = TextOverflow.Ellipsis,
+                    color = headerTextColor,
                   )
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
-                    Icon(Icons.Schedule, contentDescription = "Schedule icon")
-                    Text(text = state.timeRange, style = MaterialTheme.typography.bodyLarge)
+                    Icon(
+                      Icons.Schedule,
+                      contentDescription = "Schedule icon",
+                      tint = headerTextColor,
+                    )
+                    Text(
+                      text = state.timeRange,
+                      style = MaterialTheme.typography.bodyLarge,
+                      color = headerTextColor,
+                    )
                   }
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
-                    Icon(Icons.Group, contentDescription = "Group icon")
-                    Text(text = "Org: " + state.org, style = MaterialTheme.typography.bodyLarge)
+                    Icon(Icons.Group, contentDescription = "Group icon", tint = headerTextColor)
+                    Text(
+                      text = "Org: " + state.org,
+                      style = MaterialTheme.typography.bodyLarge,
+                      color = headerTextColor,
+                    )
                   }
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
                     Icon(
                       Icons.Default.Check,
                       contentDescription = "Check icon",
-                      tint = MaterialTheme.colorScheme.secondary,
+                      tint = headerTextColor,
                     )
                     Text(
                       text = "Status: " + state.status,
                       style = MaterialTheme.typography.bodyLarge,
+                      color = headerTextColor,
                     )
                   }
                 }
               }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Column(bottomContentModifier) {
+              Spacer(Modifier.height(16.dp))
 
-            if (state.otherPermits == null) {
-              Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
-                AdaptiveCircularProgressIndicator()
-              }
-            } else if (state.otherPermits.isNotEmpty()) {
-              LazyColumn {
-                for ((date, otherPermits) in state.otherPermits) {
-                  item(key = date) {
-                    Box(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
-                      Text(
-                        text = date,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Medium,
-                      )
+              if (state.otherPermits == null) {
+                Box(Modifier.fillMaxWidth().heightIn(min = 100.dp), contentAlignment = Center) {
+                  AdaptiveCircularProgressIndicator()
+                }
+              } else if (state.otherPermits.isNotEmpty()) {
+                LazyColumn {
+                  for ((date, otherPermits) in state.otherPermits) {
+                    item(key = date) {
+                      Box(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
+                        Text(
+                          text = date,
+                          style = MaterialTheme.typography.titleLarge,
+                          fontWeight = FontWeight.Medium,
+                        )
+                      }
                     }
-                  }
-                  items(otherPermits, key = { it.key }) { permit ->
-                    Column(Modifier.animateItem().fillMaxWidth().padding(start = 16.dp)) {
-                      Text(
-                        text = permit.timeRange,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.titleMedium,
-                      )
-                      Text(
-                        permit.name,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                      )
+                    items(otherPermits, key = { it.key }) { permit ->
+                      Column(Modifier.animateItem().fillMaxWidth().padding(start = 16.dp)) {
+                        Text(
+                          text = permit.timeRange,
+                          fontWeight = FontWeight.Medium,
+                          color = MaterialTheme.colorScheme.onSurface,
+                          style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                          permit.name,
+                          color = MaterialTheme.colorScheme.onSurface,
+                          style = MaterialTheme.typography.bodyMedium,
+                        )
+                      }
                     }
                   }
                 }
+                Spacer(Modifier.height(16.dp))
               }
-              Spacer(Modifier.height(16.dp))
             }
           }
         }

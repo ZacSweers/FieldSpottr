@@ -5,8 +5,6 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +32,6 @@ import androidx.compose.ui.Alignment.Companion.BottomCenter
 import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.PathEffect
@@ -58,6 +54,7 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
+import dev.zacsweers.fieldspottr.util.ReflowText
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.datetime.LocalDate
@@ -240,7 +237,7 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
   if (!isToday) return this
 
   val nowOffsetPx = withDensity { ((now.hour + now.minute / 60f) * itemHeight).toPx() }
-  val lineColor = MaterialTheme.colorScheme.secondaryContainer
+  val lineColor = MaterialTheme.colorScheme.tertiaryContainer
   val strokePx = withDensity { 2.dp.toPx() }
   val dashPx = withDensity { 6.dp.toPx() }
   val gapPx = withDensity { 4.dp.toPx() }
@@ -291,6 +288,7 @@ fun PermitEvent(
       MaterialTheme.colorScheme.secondaryContainer
     }
   val isClickable = onEventClick != null && !isOverlap && !event.isBlocked
+  val itemShape = MaterialTheme.shapes.large
   val sharedBoundsModifier =
     if (isClickable) {
       val sharedBoundsKey =
@@ -305,8 +303,7 @@ fun PermitEvent(
       Modifier.sharedBounds(
         sharedContentState = rememberSharedContentState(sharedBoundsKey),
         animatedVisibilityScope = requireAnimatedScope(Navigation),
-        enter = fadeIn(),
-        exit = fadeOut(),
+        clipInOverlayDuringTransition = OverlayClip(itemShape),
       )
     } else {
       Modifier
@@ -314,9 +311,9 @@ fun PermitEvent(
   Surface(
     enabled = isClickable,
     onClick = { onEventClick!!(event) },
-    modifier = modifier.fillMaxSize().padding(4.dp).clipToBounds().then(sharedBoundsModifier),
+    modifier = modifier.fillMaxSize().padding(4.dp).then(sharedBoundsModifier),
     color = containerColor,
-    shape = RoundedCornerShape(4.dp),
+    shape = itemShape,
   ) {
     if (isOverlap) return@Surface
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
@@ -327,8 +324,9 @@ fun PermitEvent(
           MaterialTheme.colorScheme.onSecondaryContainer
         }
 
-      Text(
+      ReflowText(
         text = event.title,
+        sharedElementKey = if (isClickable) "permit-${fieldName}-${index}-title" else null,
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
         overflow = TextOverflow.Ellipsis,
