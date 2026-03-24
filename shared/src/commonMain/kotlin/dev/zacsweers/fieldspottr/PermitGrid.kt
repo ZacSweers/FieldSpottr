@@ -52,9 +52,9 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
-import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
+import dev.zacsweers.fieldspottr.util.ReflowText
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.datetime.LocalDate
