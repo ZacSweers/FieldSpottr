@@ -36,6 +36,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -72,7 +73,8 @@ fun PermitGrid(
   selectedDate: LocalDate,
   modifier: Modifier = Modifier,
   cornerSlot: (@Composable () -> Unit)? = null,
-  onEventClick: (fieldName: String, index: Int, Reserved) -> Unit = { _, _, _ -> },
+  onEventClick: (fieldName: String, index: Int, Reserved, orgVisible: Boolean) -> Unit =
+    { _, _, _, _ -> },
 ) {
   val group = areas.groups[selectedGroup] ?: return
   val numColumns = group.fields.size
@@ -208,7 +210,9 @@ fun PermitGrid(
                           alpha = animProgress.value
                           translationY = (1f - animProgress.value) * 12f
                         },
-                      onEventClick = { onEventClick(field.displayName, currentIndex, fieldState) },
+                      onEventClick = { event, orgVisible ->
+                        onEventClick(field.displayName, currentIndex, event, orgVisible)
+                      },
                     )
                   }
                 }
@@ -237,7 +241,7 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
   if (!isToday) return this
 
   val nowOffsetPx = withDensity { ((now.hour + now.minute / 60f) * itemHeight).toPx() }
-  val lineColor = MaterialTheme.colorScheme.tertiaryContainer
+  val lineColor = MaterialTheme.colorScheme.primary
   val strokePx = withDensity { 2.dp.toPx() }
   val dashPx = withDensity { 6.dp.toPx() }
   val gapPx = withDensity { 4.dp.toPx() }
@@ -276,7 +280,7 @@ fun PermitEvent(
   index: Int,
   event: Reserved,
   modifier: Modifier = Modifier,
-  onEventClick: ((Reserved) -> Unit)? = null,
+  onEventClick: ((Reserved, orgVisible: Boolean) -> Unit)? = null,
 ) = SharedElementTransitionScope {
   val isOverlap = event.isOverlap
   val containerColor =
@@ -288,7 +292,7 @@ fun PermitEvent(
       MaterialTheme.colorScheme.secondaryContainer
     }
   val isClickable = onEventClick != null && !isOverlap && !event.isBlocked
-  val itemShape = MaterialTheme.shapes.large
+  var orgVisible by remember { mutableStateOf(false) }
   val sharedBoundsModifier =
     if (isClickable) {
       val sharedBoundsKey =
@@ -303,17 +307,17 @@ fun PermitEvent(
       Modifier.sharedBounds(
         sharedContentState = rememberSharedContentState(sharedBoundsKey),
         animatedVisibilityScope = requireAnimatedScope(Navigation),
-        clipInOverlayDuringTransition = OverlayClip(itemShape),
+        clipInOverlayDuringTransition = OverlayClip(MaterialTheme.shapes.medium),
       )
     } else {
       Modifier
     }
   Surface(
     enabled = isClickable,
-    onClick = { onEventClick!!(event) },
+    onClick = { onEventClick!!(event, orgVisible) },
     modifier = modifier.fillMaxSize().padding(4.dp).then(sharedBoundsModifier),
     color = containerColor,
-    shape = itemShape,
+    shape = MaterialTheme.shapes.medium,
   ) {
     if (isOverlap) return@Surface
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
@@ -326,29 +330,26 @@ fun PermitEvent(
 
       ReflowText(
         text = event.title,
-        sharedElementKey = if (isClickable) "permit-${fieldName}-${index}-title" else null,
+        sharedElementKey = if (isClickable) "permit-${fieldName}-${index}" else null,
+        sharedElementKeySuffix = "title",
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
         overflow = TextOverflow.Ellipsis,
         color = textColor,
       )
 
-      var maxOrgLines by remember { mutableIntStateOf(3) }
-      if (maxOrgLines > 0) {
-        Text(
-          text = event.org,
-          style = MaterialTheme.typography.bodySmall,
-          fontWeight = FontWeight.Medium,
-          overflow = TextOverflow.Ellipsis,
-          color = textColor.copy(alpha = 0.5f),
-          maxLines = maxOrgLines,
-          onTextLayout = {
-            if (it.didOverflowHeight && CurrentPlatform != Platform.Android) {
-              maxOrgLines--
-            }
-          },
-        )
-      }
+      ReflowText(
+        text = event.org,
+        sharedElementKey =
+          if (isClickable && orgVisible) "permit-${fieldName}-${index}" else null,
+        modifier =
+          Modifier.onPlaced { orgVisible = it.size.height > 0 && it.size.width > 0 },
+        sharedElementKeySuffix = "org",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        overflow = TextOverflow.Ellipsis,
+        color = textColor.copy(alpha = 0.5f),
+      )
     }
   }
 }

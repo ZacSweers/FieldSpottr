@@ -76,6 +76,7 @@ data class PermitDetailsScreen(
   val timeRange: String,
   val org: String,
   val status: String,
+  val orgVisible: Boolean,
 ) : Screen {
   data class State(
     val fieldName: String,
@@ -85,6 +86,7 @@ data class PermitDetailsScreen(
     val timeRange: String,
     val org: String,
     val status: String,
+    val orgVisible: Boolean,
     val otherPermits: Map<String, List<OtherPermit>>?,
     val onBack: () -> Unit,
   ) : CircuitUiState
@@ -128,6 +130,7 @@ fun PermitDetailsPresenter(
     screen.timeRange,
     screen.org,
     screen.status,
+    orgVisible = screen.orgVisible,
     otherPermits = permits,
     onBack = navigator::pop,
   )
@@ -208,7 +211,8 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
                 Column(verticalArrangement = spacedBy(16.dp)) {
                   ReflowText(
                     text = state.name,
-                    sharedElementKey = "permit-${state.fieldName}-${state.index}-title",
+                    sharedElementKey = "permit-${state.fieldName}-${state.index}",
+                    sharedElementKeySuffix = "title",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     overflow = TextOverflow.Ellipsis,
@@ -230,8 +234,12 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
 
                   Row(horizontalArrangement = spacedBy(4.dp)) {
                     Icon(Icons.Group, contentDescription = "Group icon", tint = headerTextColor)
-                    Text(
-                      text = "Org: " + state.org,
+                    ReflowText(
+                      text = state.org,
+                      sharedElementKey =
+                        if (state.orgVisible) "permit-${state.fieldName}-${state.index}"
+                        else null,
+                      sharedElementKeySuffix = "org",
                       style = MaterialTheme.typography.bodyLarge,
                       color = headerTextColor,
                     )

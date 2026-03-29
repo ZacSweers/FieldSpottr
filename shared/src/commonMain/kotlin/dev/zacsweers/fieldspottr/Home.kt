@@ -119,7 +119,12 @@ data object HomeScreen : Screen {
 
     data class ShowInfo(val show: Boolean) : Event
 
-    data class ShowEventDetail(val fieldName: String, val index: Int, val event: Reserved) : Event
+    data class ShowEventDetail(
+      val fieldName: String,
+      val index: Int,
+      val event: Reserved,
+      val orgVisible: Boolean,
+    ) : Event
 
     data class FilterDate(val date: LocalDate) : Event
 
@@ -257,6 +262,7 @@ fun HomePresenter(
             timeRange = reservation.timeRange,
             org = reservation.org,
             status = reservation.status,
+            orgVisible = event.orgVisible,
           )
         )
       }
@@ -489,8 +495,8 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
                 }
               },
             ),
-      ) { fieldName, index, event ->
-        state.eventSink(ShowEventDetail(fieldName, index, event))
+      ) { fieldName, index, event, orgVisible ->
+        state.eventSink(ShowEventDetail(fieldName, index, event, orgVisible))
       }
     }
   }
