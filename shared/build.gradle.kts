@@ -155,7 +155,6 @@ buildConfig {
   generateAtSync = true
 }
 
-
 compose {
   resources {
     packageOfResClass = "dev.zacsweers.fieldspottr"
