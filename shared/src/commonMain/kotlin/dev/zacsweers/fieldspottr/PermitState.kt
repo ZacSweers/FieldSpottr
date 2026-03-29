@@ -262,7 +262,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       //  get the group ID, get fields for each group, show those too
       val fields =
         dbPermits
-          .groupBy { areasByName.getValue(it.area).fieldMappings[it.fieldId] }
+          .groupBy { areasByName[it.area]?.fieldMappings?.get(it.fieldId) }
           .filterKeys { it != null }
           .let {
             @Suppress("UNCHECKED_CAST")
@@ -274,7 +274,8 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
 
             // Because only one field may have any permits, we still need to load all available
             // fields to show here so that we can show any overlapping permits
-            val allFieldsInGroup = areas.groups.getValue(permitsByField.keys.first().group).fields
+            val allFieldsInGroup =
+              areas.groups[permitsByField.keys.first().group]?.fields ?: return EMPTY
             val fullMap = buildMap {
               for (field in allFieldsInGroup) {
                 put(field, permitsByField[field].orEmpty())

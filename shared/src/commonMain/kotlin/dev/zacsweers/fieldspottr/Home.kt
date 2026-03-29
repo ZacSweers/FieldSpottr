@@ -150,6 +150,13 @@ fun HomePresenter(
   var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
   // Track whether the user has manually changed the group this session
   var userHasChangedGroup by rememberRetained { mutableStateOf(false) }
+  // Reset selectedGroup if it's no longer valid after an areas update
+  LaunchedEffect(areas) {
+    if (selectedGroup !in areas.groups) {
+      selectedGroup = areas.entries[0].fieldGroups[0].name
+      userHasChangedGroup = false
+    }
+  }
   // Apply the persisted default group once DataStore has loaded,
   // but only if the user hasn't manually selected a different group
   LaunchedEffect(defaultGroup) {
@@ -265,7 +272,7 @@ fun HomePresenter(
         scope.launch { preferencesStore.setDefaultGroup(newDefault) }
       }
       ShowLocation -> {
-        val location = areas.groups.getValue(selectedGroup).location
+        val location = areas.groups[selectedGroup]?.location ?: return@State
         val coords = extractCoordinatesFromUrl(location.gmaps, location.amaps)
         if (CurrentPlatform != Platform.Jvm && coords != null) {
           val (lat, lon) = coords

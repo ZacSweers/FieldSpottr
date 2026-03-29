@@ -6,6 +6,8 @@ import assertk.assertThat
 import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
+import assertk.assertions.isTrue
 import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
@@ -15,7 +17,9 @@ import kotlin.time.Duration.Companion.hours
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okio.buffer
 import okio.fakefilesystem.FakeFileSystem
 import org.junit.Rule
 
@@ -172,6 +176,34 @@ class PermitRepositoryTest {
     val permitsByOrg = repository.permitsByGroup(testGroup, testOrg, testDate).first()
     assertThat(permitsByOrg).hasSize(1)
     assertThat(permitsByOrg[0]).isEqualTo(testPermit)
+  }
+
+  @Test
+  fun `cached areas with older version is stale`() {
+    val areasPath = appDirs.userData / "areas.json"
+    val oldAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION - 1)
+    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(oldAreas)) }
+
+    val loaded = repository.loadLocalAreas()
+    assertThat(loaded.version).isEqualTo(Areas.VERSION - 1)
+    assertThat(loaded.version < Areas.VERSION).isTrue()
+  }
+
+  @Test
+  fun `cached areas with current version is not stale`() {
+    val areasPath = appDirs.userData / "areas.json"
+    val currentAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION)
+    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(currentAreas)) }
+
+    val loaded = repository.loadLocalAreas()
+    assertThat(loaded.version).isEqualTo(Areas.VERSION)
+    assertThat(loaded.version < Areas.VERSION).isFalse()
+  }
+
+  @Test
+  fun `loadLocalAreas falls back to default when no cached file exists`() {
+    val loaded = repository.loadLocalAreas()
+    assertThat(loaded).isEqualTo(Areas.default)
   }
 
   @Test

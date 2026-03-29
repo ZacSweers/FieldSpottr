@@ -74,7 +74,7 @@ fun PermitGrid(
   cornerSlot: (@Composable () -> Unit)? = null,
   onEventClick: (fieldName: String, index: Int, Reserved) -> Unit = { _, _, _ -> },
 ) {
-  val group = areas.groups.getValue(selectedGroup)
+  val group = areas.groups[selectedGroup] ?: return
   val numColumns = group.fields.size
 
   val columnWeight = (1f - TIME_COLUMN_WEIGHT) / numColumns
