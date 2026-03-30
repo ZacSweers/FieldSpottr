@@ -65,6 +65,8 @@ fun ReflowText(
           Modifier.sharedBounds(
             sharedContentState = rememberSharedContentState(wordKey),
             animatedVisibilityScope = requireAnimatedScope(Navigation),
+            // Above container sharedBounds (z=1) so words are visible during forward transition
+            zIndexInOverlay = 2f,
           )
         } else {
           Modifier

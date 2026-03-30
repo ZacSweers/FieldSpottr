@@ -5,6 +5,8 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,7 +26,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,8 +54,6 @@ import dev.zacsweers.fieldspottr.PermitState.FieldState.Free
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
-import dev.zacsweers.fieldspottr.util.CurrentPlatform
-import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.ReflowText
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
@@ -308,6 +307,10 @@ fun PermitEvent(
         sharedContentState = rememberSharedContentState(sharedBoundsKey),
         animatedVisibilityScope = requireAnimatedScope(Navigation),
         clipInOverlayDuringTransition = OverlayClip(MaterialTheme.shapes.medium),
+        // Near-instant enter so grid appears immediately on back nav (target).
+        // Default-speed exit so grid stays present as word animation source on forward nav.
+        enter = fadeIn(tween(1)),
+        exit = fadeOut(),
       )
     } else {
       Modifier
@@ -342,8 +345,7 @@ fun PermitEvent(
         text = event.org,
         sharedElementKey =
           if (isClickable && orgVisible) "permit-${fieldName}-${index}" else null,
-        modifier =
-          Modifier.onPlaced { orgVisible = it.size.height > 0 && it.size.width > 0 },
+        modifier = Modifier.onPlaced { orgVisible = it.size.height > 0 && it.size.width > 0 },
         sharedElementKeySuffix = "org",
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Medium,
