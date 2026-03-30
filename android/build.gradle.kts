@@ -37,9 +37,15 @@ android {
   }
 
   buildTypes {
-    maybeCreate("debug").apply {
+    val debug = maybeCreate("debug").apply {
       versionNameSuffix = "-dev"
       applicationIdSuffix = ".debug"
+    }
+    maybeCreate("animation").apply {
+      initWith(debug)
+      isDebuggable = false
+      isMinifyEnabled = true
+      matchingFallbacks += listOf("release")
     }
     maybeCreate("release").apply {
       isDebuggable = false
