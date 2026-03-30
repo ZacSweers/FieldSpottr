@@ -16,7 +16,8 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import com.slack.circuit.sharedelements.SharedTransitionKey
 
-private data class ReflowWordKey(val baseKey: String, val wordIndex: Int) : SharedTransitionKey
+private data class ReflowWordKey(val baseKey: String, val suffix: String?, val wordIndex: Int) :
+  SharedTransitionKey
 
 /**
  * A text composable that splits its content into individual words, each rendered as a separate
@@ -31,21 +32,38 @@ fun ReflowText(
   text: String,
   sharedElementKey: String?,
   modifier: Modifier = Modifier,
+  sharedElementKeySuffix: String? = null,
   style: TextStyle = TextStyle.Default,
   fontWeight: FontWeight? = null,
   color: Color = Color.Unspecified,
   overflow: TextOverflow = TextOverflow.Clip,
 ) = SharedElementTransitionScope {
-  val words = text.split(" ")
+  // Merge standalone dashes with the following word so "Campus - Youth" becomes
+  // ["Campus", "- Youth"] rather than ["Campus", "-", "Youth"]
+  val words = buildList {
+    val raw = text.split(" ")
+    var i = 0
+    while (i < raw.size) {
+      if (raw[i] == "-" && i + 1 < raw.size) {
+        add("- ${raw[i + 1]}")
+        i += 2
+      } else {
+        add(raw[i])
+        i++
+      }
+    }
+  }
   FlowRow(modifier = modifier) {
     words.forEachIndexed { index, word ->
       val displayText = if (index < words.lastIndex) "$word " else word
       val wordModifier =
         if (sharedElementKey != null) {
-          val wordKey = ReflowWordKey(sharedElementKey, index)
+          val wordKey = ReflowWordKey(sharedElementKey, sharedElementKeySuffix, index)
           Modifier.sharedBounds(
             sharedContentState = rememberSharedContentState(wordKey),
             animatedVisibilityScope = requireAnimatedScope(Navigation),
+            // Above container sharedBounds (z=1) so words are visible during forward transition
+            zIndexInOverlay = 2f,
           )
         } else {
           Modifier

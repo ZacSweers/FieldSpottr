@@ -3,6 +3,7 @@
 plugins {
   alias(libs.plugins.agp.application)
   alias(libs.plugins.compose)
+  alias(libs.plugins.bugsnag)
   id("fs.android")
 }
 
@@ -52,6 +53,13 @@ android {
   bundle {}
 
   compileOptions { isCoreLibraryDesugaringEnabled = true }
+}
+
+bugsnag {
+  val bugsnagKey = providers.gradleProperty("fs_bugsnag_key").orNull
+  if (!bugsnagKey.isNullOrBlank()) {
+    apiKey = bugsnagKey
+  }
 }
 
 dependencies {

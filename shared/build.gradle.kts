@@ -14,7 +14,7 @@ plugins {
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
-  alias(libs.plugins.bugsnag)
+
   alias(libs.plugins.kotlin.plugin.serialization)
   alias(libs.plugins.metro)
   id("fs.base")
@@ -154,8 +154,6 @@ buildConfig {
   buildConfigField("String?", "MAPS_API_KEY", providers.gradleProperty("fs_maps_api_key").orNull)
   generateAtSync = true
 }
-
-bugsnag { enabled = !providers.gradleProperty("fs_bugsnag_key").orNull.isNullOrBlank() }
 
 compose {
   resources {

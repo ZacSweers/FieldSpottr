@@ -125,7 +125,7 @@ class PermitRepository(
     logger.i { message }
   }
 
-  private fun loadLocalAreas(): Areas {
+  internal fun loadLocalAreas(): Areas {
     return try {
       json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
     } catch (_: Exception) {
@@ -143,11 +143,23 @@ class PermitRepository(
   suspend fun populateDb(forceRefresh: Boolean, uiLog: (String) -> Unit): Boolean =
     withContext(Dispatchers.IO) {
       log("Starting populateDb with forceRefresh=$forceRefresh")
+      // Check if cached areas.json is older than the built-in version
+      val cachedVersionStale =
+        if (appDirs.fs.exists(areasJson)) {
+          val cached = loadLocalAreas()
+          cached.version < Areas.VERSION
+        } else {
+          false
+        }
+      if (cachedVersionStale) {
+        log("Cached areas.json version is older than built-in, invalidating cache")
+        appDirs.delete(areasJson)
+      }
       val successful =
         prepareAndDownloadFile(
           "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
           areasJson,
-          allowCachedVersion = !forceRefresh,
+          allowCachedVersion = !forceRefresh && !cachedVersionStale,
         )
       if (!successful) {
         return@withContext false

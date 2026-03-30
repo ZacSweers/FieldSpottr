@@ -46,7 +46,7 @@ fun GroupSelector(
     )
     if (selectedArea.fieldGroups.size > 1) {
       val sortedGroups = remember(selectedArea) { selectedArea.fieldGroups.sortedBy { it.name } }
-      val selectedFieldGroup = remember(selectedGroup) { areas.groups.getValue(selectedGroup) }
+      val selectedFieldGroup = remember(selectedGroup) { areas.groups[selectedGroup] } ?: return
       TextFieldDropdown(
         label = "Field",
         currentValue = selectedFieldGroup,
