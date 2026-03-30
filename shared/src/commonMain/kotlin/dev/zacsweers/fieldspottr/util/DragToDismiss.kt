@@ -90,11 +90,7 @@ fun DragToDismiss(
         // Only when the inner list didn't consume anything in this axis — this
         // means the list was already at the top, not that it just reached the top
         // mid-fling. Also ignore fling-sourced overscroll entirely.
-        if (
-          available.y > 0f &&
-          consumed.y == 0f &&
-          source == NestedScrollSource.UserInput
-        ) {
+        if (available.y > 0f && consumed.y == 0f && source == NestedScrollSource.UserInput) {
           dragProgress = (dragProgress + available.y / DRAG_DIVISOR).coerceIn(0f, 1f)
           return Offset(0f, available.y)
         }

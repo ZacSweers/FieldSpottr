@@ -16,11 +16,8 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import com.slack.circuit.sharedelements.SharedTransitionKey
 
-private data class ReflowWordKey(
-  val baseKey: String,
-  val suffix: String?,
-  val wordIndex: Int,
-) : SharedTransitionKey
+private data class ReflowWordKey(val baseKey: String, val suffix: String?, val wordIndex: Int) :
+  SharedTransitionKey
 
 /**
  * A text composable that splits its content into individual words, each rendered as a separate

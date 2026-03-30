@@ -73,7 +73,8 @@ fun PermitGrid(
   modifier: Modifier = Modifier,
   cornerSlot: (@Composable () -> Unit)? = null,
   onEventClick: (fieldName: String, index: Int, Reserved, orgVisible: Boolean) -> Unit =
-    { _, _, _, _ -> },
+    { _, _, _, _ ->
+    },
 ) {
   val group = areas.groups[selectedGroup] ?: return
   val numColumns = group.fields.size
@@ -343,8 +344,7 @@ fun PermitEvent(
 
       ReflowText(
         text = event.org,
-        sharedElementKey =
-          if (isClickable && orgVisible) "permit-${fieldName}-${index}" else null,
+        sharedElementKey = if (isClickable && orgVisible) "permit-${fieldName}-${index}" else null,
         modifier = Modifier.onPlaced { orgVisible = it.size.height > 0 && it.size.width > 0 },
         sharedElementKeySuffix = "org",
         style = MaterialTheme.typography.bodySmall,
