@@ -326,8 +326,8 @@ private fun FieldAvailabilityRow(
         .background(MaterialTheme.colorScheme.surface)
     )
     // Content cross-fades quickly inside the animated bounds.
-    // Exit: fully gone by 15%. Enter: appears in the last 50%.
-    val earlyEasing = Easing { (it / 0.15f).coerceAtMost(1f) }
+    // Exit: fully gone by 30%. Enter: appears in the last 50%.
+    val earlyEasing = Easing { (it / 0.3f).coerceAtMost(1f) }
     val lateEasing = Easing { ((it - 0.5f) / 0.5f).coerceIn(0f, 1f) }
     Row(
       modifier =
