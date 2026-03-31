@@ -6,6 +6,7 @@ import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
+import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbArea
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
@@ -167,15 +168,28 @@ class PermitRepository(
           } else {
             false
           }
+        // Check if the app version has changed since last fetch
+        val currentAppVersion = BuildConfig.VERSION_CODE
+        val storedAppVersion =
+          db()
+            .fsdbQueries
+            .getMetadata("last_areas_app_version")
+            .executeAsOneOrNull()
+            ?.toLongOrNull()
+        val appVersionChanged = storedAppVersion != currentAppVersion
+        val needsFreshFetch = cachedVersionStale || appVersionChanged
         if (cachedVersionStale) {
           log("Cached areas.json version is older than built-in, invalidating cache")
           appDirs.delete(areasJson)
+        }
+        if (appVersionChanged) {
+          log("App version changed ($currentAppVersion), will fetch fresh areas")
         }
         val successful =
           prepareAndDownloadFile(
             "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
             areasJson,
-            allowCachedVersion = !forceRefresh && !cachedVersionStale,
+            allowCachedVersion = !forceRefresh && !needsFreshFetch,
           )
         if (!successful) {
           _loadingMessage.value = "Failed to fetch areas. Please check connection and try again."
@@ -200,6 +214,7 @@ class PermitRepository(
           }
         if (outdated.isEmpty()) {
           _loadingMessage.value = null
+          db().fsdbQueries.setMetadata("last_areas_app_version", currentAppVersion.toString())
           return@withContext true
         } else {
           _loadingMessage.value = "Populating DB..."
@@ -221,6 +236,7 @@ class PermitRepository(
           return@withContext false
         }
         _loadingMessage.value = null
+        db().fsdbQueries.setMetadata("last_areas_app_version", currentAppVersion.toString())
         return@withContext true
       }
     } finally {

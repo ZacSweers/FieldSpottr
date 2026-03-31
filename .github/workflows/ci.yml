@@ -37,6 +37,7 @@ jobs:
         run: |
           ./gradlew --quiet --continue --no-configuration-cache \
               check \
+              verifySqlDelightMigration \
               assembleRelease \
               jvmJar
 
