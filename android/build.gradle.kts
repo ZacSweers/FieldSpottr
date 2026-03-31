@@ -46,6 +46,7 @@ android {
       isDebuggable = false
       isMinifyEnabled = true
       matchingFallbacks += listOf("release")
+      proguardFiles("proguardrules.pro")
     }
     maybeCreate("release").apply {
       isDebuggable = false
