@@ -295,6 +295,7 @@ fun PermitGridContent(state: PermitGridScreen.State, modifier: Modifier = Modifi
         movableContentOf {
           DateSelector(
             state.date,
+            id = "grid",
             contentScale = daySwipe.contentScale,
             permitDateRange = state.permitDateRange,
           ) { newDate ->

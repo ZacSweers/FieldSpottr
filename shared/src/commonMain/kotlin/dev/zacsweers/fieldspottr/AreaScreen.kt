@@ -25,7 +25,6 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +35,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -337,7 +337,7 @@ fun AreaContent(state: AreaScreen.State, modifier: Modifier = Modifier) =
         modifier = contentModifier,
         containerColor = Color.Transparent,
         topBar = {
-          CenterAlignedTopAppBar(
+          TopAppBar(
             navigationIcon = {
               IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
@@ -345,7 +345,7 @@ fun AreaContent(state: AreaScreen.State, modifier: Modifier = Modifier) =
             },
             title = {
               if (state.fixedTitle != null) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(horizontalAlignment = Alignment.Start) {
                   ReflowText(
                     text = state.fixedTitle,
                     sharedElementKey = "area-${state.selectedGroup}",
@@ -423,6 +423,7 @@ fun AreaContent(state: AreaScreen.State, modifier: Modifier = Modifier) =
               movableContentOf {
                 DateSelector(
                   state.date,
+                  id = "area",
                   contentScale = datePulse.value,
                   permitDateRange = state.permitDateRange,
                 ) { newDate ->

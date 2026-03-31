@@ -13,6 +13,7 @@ import com.slack.circuit.foundation.CircuitCompositionLocals
 import com.slack.circuit.foundation.NavigableCircuitContent
 import com.slack.circuit.foundation.rememberCircuitNavigator
 import com.slack.circuit.overlay.ContentWithOverlays
+import com.slack.circuit.overlay.rememberOverlayHost
 import com.slack.circuit.sharedelements.SharedElementTransitionLayout
 import com.slack.circuitx.gesturenavigation.GestureNavigationDecorationFactory
 import dev.zacsweers.fieldspottr.theme.FSTheme
@@ -33,11 +34,23 @@ fun FieldSpottrApp(
         Surface(modifier = modifier, color = MaterialTheme.colorScheme.background) {
           val backStack = rememberSaveableBackStack(HomeScreen)
           val navigator = rememberCircuitNavigator(backStack) { onRootPop() }
-          ContentWithOverlays {
+          val overlayHost = rememberOverlayHost()
+          ContentWithOverlays(overlayHost = overlayHost) {
             NavigableCircuitContent(
               navigator = navigator,
               backStack = backStack,
-              decoratorFactory = GestureNavigationDecorationFactory(onBackInvoked = navigator::pop),
+              decoratorFactory =
+                GestureNavigationDecorationFactory(
+                  onBackInvoked = {
+                    // Dismiss active overlay on back press instead of popping the navigator
+                    val overlay = overlayHost.currentOverlayData
+                    if (overlay != null) {
+                      overlay.finish(DatePickerResult(null))
+                    } else {
+                      navigator.pop()
+                    }
+                  }
+                ),
             )
           }
         }

@@ -215,7 +215,8 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = spacedBy(8.dp),
     ) {
-      DateSelector(state.selectedDate, contentScale = daySwipe.contentScale) { newDate ->
+      DateSelector(state.selectedDate, id = "faf", contentScale = daySwipe.contentScale) { newDate
+        ->
         state.eventSink(FindFieldScreen.Event.SelectDate(newDate))
       }
       LazyRow(horizontalArrangement = spacedBy(8.dp)) {
