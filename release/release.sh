@@ -126,7 +126,7 @@ done
 
 # Update libraries
 echo "Updating library definitions"
-./gradlew :shared:exportLibraryDefinitions -PaboutLibraries.exportPath=shared/src/commonMain/composeResources/files --quiet
+./gradlew :shared:exportLibraryDefinitions -PaboutLibraries.exportPath=src/commonMain/composeResources/files --quiet
 
 # Increment version code
 echo "Incrementing version code"
