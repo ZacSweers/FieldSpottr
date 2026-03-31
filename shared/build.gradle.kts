@@ -156,6 +156,10 @@ buildConfig {
   generateAtSync = true
 }
 
+aboutLibraries {
+  export { outputFile = file("src/commonMain/composeResources/files/aboutlibraries.json") }
+}
+
 compose {
   resources {
     packageOfResClass = "dev.zacsweers.fieldspottr"
