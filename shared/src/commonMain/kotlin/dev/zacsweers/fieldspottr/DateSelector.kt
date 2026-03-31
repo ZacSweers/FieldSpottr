@@ -2,16 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.shape.CircleShape
@@ -21,14 +17,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.movableContentOf
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -39,103 +29,60 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mohamedrejeb.calf.ui.datepicker.AdaptiveDatePicker
-import com.mohamedrejeb.calf.ui.datepicker.AdaptiveDatePickerState
-import com.mohamedrejeb.calf.ui.datepicker.rememberAdaptiveDatePickerState
-import com.mohamedrejeb.calf.ui.sheet.AdaptiveBottomSheet
-import com.mohamedrejeb.calf.ui.sheet.rememberAdaptiveSheetState
+import com.slack.circuit.overlay.LocalOverlayHost
+import com.slack.circuit.sharedelements.SharedElementTransitionScope
+import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Overlay
+import com.slack.circuit.sharedelements.SharedTransitionKey
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
 import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone.Companion.UTC
-import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.format.MonthNames
 import kotlinx.datetime.toLocalDateTime
 
+/** Shared element key for a specific DateSelector button ↔ its DatePickerOverlay card. */
+data class DateSelectorSharedKey(val id: String) : SharedTransitionKey
+
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun DateSelector(
   currentlySelectedDate: LocalDate,
   modifier: Modifier = Modifier,
+  id: String = "default",
   contentScale: Float = 1f,
   permitDateRange: Pair<LocalDate, LocalDate>? = null,
   onDateSelected: (LocalDate) -> Unit,
-) {
-  var showDatePicker by rememberSaveable { mutableStateOf(false) }
+) = SharedElementTransitionScope {
+  val overlayHost = LocalOverlayHost.current
+  val scope = rememberCoroutineScope()
+  val sharedKey = remember(id) { DateSelectorSharedKey(id) }
+  val today = remember { Clock.System.now().toLocalDateTime(UTC).date }
 
-  if (showDatePicker) {
-    val current by remember {
-      derivedStateOf { currentlySelectedDate.atStartOfDayIn(UTC).toEpochMilliseconds() }
-    }
-    val (currentSelection, setCurrentSelection) = remember { mutableLongStateOf(current) }
-    var hideSheet by remember { mutableStateOf(false) }
-
-    val sheetState =
-      rememberAdaptiveSheetState(
-        skipPartiallyExpanded = CurrentPlatform != Platform.Native,
-        confirmValueChange = { true },
-      )
-
-    val yearRange =
-      if (permitDateRange != null) {
-        permitDateRange.first.year..permitDateRange.second.year
-      } else {
-        DatePickerDefaults.YearRange
-      }
-    val datePickerState = rememberAdaptiveDatePickerState(current, yearRange = yearRange)
-
-    // Auto-confirm when a new date is selected
-    LaunchedEffect(datePickerState.selectedDateMillis) {
-      val selected = datePickerState.selectedDateMillis
-      if (selected != null && selected != current) {
-        setCurrentSelection(selected)
-        hideSheet = true
-      }
+  val yearRange =
+    if (permitDateRange != null) {
+      permitDateRange.first.year..permitDateRange.second.year
+    } else {
+      DatePickerDefaults.YearRange
     }
 
-    AdaptiveBottomSheet(
-      onDismissRequest = { showDatePicker = false },
-      adaptiveSheetState = sheetState,
-      containerColor = DatePickerDefaults.colors().containerColor,
-    ) {
-      val content = remember { movableContentOf { DatePickerSheetContent(datePickerState) } }
-      if (CurrentPlatform == Platform.Native) {
-        // Have to wrap in a filled box to make the background match
-        Box(Modifier.fillMaxSize().background(DatePickerDefaults.colors().containerColor)) {
-          Column(Modifier.fillMaxWidth()) { content() }
-        }
-      } else {
-        content()
-      }
-    }
-    if (hideSheet) {
-      LaunchedEffect(Unit) {
-        sheetState.hide()
-        hideSheet = false
-        showDatePicker = false
-        val selected =
-          currentSelection
-            .takeIf { it != current }
-            ?.let { Instant.fromEpochMilliseconds(it).toLocalDateTime(UTC).date }
-            ?: currentlySelectedDate
-        onDateSelected(selected)
-      }
+  fun showPicker() {
+    scope.launch {
+      val result = overlayHost.show(DatePickerOverlay(currentlySelectedDate, yearRange, sharedKey))
+      result.date?.let(onDateSelected)
     }
   }
 
-  val today = remember { Clock.System.now().toLocalDateTime(UTC).date }
-
-  // Annoyingly verbose means of getting a long press
+  // Long press to jump to today
   val interactionSource = remember { MutableInteractionSource() }
   val viewConfiguration = LocalViewConfiguration.current
   val haptics = LocalHapticFeedback.current
   LaunchedEffect(interactionSource) {
     var isLongClick = false
-
     interactionSource.interactions.collectLatest { interaction ->
       when (interaction) {
         is PressInteraction.Press -> {
@@ -147,7 +94,7 @@ fun DateSelector(
         }
         is PressInteraction.Release -> {
           if (!isLongClick) {
-            showDatePicker = true
+            showPicker()
           }
         }
         is PressInteraction.Cancel -> {
@@ -157,11 +104,25 @@ fun DateSelector(
     }
   }
 
+  // Shared element only on platforms with Compose-rendered date picker (not iOS native)
+  val sharedModifier =
+    if (CurrentPlatform != Platform.Native) {
+      val overlayScope = requireAnimatedScope(Overlay)
+      Modifier.sharedBounds(
+        sharedContentState = rememberSharedContentState(sharedKey),
+        animatedVisibilityScope = overlayScope,
+      )
+    } else {
+      Modifier
+    }
   Surface(
     enabled = true,
-    onClick = { showDatePicker = true },
+    onClick = ::showPicker,
     modifier =
-      modifier.requiredHeightIn(max = 48.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
+      modifier
+        .requiredHeightIn(max = 48.dp)
+        .aspectRatio(1f, matchHeightConstraintsFirst = true)
+        .then(sharedModifier),
     shape = CircleShape,
     color = MaterialTheme.colorScheme.secondaryContainer,
   ) {
@@ -198,19 +159,6 @@ fun DateSelector(
       )
     }
   }
-}
-
-@Suppress("ComposeUnstableReceiver", "UnusedReceiverParameter")
-@Composable
-private fun ColumnScope.DatePickerSheetContent(
-  datePickerState: AdaptiveDatePickerState,
-  modifier: Modifier = Modifier,
-) {
-  AdaptiveDatePicker(
-    datePickerState,
-    modifier = modifier.fillMaxWidth(),
-    headline = { Text("Select a date", Modifier.padding(start = 16.dp)) },
-  )
 }
 
 private val ShortMonth = LocalDate.Format { monthName(MonthNames.ENGLISH_ABBREVIATED) }

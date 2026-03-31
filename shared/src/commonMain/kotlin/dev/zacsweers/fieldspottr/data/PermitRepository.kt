@@ -34,10 +34,12 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -121,6 +123,14 @@ class PermitRepository(
 
   private val areasStateFlow = MutableStateFlow(Areas.default)
 
+  private val _loadingMessage = MutableStateFlow<String?>(null)
+
+  /** Observable loading/error message for UI to display. */
+  val loadingMessage: StateFlow<String?> = _loadingMessage
+
+  // Semaphore channel — only one populateDb runs at a time, concurrent calls are dropped
+  private val populateSemaphore = Channel<Unit>(1)
+
   private fun log(message: String) {
     logger.i { message }
   }
@@ -140,65 +150,76 @@ class PermitRepository(
     areasStateFlow.value = Areas.default
   }
 
-  suspend fun populateDb(forceRefresh: Boolean, uiLog: (String) -> Unit): Boolean =
-    withContext(Dispatchers.IO) {
-      log("Starting populateDb with forceRefresh=$forceRefresh")
-      // Check if cached areas.json is older than the built-in version
-      val cachedVersionStale =
-        if (appDirs.fs.exists(areasJson)) {
-          val cached = loadLocalAreas()
-          cached.version < Areas.VERSION
-        } else {
-          false
-        }
-      if (cachedVersionStale) {
-        log("Cached areas.json version is older than built-in, invalidating cache")
-        appDirs.delete(areasJson)
-      }
-      val successful =
-        prepareAndDownloadFile(
-          "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
-          areasJson,
-          allowCachedVersion = !forceRefresh && !cachedVersionStale,
-        )
-      if (!successful) {
-        return@withContext false
-      }
-      log("Downloaded areas.json")
-      val newAreas = loadLocalAreas()
-      log("Loaded areas: ${newAreas.entries.map { it.areaName }}")
-
-      areasStateFlow.value = newAreas
-
-      val areas = areasStateFlow.value
-      val outdated =
-        if (forceRefresh) {
-          areas.entries
-        } else {
-          areas.entries.filterNot { db().isAreaUpToDate(it) }
-        }
-      if (outdated.isEmpty()) {
-        return@withContext true
-      } else {
-        uiLog("Populating DB...")
-      }
-
-      // Parallelize, but unfortunately we can't escape the try/catch here
-      try {
-        outdated.parallelForEach(parallelism = areas.entries.size) { area ->
-          log("Processing area: ${area.areaName}")
-          val successful = db().populateDbFrom(area)
-          log("Area ${area.areaName} processing result: $successful")
-          if (!successful) {
-            throw Exception()
+  suspend fun populateDb(forceRefresh: Boolean): Boolean {
+    // Only one populateDb at a time — concurrent calls are dropped
+    if (!populateSemaphore.trySend(Unit).isSuccess) return true
+    return try {
+      withContext(Dispatchers.IO) {
+        log("Starting populateDb with forceRefresh=$forceRefresh")
+        // Check if cached areas.json is older than the built-in version
+        val cachedVersionStale =
+          if (appDirs.fs.exists(areasJson)) {
+            val cached = loadLocalAreas()
+            cached.version < Areas.VERSION
+          } else {
+            false
           }
+        if (cachedVersionStale) {
+          log("Cached areas.json version is older than built-in, invalidating cache")
+          appDirs.delete(areasJson)
         }
-      } catch (e: Exception) {
-        logger.e(e) { "Failed to populate DB" }
-        return@withContext false
+        val successful =
+          prepareAndDownloadFile(
+            "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main/areas.json",
+            areasJson,
+            allowCachedVersion = !forceRefresh && !cachedVersionStale,
+          )
+        if (!successful) {
+          _loadingMessage.value = "Failed to fetch areas. Please check connection and try again."
+          return@withContext false
+        }
+        log("Downloaded areas.json")
+        val newAreas = loadLocalAreas()
+        log("Loaded areas: ${newAreas.entries.map { it.areaName }}")
+
+        areasStateFlow.value = newAreas
+
+        val areas = areasStateFlow.value
+        val outdated =
+          if (forceRefresh) {
+            areas.entries
+          } else {
+            areas.entries.filterNot { db().isAreaUpToDate(it) }
+          }
+        if (outdated.isEmpty()) {
+          _loadingMessage.value = null
+          return@withContext true
+        } else {
+          _loadingMessage.value = "Populating DB..."
+        }
+
+        // Parallelize, but unfortunately we can't escape the try/catch here
+        try {
+          outdated.parallelForEach(parallelism = areas.entries.size) { area ->
+            log("Processing area: ${area.areaName}")
+            val successful = db().populateDbFrom(area)
+            log("Area ${area.areaName} processing result: $successful")
+            if (!successful) {
+              throw Exception()
+            }
+          }
+        } catch (e: Exception) {
+          logger.e(e) { "Failed to populate DB" }
+          _loadingMessage.value = "Failed to fetch areas. Please check connection and try again."
+          return@withContext false
+        }
+        _loadingMessage.value = null
+        return@withContext true
       }
-      return@withContext true
+    } finally {
+      populateSemaphore.tryReceive()
     }
+  }
 
   fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {
     return flow {
@@ -221,6 +242,22 @@ class PermitRepository(
     return flow {
         val millis = db().fsdbQueries.lastAreaUpdate(areaName).executeAsOneOrNull()
         emit(millis?.let { Instant.fromEpochMilliseconds(it) })
+      }
+      .flowOn(Dispatchers.IO)
+  }
+
+  fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
+    val dayStart = date.atStartOfDayInNy().toEpochMilliseconds()
+    val windowStart = dayStart + startHour.hours.inWholeMilliseconds
+    val windowEnd = dayStart + endHour.hours.inWholeMilliseconds
+    return flow {
+        emitAll(
+          db()
+            .fsdbQueries
+            .getPermitsInTimeWindow(windowStart, windowEnd)
+            .asFlow()
+            .mapToList(Dispatchers.IO)
+        )
       }
       .flowOn(Dispatchers.IO)
   }

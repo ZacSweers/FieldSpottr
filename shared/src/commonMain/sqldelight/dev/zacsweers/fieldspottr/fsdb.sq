@@ -51,3 +51,6 @@ SELECT lastUpdated FROM dbArea WHERE name = ?;
 
 permitDateRange:
 SELECT MIN(start) AS minDate, MAX(start) AS maxDate FROM dbPermit;
+
+getPermitsInTimeWindow:
+SELECT * FROM dbPermit WHERE start >= :windowStart AND start < :windowEnd;
