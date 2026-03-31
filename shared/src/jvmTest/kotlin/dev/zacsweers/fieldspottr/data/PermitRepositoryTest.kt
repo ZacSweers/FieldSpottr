@@ -7,6 +7,7 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.DbPermit
@@ -14,6 +15,7 @@ import dev.zacsweers.fieldspottr.FakeFSAppDirs
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
@@ -204,6 +206,65 @@ class PermitRepositoryTest {
   fun `loadLocalAreas falls back to default when no cached file exists`() {
     val loaded = repository.loadLocalAreas()
     assertThat(loaded).isEqualTo(Areas.default)
+  }
+
+  @Test
+  fun `mergeWithDefaults preserves built-in areas missing from remote`() {
+    // Create a remote Areas with only the first two entries from default
+    val defaultAreas = Areas.default
+    val subset = defaultAreas.copy(entries = defaultAreas.entries.take(2).toImmutableList())
+
+    val merged = mergeWithDefaults(subset, defaultAreas)
+
+    // Merged should have ALL default areas
+    assertThat(merged.entries).hasSize(defaultAreas.entries.size)
+    // The first two should be from the remote (unchanged)
+    assertThat(merged.entries[0]).isEqualTo(subset.entries[0])
+    assertThat(merged.entries[1]).isEqualTo(subset.entries[1])
+    // The rest should be filled in from defaults
+    val mergedNames = merged.entries.map { it.areaName }.toSet()
+    val defaultNames = defaultAreas.entries.map { it.areaName }.toSet()
+    assertThat(mergedNames).isEqualTo(defaultNames)
+  }
+
+  @Test
+  fun `mergeWithDefaults returns remote unchanged when it has all areas`() {
+    val defaultAreas = Areas.default
+    val merged = mergeWithDefaults(defaultAreas, defaultAreas)
+
+    // Same instance — no merge needed
+    assertThat(merged).isSameInstanceAs(defaultAreas)
+  }
+
+  @Test
+  fun `loadLocalAreas merges cached subset with defaults`() {
+    // Write a cached areas.json with only the first two entries
+    val subset = Areas.default.copy(entries = Areas.default.entries.take(2).toImmutableList())
+    val areasPath = appDirs.userData / "areas.json"
+    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(subset)) }
+
+    val loaded = repository.loadLocalAreas()
+
+    // Should have all default areas, not just the cached subset
+    val loadedNames = loaded.entries.map { it.areaName }.toSet()
+    val defaultNames = Areas.default.entries.map { it.areaName }.toSet()
+    assertThat(loadedNames).isEqualTo(defaultNames)
+  }
+
+  @Test
+  fun `mergeWithDefaults remote updates override built-in`() {
+    val defaultAreas = Areas.default
+    // Create remote with the same areas but modified displayName on first entry
+    val modified = defaultAreas.entries[0].copy(displayName = "Modified Name")
+    val remote =
+      defaultAreas.copy(
+        entries = (listOf(modified) + defaultAreas.entries.drop(1)).toImmutableList()
+      )
+
+    val merged = mergeWithDefaults(remote, defaultAreas)
+
+    // Remote's modified entry should be used, not the default
+    assertThat(merged.entries[0].displayName).isEqualTo("Modified Name")
   }
 
   @Test

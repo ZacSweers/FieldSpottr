@@ -37,6 +37,7 @@ import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.channels.Channel
@@ -136,11 +137,13 @@ class PermitRepository(
   }
 
   internal fun loadLocalAreas(): Areas {
-    return try {
-      json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
-    } catch (_: Exception) {
-      Areas.default
-    }
+    val parsed =
+      try {
+        json.decodeFromString<Areas>(appDirs.fs.source(areasJson).buffer().use { it.readUtf8() })
+      } catch (_: Exception) {
+        Areas.default
+      }
+    return mergeWithDefaults(parsed)
   }
 
   fun areasFlow(): StateFlow<Areas> = areasStateFlow
@@ -179,10 +182,14 @@ class PermitRepository(
           return@withContext false
         }
         log("Downloaded areas.json")
-        val newAreas = loadLocalAreas()
-        log("Loaded areas: ${newAreas.entries.map { it.areaName }}")
+        val remoteAreas = loadLocalAreas()
+        val mergedAreas = mergeWithDefaults(remoteAreas)
+        if (mergedAreas !== remoteAreas) {
+          log("Merged built-in areas missing from remote")
+        }
+        log("Loaded areas: ${mergedAreas.entries.map { it.areaName }}")
 
-        areasStateFlow.value = newAreas
+        areasStateFlow.value = mergedAreas
 
         val areas = areasStateFlow.value
         val outdated =
@@ -430,5 +437,20 @@ class PermitRepository(
         )
       }
       .flowOn(Dispatchers.IO)
+  }
+}
+
+/**
+ * Merges [remote] areas with [Areas.default]. Remote is authoritative for areas it includes, but
+ * built-in areas not present in remote are preserved. This prevents crashes when app code
+ * references fields that the remote JSON doesn't include yet.
+ */
+internal fun mergeWithDefaults(remote: Areas, defaults: Areas = Areas.default): Areas {
+  val remoteAreaNames = remote.entries.map { it.areaName }.toSet()
+  val missingFromRemote = defaults.entries.filter { it.areaName !in remoteAreaNames }
+  return if (missingFromRemote.isEmpty()) {
+    remote
+  } else {
+    remote.copy(entries = (remote.entries + missingFromRemote).toImmutableList())
   }
 }
