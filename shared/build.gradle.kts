@@ -25,6 +25,7 @@ plugins {
 kotlin {
   androidLibrary {
     namespace = "dev.zacsweers.fieldspottr.shared"
+    androidResources.enable = true
 
     compilerOptions {
       freeCompilerArgs.addAll(

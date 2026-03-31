@@ -9,8 +9,14 @@ import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.presenterOf
 import dev.zacsweers.fieldspottr.About
 import dev.zacsweers.fieldspottr.AboutScreen
+import dev.zacsweers.fieldspottr.AreaContent
+import dev.zacsweers.fieldspottr.AreaPresenter
+import dev.zacsweers.fieldspottr.AreaScreen
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FieldSpottrApp
+import dev.zacsweers.fieldspottr.FindField
+import dev.zacsweers.fieldspottr.FindFieldPresenter
+import dev.zacsweers.fieldspottr.FindFieldScreen
 import dev.zacsweers.fieldspottr.Home
 import dev.zacsweers.fieldspottr.HomePresenter
 import dev.zacsweers.fieldspottr.HomeScreen
@@ -20,6 +26,9 @@ import dev.zacsweers.fieldspottr.LocationMapScreen
 import dev.zacsweers.fieldspottr.PermitDetails
 import dev.zacsweers.fieldspottr.PermitDetailsPresenter
 import dev.zacsweers.fieldspottr.PermitDetailsScreen
+import dev.zacsweers.fieldspottr.PermitGridContent
+import dev.zacsweers.fieldspottr.PermitGridPresenter
+import dev.zacsweers.fieldspottr.PermitGridScreen
 import dev.zacsweers.fieldspottr.ScaffoldPresenter
 import dev.zacsweers.fieldspottr.ScaffoldScreen
 import dev.zacsweers.fieldspottr.ScaffoldScreenContent
@@ -63,9 +72,25 @@ interface FSGraph {
   ): Circuit {
     return Circuit.Builder()
       .addPresenter<HomeScreen, HomeScreen.State> { _, navigator, _ ->
-        presenterOf { HomePresenter(permitRepository, preferencesStore, navigator) }
+        presenterOf { HomePresenter(permitRepository, navigator) }
       }
       .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
+      .addPresenter<PermitGridScreen, PermitGridScreen.State> { _, navigator, _ ->
+        presenterOf { PermitGridPresenter(permitRepository, preferencesStore, navigator) }
+      }
+      .addUi<PermitGridScreen, PermitGridScreen.State> { state, modifier ->
+        PermitGridContent(state, modifier)
+      }
+      .addPresenter<FindFieldScreen, FindFieldScreen.State> { _, navigator, _ ->
+        presenterOf { FindFieldPresenter(permitRepository, navigator) }
+      }
+      .addUi<FindFieldScreen, FindFieldScreen.State> { state, modifier ->
+        FindField(state, modifier)
+      }
+      .addPresenter<AreaScreen, AreaScreen.State> { screen, navigator, _ ->
+        presenterOf { AreaPresenter(screen, permitRepository, preferencesStore, navigator) }
+      }
+      .addUi<AreaScreen, AreaScreen.State> { state, modifier -> AreaContent(state, modifier) }
       .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, navigator, _ ->
         presenterOf { PermitDetailsPresenter(screen, permitRepository, navigator) }
       }

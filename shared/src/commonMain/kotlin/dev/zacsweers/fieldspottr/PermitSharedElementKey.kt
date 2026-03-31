@@ -12,3 +12,9 @@ data class PermitSharedElementKey(
   val org: String,
   val isOverlap: Boolean = false,
 ) : SharedTransitionKey
+
+/** Shared element key for the FAF list item ↔ AreaScreen background (always opaque). */
+data class AreaContainerSharedElementKey(val groupName: String) : SharedTransitionKey
+
+/** Shared element key for the FAF list item ↔ AreaScreen content (cross-fades inside bounds). */
+data class AreaContentSharedElementKey(val groupName: String) : SharedTransitionKey
