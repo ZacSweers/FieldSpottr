@@ -14,12 +14,13 @@ plugins {
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
-
   alias(libs.plugins.kotlin.plugin.serialization)
   alias(libs.plugins.metro)
   id("fs.base")
   id("fs.android")
 }
+
+metro { enableCircuitCodegen.set(true) }
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
@@ -45,6 +46,7 @@ kotlin {
       dependencies {
         // API for klib reasons
         api(libs.calf.ui)
+        implementation(libs.circuit.inject.annotations)
         implementation(libs.compose.components.resources)
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.circuit.foundation)

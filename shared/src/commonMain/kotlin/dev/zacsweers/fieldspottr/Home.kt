@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.foundation.NavEvent
 import com.slack.circuit.foundation.onNavEvent
@@ -35,6 +36,7 @@ import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.metro.AppScope
 
 private enum class Tab(val label: String) {
   FIND_FIELD("Find a field"),
@@ -56,6 +58,7 @@ data object HomeScreen : Screen {
   }
 }
 
+@CircuitInject(HomeScreen::class, AppScope::class)
 @Composable
 fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScreen.State {
   var selectedTabIndex by rememberRetained { mutableStateOf(0) }
@@ -83,6 +86,7 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
   }
 }
 
+@CircuitInject(HomeScreen::class, AppScope::class)
 @Composable
 fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   val snackbarHostState = remember { SnackbarHostState() }
