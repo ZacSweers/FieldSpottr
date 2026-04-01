@@ -13,6 +13,7 @@ dependencyResolutionManagement {
       mavenContent { snapshotsOnly() }
     }
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    mavenLocal()
   }
 }
 
@@ -21,6 +22,7 @@ pluginManagement {
   repositories {
     mavenCentral()
     google()
+    mavenLocal()
     maven("https://oss.sonatype.org/content/repositories/snapshots") {
       name = "snapshots-maven-central"
       mavenContent { snapshotsOnly() }
