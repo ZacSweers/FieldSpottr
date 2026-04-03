@@ -21,7 +21,10 @@ import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
+import com.slack.circuit.codegen.annotations.CircuitInject
+import dev.zacsweers.metro.AppScope
 
+@CircuitInject(LocationMapScreen::class, AppScope::class)
 @Composable
 actual fun LocationMap(state: LocationMapScreen.State, modifier: Modifier) {
   val hasApiKey = !BuildConfig.MAPS_API_KEY.isNullOrBlank()
