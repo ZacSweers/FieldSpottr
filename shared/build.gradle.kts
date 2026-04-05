@@ -1,5 +1,6 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+import dev.zacsweers.metro.gradle.ExperimentalMetroGradleApi
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
@@ -14,16 +15,17 @@ plugins {
   alias(libs.plugins.sqldelight)
   alias(libs.plugins.aboutLicenses)
   alias(libs.plugins.buildConfig)
-
   alias(libs.plugins.kotlin.plugin.serialization)
   alias(libs.plugins.metro)
   id("fs.base")
   id("fs.android")
 }
 
+@OptIn(ExperimentalMetroGradleApi::class) metro { enableCircuitCodegen.set(true) }
+
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
-  androidLibrary {
+  android {
     namespace = "dev.zacsweers.fieldspottr.shared"
     androidResources.enable = true
 

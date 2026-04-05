@@ -4,9 +4,7 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons.AutoMirrored.Outlined
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -17,11 +15,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.metro.AppScope
 
 @CommonParcelize
 data class ScaffoldScreen(val title: String = "Field Spottr", val contentScreen: Screen) : Screen {
@@ -29,13 +29,15 @@ data class ScaffoldScreen(val title: String = "Field Spottr", val contentScreen:
     CircuitUiState
 }
 
+@CircuitInject(ScaffoldScreen::class, AppScope::class)
 @Composable
 fun ScaffoldPresenter(screen: ScaffoldScreen, navigator: Navigator): ScaffoldScreen.State {
   return ScaffoldScreen.State(screen.title, screen.contentScreen, navigator::pop)
 }
 
+@CircuitInject(ScaffoldScreen::class, AppScope::class)
 @Composable
-fun ScaffoldScreenContent(state: ScaffoldScreen.State, modifier: Modifier = Modifier) {
+fun ScaffoldScreenUi(state: ScaffoldScreen.State, modifier: Modifier = Modifier) {
   Scaffold(
     modifier = modifier,
     topBar = {

@@ -4,9 +4,11 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.metro.AppScope
 
 @CommonParcelize
 data class LocationMapScreen(
@@ -24,6 +26,7 @@ data class LocationMapScreen(
   ) : CircuitUiState
 }
 
+@CircuitInject(LocationMapScreen::class, AppScope::class)
 @Composable
 fun LocationMapPresenter(screen: LocationMapScreen): LocationMapScreen.State {
   val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
@@ -42,4 +45,6 @@ fun LocationMapPresenter(screen: LocationMapScreen): LocationMapScreen.State {
   )
 }
 
-@Composable expect fun LocationMap(state: LocationMapScreen.State, modifier: Modifier = Modifier)
+@CircuitInject(LocationMapScreen::class, AppScope::class)
+@Composable
+expect fun LocationMap(state: LocationMapScreen.State, modifier: Modifier = Modifier)

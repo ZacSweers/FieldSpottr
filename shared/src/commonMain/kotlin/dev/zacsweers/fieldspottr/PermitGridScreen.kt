@@ -33,6 +33,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
@@ -49,6 +50,7 @@ import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.daySwipeable
 import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
+import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -97,6 +99,7 @@ data object PermitGridScreen : Screen {
   }
 }
 
+@CircuitInject(PermitGridScreen::class, AppScope::class)
 @Composable
 fun PermitGridPresenter(
   repository: PermitRepository,
@@ -232,8 +235,9 @@ fun PermitGridPresenter(
   }
 }
 
+@CircuitInject(PermitGridScreen::class, AppScope::class)
 @Composable
-fun PermitGridContent(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
+fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()
   Column(modifier = modifier, verticalArrangement = spacedBy(8.dp)) {
     // Action buttons row

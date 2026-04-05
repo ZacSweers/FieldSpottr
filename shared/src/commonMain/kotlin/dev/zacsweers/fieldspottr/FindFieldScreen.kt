@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
@@ -64,6 +65,7 @@ import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.daySwipeable
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
+import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -107,6 +109,7 @@ data object FindFieldScreen : Screen {
   }
 }
 
+@CircuitInject(FindFieldScreen::class, AppScope::class)
 @Composable
 fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): FindFieldScreen.State {
   val areasFlow = rememberRetained { repository.areasFlow() }
@@ -174,6 +177,7 @@ fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): Find
   }
 }
 
+@CircuitInject(FindFieldScreen::class, AppScope::class)
 @Composable
 fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()

@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Place
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +53,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
@@ -71,6 +71,7 @@ import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
+import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -131,6 +132,7 @@ data class AreaScreen(
   }
 }
 
+@CircuitInject(AreaScreen::class, AppScope::class)
 @Composable
 fun AreaPresenter(
   screen: AreaScreen,
@@ -276,207 +278,202 @@ fun AreaPresenter(
   }
 }
 
+@CircuitInject(AreaScreen::class, AppScope::class)
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-fun AreaContent(state: AreaScreen.State, modifier: Modifier = Modifier) =
-  SharedElementTransitionScope {
-    val animatedScope = requireAnimatedScope(Navigation)
-    val snackbarHostState = remember { SnackbarHostState() }
+fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedElementTransitionScope {
+  val animatedScope = requireAnimatedScope(Navigation)
+  val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(state.defaultGroupMessage) {
-      state.defaultGroupMessage?.let {
-        snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
-      }
+  LaunchedEffect(state.defaultGroupMessage) {
+    state.defaultGroupMessage?.let {
+      snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
+    }
+  }
+
+  // Background fades quickly - fully gone by 35% of the transition progress
+  val earlyEasing = Easing { (it / 0.35f).coerceAtMost(1f) }
+  val bgModifier =
+    with(animatedScope) {
+      Modifier.animateEnterExit(enter = fadeIn(), exit = fadeOut(tween(easing = earlyEasing)))
     }
 
-    // Background fades quickly - fully gone by 35% of the transition progress
-    val earlyEasing = Easing { (it / 0.35f).coerceAtMost(1f) }
-    val bgModifier =
-      with(animatedScope) {
-        Modifier.animateEnterExit(enter = fadeIn(), exit = fadeOut(tween(easing = earlyEasing)))
-      }
-
-    val isDetail = state.fixedTitle != null
-    Box(modifier.fillMaxSize()) {
+  val isDetail = state.fixedTitle != null
+  Box(modifier.fillMaxSize()) {
+    if (isDetail) {
+      // Background - sharedElement, always opaque
+      val containerKey = AreaContainerSharedElementKey(state.selectedGroup)
+      Spacer(
+        Modifier.matchParentSize()
+          .sharedElement(
+            sharedContentState = rememberSharedContentState(containerKey),
+            animatedVisibilityScope = animatedScope,
+          )
+          .background(MaterialTheme.colorScheme.surface)
+      )
+    } else {
+      // Screen background - fades with navigation (no shared element)
+      Box(Modifier.matchParentSize().then(bgModifier).background(MaterialTheme.colorScheme.surface))
+    }
+    // Content - sharedBounds when detail (cross-fades inside animated bounds)
+    val contentModifier =
       if (isDetail) {
-        // Background - sharedElement, always opaque
-        val containerKey = AreaContainerSharedElementKey(state.selectedGroup)
-        Spacer(
-          Modifier.matchParentSize()
-            .sharedElement(
-              sharedContentState = rememberSharedContentState(containerKey),
-              animatedVisibilityScope = animatedScope,
-            )
-            .background(MaterialTheme.colorScheme.surface)
+        val contentKey = AreaContentSharedElementKey(state.selectedGroup)
+        // Exit: fully gone by 30%. Enter: appears in the last 15%.
+        val earlyEasing = Easing { (it / 0.3f).coerceAtMost(1f) }
+        val lateEasing = Easing { ((it - 0.5f) / 0.5f).coerceIn(0f, 1f) }
+        Modifier.sharedBounds(
+          sharedContentState = rememberSharedContentState(contentKey),
+          animatedVisibilityScope = animatedScope,
+          enter = fadeIn(tween(easing = lateEasing)),
+          exit = fadeOut(tween(easing = earlyEasing)),
+          // Above background in overlay
+          zIndexInOverlay = 1f,
         )
       } else {
-        // Screen background - fades with navigation (no shared element)
-        Box(
-          Modifier.matchParentSize().then(bgModifier).background(MaterialTheme.colorScheme.surface)
-        )
+        Modifier
       }
-      // Content - sharedBounds when detail (cross-fades inside animated bounds)
-      val contentModifier =
-        if (isDetail) {
-          val contentKey = AreaContentSharedElementKey(state.selectedGroup)
-          // Exit: fully gone by 30%. Enter: appears in the last 15%.
-          val earlyEasing = Easing { (it / 0.3f).coerceAtMost(1f) }
-          val lateEasing = Easing { ((it - 0.5f) / 0.5f).coerceIn(0f, 1f) }
-          Modifier.sharedBounds(
-            sharedContentState = rememberSharedContentState(contentKey),
-            animatedVisibilityScope = animatedScope,
-            enter = fadeIn(tween(easing = lateEasing)),
-            exit = fadeOut(tween(easing = earlyEasing)),
-            // Above background in overlay
-            zIndexInOverlay = 1f,
-          )
-        } else {
-          Modifier
-        }
-      Scaffold(
-        modifier = contentModifier,
-        containerColor = Color.Transparent,
-        topBar = {
-          TopAppBar(
-            navigationIcon = {
-              IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-              }
-            },
-            title = {
-              if (state.fixedTitle != null) {
-                Column(horizontalAlignment = Alignment.Start) {
+    Scaffold(
+      modifier = contentModifier,
+      containerColor = Color.Transparent,
+      topBar = {
+        TopAppBar(
+          navigationIcon = {
+            IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
+              Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+          },
+          title = {
+            if (state.fixedTitle != null) {
+              Column(horizontalAlignment = Alignment.Start) {
+                ReflowText(
+                  text = state.fixedTitle,
+                  sharedElementKey = "area-${state.selectedGroup}",
+                  sharedElementKeySuffix = "title",
+                  style = MaterialTheme.typography.titleLarge,
+                  fontWeight = FontWeight.Bold,
+                )
+                if (state.fixedSubtitle != null) {
                   ReflowText(
-                    text = state.fixedTitle,
+                    text = state.fixedSubtitle,
                     sharedElementKey = "area-${state.selectedGroup}",
-                    sharedElementKeySuffix = "title",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+                    sharedElementKeySuffix = "subtitle",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )
-                  if (state.fixedSubtitle != null) {
-                    ReflowText(
-                      text = state.fixedSubtitle,
-                      sharedElementKey = "area-${state.selectedGroup}",
-                      sharedElementKeySuffix = "subtitle",
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                }
+              }
+            }
+          },
+          actions = {
+            // Only show star/location/refresh when browsing areas, not from FAF detail
+            if (state.fixedTitle == null) {
+              IconButton(onClick = { state.eventSink(AreaScreen.Event.ToggleDefaultGroup) }) {
+                Icon(
+                  Icons.Filled.Star,
+                  contentDescription =
+                    if (state.isDefaultGroup) "Clear default group"
+                    else "Set ${state.selectedGroup} as default",
+                  tint =
+                    if (state.isDefaultGroup) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                )
+              }
+            }
+            IconButton(onClick = { state.eventSink(AreaScreen.Event.ShowLocation) }) {
+              Icon(Icons.Outlined.Place, contentDescription = "Location")
+            }
+          },
+        )
+      },
+      snackbarHost = {
+        SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+          Snackbar(snackbarData = snackbarData)
+        }
+      },
+      floatingActionButton = {
+        if (state.permits?.fields.orEmpty().isEmpty()) {
+          ExtendedFloatingActionButton(onClick = {}) { Text("No permits today!") }
+        }
+      },
+    ) { innerPadding ->
+      Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
+        if (state.fixedTitle == null) {
+          GroupSelector(state.selectedGroup, state.areas) { newGroup ->
+            state.eventSink(AreaScreen.Event.ChangeGroup(newGroup))
+          }
+        }
+        if (state.fixedTitle == null) {
+          state.lastUpdated?.let { lastUpdated ->
+            Text(
+              lastUpdated,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(horizontal = 16.dp),
+            )
+          }
+        }
+
+        val datePulse = remember { Animatable(1f) }
+        val scope = rememberCoroutineScope()
+        val haptics = LocalHapticFeedback.current
+
+        val cornerSlot =
+          remember(state.date) {
+            movableContentOf {
+              DateSelector(
+                state.date,
+                id = "area",
+                contentScale = datePulse.value,
+                permitDateRange = state.permitDateRange,
+              ) { newDate ->
+                state.eventSink(AreaScreen.Event.FilterDate(newDate))
+              }
+            }
+          }
+
+        var dragOffset by remember { mutableFloatStateOf(0f) }
+        val draggableState = rememberDraggableState { delta -> dragOffset += delta }
+
+        PermitGrid(
+          state.selectedGroup,
+          state.permits,
+          state.areas,
+          state.date,
+          cornerSlot = cornerSlot,
+          modifier =
+            Modifier.align(CenterHorizontally)
+              .weight(1f)
+              .draggable(
+                state = draggableState,
+                orientation = Orientation.Horizontal,
+                onDragStarted = {
+                  dragOffset = 0f
+                  haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  scope.launch { datePulse.animateTo(0.8f, tween(150)) }
+                },
+                onDragStopped = {
+                  if (dragOffset > 100f) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    state.eventSink(
+                      AreaScreen.Event.FilterDate(state.date.minus(1, DateTimeUnit.DAY))
+                    )
+                  } else if (dragOffset < -100f) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    state.eventSink(
+                      AreaScreen.Event.FilterDate(state.date.plus(1, DateTimeUnit.DAY))
                     )
                   }
-                }
-              }
-            },
-            actions = {
-              // Only show star/location/refresh when browsing areas, not from FAF detail
-              if (state.fixedTitle == null) {
-                IconButton(onClick = { state.eventSink(AreaScreen.Event.ToggleDefaultGroup) }) {
-                  Icon(
-                    Icons.Filled.Star,
-                    contentDescription =
-                      if (state.isDefaultGroup) "Clear default group"
-                      else "Set ${state.selectedGroup} as default",
-                    tint =
-                      if (state.isDefaultGroup) MaterialTheme.colorScheme.primary
-                      else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                  )
-                }
-              }
-              IconButton(onClick = { state.eventSink(AreaScreen.Event.ShowLocation) }) {
-                Icon(Icons.Outlined.Place, contentDescription = "Location")
-              }
-            },
-          )
-        },
-        snackbarHost = {
-          SnackbarHost(hostState = snackbarHostState) { snackbarData ->
-            Snackbar(snackbarData = snackbarData)
-          }
-        },
-        floatingActionButton = {
-          if (state.permits?.fields.orEmpty().isEmpty()) {
-            ExtendedFloatingActionButton(onClick = {}) { Text("No permits today!") }
-          }
-        },
-      ) { innerPadding ->
-        Column(modifier = Modifier.padding(innerPadding), verticalArrangement = spacedBy(8.dp)) {
-          if (state.fixedTitle == null) {
-            GroupSelector(state.selectedGroup, state.areas) { newGroup ->
-              state.eventSink(AreaScreen.Event.ChangeGroup(newGroup))
-            }
-          }
-          if (state.fixedTitle == null) {
-            state.lastUpdated?.let { lastUpdated ->
-              Text(
-                lastUpdated,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp),
-              )
-            }
-          }
-
-          val datePulse = remember { Animatable(1f) }
-          val scope = rememberCoroutineScope()
-          val haptics = LocalHapticFeedback.current
-
-          val cornerSlot =
-            remember(state.date) {
-              movableContentOf {
-                DateSelector(
-                  state.date,
-                  id = "area",
-                  contentScale = datePulse.value,
-                  permitDateRange = state.permitDateRange,
-                ) { newDate ->
-                  state.eventSink(AreaScreen.Event.FilterDate(newDate))
-                }
-              }
-            }
-
-          var dragOffset by remember { mutableFloatStateOf(0f) }
-          val draggableState = rememberDraggableState { delta -> dragOffset += delta }
-
-          PermitGrid(
-            state.selectedGroup,
-            state.permits,
-            state.areas,
-            state.date,
-            cornerSlot = cornerSlot,
-            modifier =
-              Modifier.align(CenterHorizontally)
-                .weight(1f)
-                .draggable(
-                  state = draggableState,
-                  orientation = Orientation.Horizontal,
-                  onDragStarted = {
-                    dragOffset = 0f
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    scope.launch { datePulse.animateTo(0.8f, tween(150)) }
-                  },
-                  onDragStopped = {
-                    if (dragOffset > 100f) {
-                      haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                      state.eventSink(
-                        AreaScreen.Event.FilterDate(state.date.minus(1, DateTimeUnit.DAY))
-                      )
-                    } else if (dragOffset < -100f) {
-                      haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                      state.eventSink(
-                        AreaScreen.Event.FilterDate(state.date.plus(1, DateTimeUnit.DAY))
-                      )
-                    }
-                    dragOffset = 0f
-                    scope.launch {
-                      datePulse.animateTo(
-                        1f,
-                        spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                      )
-                    }
-                  },
-                ),
-          ) { fieldName, index, event, orgVisible ->
-            state.eventSink(AreaScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible))
-          }
+                  dragOffset = 0f
+                  scope.launch {
+                    datePulse.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                  }
+                },
+              ),
+        ) { fieldName, index, event, orgVisible ->
+          state.eventSink(AreaScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible))
         }
       }
     }
   }
+}

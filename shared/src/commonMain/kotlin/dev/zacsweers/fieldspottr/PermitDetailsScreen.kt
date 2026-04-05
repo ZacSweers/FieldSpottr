@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
+import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
@@ -72,6 +73,7 @@ import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.formatNoAmPm
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
+import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -119,6 +121,7 @@ data class PermitDayGroup(
 
 @Immutable data class PermitEvent(val key: Long, val name: String, val timeRange: String)
 
+@CircuitInject(PermitDetailsScreen::class, AppScope::class)
 @Composable
 fun PermitDetailsPresenter(
   screen: PermitDetailsScreen,
@@ -173,6 +176,7 @@ fun PermitDetailsPresenter(
   )
 }
 
+@CircuitInject(PermitDetailsScreen::class, AppScope::class)
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifier) =

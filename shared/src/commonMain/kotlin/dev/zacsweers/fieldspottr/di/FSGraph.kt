@@ -5,35 +5,10 @@ package dev.zacsweers.fieldspottr.di
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.loggerConfigInit
 import com.slack.circuit.foundation.Circuit
-import com.slack.circuit.runtime.CircuitUiState
-import com.slack.circuit.runtime.presenter.presenterOf
-import dev.zacsweers.fieldspottr.About
-import dev.zacsweers.fieldspottr.AboutScreen
-import dev.zacsweers.fieldspottr.AreaContent
-import dev.zacsweers.fieldspottr.AreaPresenter
-import dev.zacsweers.fieldspottr.AreaScreen
+import com.slack.circuit.runtime.presenter.Presenter
+import com.slack.circuit.runtime.ui.Ui
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FieldSpottrApp
-import dev.zacsweers.fieldspottr.FindField
-import dev.zacsweers.fieldspottr.FindFieldPresenter
-import dev.zacsweers.fieldspottr.FindFieldScreen
-import dev.zacsweers.fieldspottr.Home
-import dev.zacsweers.fieldspottr.HomePresenter
-import dev.zacsweers.fieldspottr.HomeScreen
-import dev.zacsweers.fieldspottr.LocationMap
-import dev.zacsweers.fieldspottr.LocationMapPresenter
-import dev.zacsweers.fieldspottr.LocationMapScreen
-import dev.zacsweers.fieldspottr.PermitDetails
-import dev.zacsweers.fieldspottr.PermitDetailsPresenter
-import dev.zacsweers.fieldspottr.PermitDetailsScreen
-import dev.zacsweers.fieldspottr.PermitGridContent
-import dev.zacsweers.fieldspottr.PermitGridPresenter
-import dev.zacsweers.fieldspottr.PermitGridScreen
-import dev.zacsweers.fieldspottr.ScaffoldPresenter
-import dev.zacsweers.fieldspottr.ScaffoldScreen
-import dev.zacsweers.fieldspottr.ScaffoldScreenContent
-import dev.zacsweers.fieldspottr.data.FSPreferencesStore
-import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
@@ -67,49 +42,12 @@ interface FSGraph {
   @Provides
   @SingleIn(AppScope::class)
   fun provideCircuit(
-    permitRepository: PermitRepository,
-    preferencesStore: FSPreferencesStore,
+    uiFactories: Set<Ui.Factory>,
+    presenterFactories: Set<Presenter.Factory>,
   ): Circuit {
     return Circuit.Builder()
-      .addPresenter<HomeScreen, HomeScreen.State> { _, navigator, _ ->
-        presenterOf { HomePresenter(permitRepository, navigator) }
-      }
-      .addUi<HomeScreen, HomeScreen.State> { state, modifier -> Home(state, modifier) }
-      .addPresenter<PermitGridScreen, PermitGridScreen.State> { _, navigator, _ ->
-        presenterOf { PermitGridPresenter(permitRepository, preferencesStore, navigator) }
-      }
-      .addUi<PermitGridScreen, PermitGridScreen.State> { state, modifier ->
-        PermitGridContent(state, modifier)
-      }
-      .addPresenter<FindFieldScreen, FindFieldScreen.State> { _, navigator, _ ->
-        presenterOf { FindFieldPresenter(permitRepository, navigator) }
-      }
-      .addUi<FindFieldScreen, FindFieldScreen.State> { state, modifier ->
-        FindField(state, modifier)
-      }
-      .addPresenter<AreaScreen, AreaScreen.State> { screen, navigator, _ ->
-        presenterOf { AreaPresenter(screen, permitRepository, preferencesStore, navigator) }
-      }
-      .addUi<AreaScreen, AreaScreen.State> { state, modifier -> AreaContent(state, modifier) }
-      .addPresenter<PermitDetailsScreen, PermitDetailsScreen.State> { screen, navigator, _ ->
-        presenterOf { PermitDetailsPresenter(screen, permitRepository, navigator) }
-      }
-      .addUi<PermitDetailsScreen, PermitDetailsScreen.State> { state, modifier ->
-        PermitDetails(state, modifier)
-      }
-      .addPresenter<ScaffoldScreen, ScaffoldScreen.State> { screen, navigator, _ ->
-        presenterOf { ScaffoldPresenter(screen, navigator) }
-      }
-      .addUi<ScaffoldScreen, ScaffoldScreen.State> { state, modifier ->
-        ScaffoldScreenContent(state, modifier)
-      }
-      .addPresenter<LocationMapScreen, LocationMapScreen.State> { screen, _, _ ->
-        presenterOf { LocationMapPresenter(screen) }
-      }
-      .addUi<LocationMapScreen, LocationMapScreen.State> { state, modifier ->
-        LocationMap(state, modifier)
-      }
-      .addStaticUi<AboutScreen, CircuitUiState> { _, modifier -> About(modifier) }
+      .addUiFactories(uiFactories)
+      .addPresenterFactories(presenterFactories)
       .build()
   }
 }
