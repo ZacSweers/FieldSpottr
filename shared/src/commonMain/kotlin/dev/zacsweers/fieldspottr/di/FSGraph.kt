@@ -9,8 +9,6 @@ import com.slack.circuit.runtime.presenter.Presenter
 import com.slack.circuit.runtime.ui.Ui
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FieldSpottrApp
-import dev.zacsweers.fieldspottr.data.FSPreferencesStore
-import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
@@ -44,8 +42,6 @@ interface FSGraph {
   @Provides
   @SingleIn(AppScope::class)
   fun provideCircuit(
-    permitRepository: PermitRepository,
-    preferencesStore: FSPreferencesStore,
     uiFactories: Set<Ui.Factory>,
     presenterFactories: Set<Presenter.Factory>,
   ): Circuit {
