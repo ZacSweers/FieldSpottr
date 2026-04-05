@@ -3,6 +3,9 @@
 
 A toy app for checking field permit status from nycgovparks.org.
 
+- App Store: https://apps.apple.com/us/app/field-spottr/id6505042655
+- Play Store: https://play.google.com/store/apps/details?id=dev.zacsweers.fieldspottr
+
 License
 --------
 
