@@ -1,5 +1,6 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+import dev.zacsweers.metro.gradle.ExperimentalMetroGradleApi
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
@@ -20,11 +21,11 @@ plugins {
   id("fs.android")
 }
 
-metro { enableCircuitCodegen.set(true) }
+@OptIn(ExperimentalMetroGradleApi::class) metro { enableCircuitCodegen.set(true) }
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
-  androidLibrary {
+  android {
     namespace = "dev.zacsweers.fieldspottr.shared"
     androidResources.enable = true
 
@@ -46,7 +47,6 @@ kotlin {
       dependencies {
         // API for klib reasons
         api(libs.calf.ui)
-        implementation(libs.circuit.inject.annotations)
         implementation(libs.compose.components.resources)
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.circuit.foundation)
