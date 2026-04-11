@@ -35,7 +35,6 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.collections.immutable.toImmutableList
@@ -270,9 +269,10 @@ class PermitRepository(
   }
 
   fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
-    val dayStart = date.atStartOfDayInNy().toEpochMilliseconds()
-    val windowStart = dayStart + startHour.hours.inWholeMilliseconds
-    val windowEnd = dayStart + endHour.hours.inWholeMilliseconds
+    val windowStart =
+      LocalDateTime(date, LocalTime(startHour, 0)).toNyInstant().toEpochMilliseconds()
+    val windowEnd =
+      LocalDateTime(date, LocalTime(endHour, 0)).toNyInstant().toEpochMilliseconds()
     return flow {
         emitAll(
           db()

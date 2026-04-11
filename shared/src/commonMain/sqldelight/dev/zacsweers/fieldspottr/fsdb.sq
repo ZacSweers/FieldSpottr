@@ -53,7 +53,7 @@ permitDateRange:
 SELECT MIN(start) AS minDate, MAX(start) AS maxDate FROM dbPermit;
 
 getPermitsInTimeWindow:
-SELECT * FROM dbPermit WHERE start >= :windowStart AND start < :windowEnd;
+SELECT * FROM dbPermit WHERE start < :windowEnd AND end > :windowStart;
 
 -- Key-value metadata store
 CREATE TABLE IF NOT EXISTS dbMetadata (
