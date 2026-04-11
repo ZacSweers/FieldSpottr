@@ -76,6 +76,7 @@ import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Instant
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -92,6 +93,7 @@ data class AreaScreen(
   /** If set, locks to this group and shows the title/subtitle instead of the dropdown. */
   val fixedTitle: String? = null,
   val fixedSubtitle: String? = null,
+  val selectedDate: Long? = null,
 ) : Screen {
   data class State(
     val date: LocalDate,
@@ -141,7 +143,7 @@ fun AreaPresenter(
   navigator: Navigator,
 ): AreaScreen.State {
   var selectedDate by rememberRetained {
-    mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
+    mutableStateOf((screen.selectedDate?.let{ Instant.fromEpochSeconds(it) } ?: System.now()).toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
   val areasFlow = rememberRetained { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()

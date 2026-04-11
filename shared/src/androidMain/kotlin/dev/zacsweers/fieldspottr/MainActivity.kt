@@ -19,8 +19,8 @@ import kotlinx.datetime.LocalDate
 class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
-    super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
     val app = (application as FieldSpottrApplication).fsGraph.fsApp
     setContent { app(onRootPop = ::finish) }
   }

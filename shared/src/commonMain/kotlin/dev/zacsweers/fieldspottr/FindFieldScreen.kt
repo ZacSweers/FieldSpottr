@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
 
 @Immutable
@@ -167,7 +168,12 @@ fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): Find
         val areaName = area?.displayName ?: group.area
         val subtitle = if (group.name != areaName) areaName else null
         navigator.goTo(
-          AreaScreen(initialGroup = event.group, fixedTitle = group.name, fixedSubtitle = subtitle)
+          AreaScreen(
+            initialGroup = event.group,
+            fixedTitle = group.name,
+            fixedSubtitle = subtitle,
+            selectedDate = selectedDate.atStartOfDayIn(TimeZone.UTC).epochSeconds,
+          )
         )
       }
       FindFieldScreen.Event.Refresh -> {
