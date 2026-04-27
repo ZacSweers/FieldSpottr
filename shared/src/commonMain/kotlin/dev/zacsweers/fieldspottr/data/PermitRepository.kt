@@ -271,8 +271,7 @@ class PermitRepository(
   fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
     val windowStart =
       LocalDateTime(date, LocalTime(startHour, 0)).toNyInstant().toEpochMilliseconds()
-    val windowEnd =
-      LocalDateTime(date, LocalTime(endHour, 0)).toNyInstant().toEpochMilliseconds()
+    val windowEnd = LocalDateTime(date, LocalTime(endHour, 0)).toNyInstant().toEpochMilliseconds()
     return flow {
         emitAll(
           db()

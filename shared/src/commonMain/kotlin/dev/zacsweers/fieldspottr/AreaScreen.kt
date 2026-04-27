@@ -143,7 +143,11 @@ fun AreaPresenter(
   navigator: Navigator,
 ): AreaScreen.State {
   var selectedDate by rememberRetained {
-    mutableStateOf((screen.selectedDate?.let{ Instant.fromEpochSeconds(it) } ?: System.now()).toLocalDateTime(TimeZone.currentSystemDefault()).date)
+    mutableStateOf(
+      (screen.selectedDate?.let { Instant.fromEpochSeconds(it) } ?: System.now())
+        .toLocalDateTime(TimeZone.currentSystemDefault())
+        .date
+    )
   }
   val areasFlow = rememberRetained { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()
