@@ -83,7 +83,7 @@ ktor-client-engine-darwin = { module = "io.ktor:ktor-client-darwin", version.ref
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }
 
-lints-compose = "com.slack.lint.compose:compose-lint-checks:1.4.2"
+lints-compose = "com.slack.lint.compose:compose-lint-checks:1.4.3"
 
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
