@@ -45,10 +45,8 @@ import dev.zacsweers.fieldspottr.data.FSPreferencesStore
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
-import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.daySwipeable
-import dev.zacsweers.fieldspottr.util.extractCoordinatesFromUrl
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
@@ -206,30 +204,12 @@ fun PermitGridPresenter(
       }
       PermitGridScreen.Event.ShowLocation -> {
         val location = areas.groups[selectedGroup]?.location ?: return@State
-        val coords = extractCoordinatesFromUrl(location.gmaps, location.amaps)
-        if (CurrentPlatform != Platform.Jvm && coords != null) {
-          val (lat, lon) = coords
-          navigator.goTo(
-            ScaffoldScreen(
-              title = selectedGroup,
-              contentScreen =
-                LocationMapScreen(
-                  latitude = lat,
-                  longitude = lon,
-                  title = selectedGroup,
-                  gmapsUrl = location.gmaps,
-                  amapsUrl = location.amaps,
-                ),
-            )
-          )
-        } else {
-          val url =
-            when (CurrentPlatform) {
-              Native -> location.amaps
-              else -> location.gmaps
-            }
-          uriHandler.openUri(url)
-        }
+        val url =
+          when (CurrentPlatform) {
+            Native -> location.amaps
+            else -> location.gmaps
+          }
+        uriHandler.openUri(url)
       }
     }
   }
