@@ -13,11 +13,10 @@ import kotlinx.datetime.toLocalDateTime
 
 private val NYC_TZ = TimeZone.of("America/New_York")
 
-private val EventTimeFormatter =
-  LocalDateTime.Format {
-    amPmHour(padding = Padding.NONE)
-    amPmMarker("am", "pm")
-  }
+private val EventTimeFormatter = LocalDateTime.Format {
+  amPmHour(padding = Padding.NONE)
+  amPmMarker("am", "pm")
+}
 
 private val EventTimeNoAmPmFormatter = LocalDateTime.Format { amPmHour(padding = Padding.NONE) }
 

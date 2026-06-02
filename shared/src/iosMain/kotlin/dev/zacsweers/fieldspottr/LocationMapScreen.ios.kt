@@ -79,7 +79,8 @@ actual fun LocationMap(state: LocationMapScreen.State, modifier: Modifier) {
           }
         view.addAnnotation(annotation)
       },
-      properties = UIKitInteropProperties(isInteractive = true, isNativeAccessibilityEnabled = true),
+      properties =
+        UIKitInteropProperties(isInteractive = true, isNativeAccessibilityEnabled = true),
     )
   }
 }

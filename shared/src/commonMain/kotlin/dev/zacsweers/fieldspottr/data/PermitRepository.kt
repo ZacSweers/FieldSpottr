@@ -73,24 +73,23 @@ private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
 private const val USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
 
-internal val FORMATTER =
-  LocalDateTime.Format {
-    monthNumber(padding = Padding.NONE)
-    char('/')
-    day(padding = Padding.NONE)
-    char('/')
-    year()
-    char(' ')
-    time(
-      LocalTime.Format {
-        amPmHour(padding = Padding.NONE)
-        char(':')
-        minute()
-        char(' ')
-        amPmMarker("a.m.", "p.m.")
-      }
-    )
-  }
+internal val FORMATTER = LocalDateTime.Format {
+  monthNumber(padding = Padding.NONE)
+  char('/')
+  day(padding = Padding.NONE)
+  char('/')
+  year()
+  char(' ')
+  time(
+    LocalTime.Format {
+      amPmHour(padding = Padding.NONE)
+      char(':')
+      minute()
+      char(' ')
+      amPmMarker("a.m.", "p.m.")
+    }
+  )
+}
 
 internal fun SqlDriver.createFSDatabase(): FSDatabase {
   return FSDatabase(this)

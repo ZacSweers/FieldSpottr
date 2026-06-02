@@ -69,6 +69,9 @@ bugsnag {
   if (!bugsnagKey.isNullOrBlank()) {
     apiKey = bugsnagKey
   }
+  variants {
+    maybeCreate("release").autoUploadBundle = isReleasing.get()
+  }
 }
 
 dependencies {
