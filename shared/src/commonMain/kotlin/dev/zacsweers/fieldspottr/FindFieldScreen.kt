@@ -56,6 +56,7 @@ import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
+import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FieldGroup
 import dev.zacsweers.fieldspottr.data.PermitRepository
@@ -66,6 +67,8 @@ import dev.zacsweers.fieldspottr.util.daySwipeable
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import dev.zacsweers.metro.AppScope
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -406,7 +409,7 @@ internal fun computeAvailability(
   startHour: Int,
   endHour: Int,
 ): Pair<ImmutableList<FieldAvailability>, ImmutableList<FieldAvailability>> {
-  val permitsByGroup = permits.groupBy { it.groupName }
+  val permitsByAreaAndGroup = permits.groupBy { it.area to it.groupName }
 
   val fullyOpen = mutableListOf<FieldAvailability>()
   val partiallyOpen = mutableListOf<FieldAvailability>()
@@ -415,8 +418,14 @@ internal fun computeAvailability(
     for (group in area.fieldGroups) {
       if (group.closed != null) continue
 
-      val groupPermits = permitsByGroup[group.name].orEmpty()
-      if (groupPermits.isEmpty()) {
+      val bookedHours =
+        bookedHoursForGroup(
+          permits = permitsByAreaAndGroup[area.areaName to group.name].orEmpty(),
+          area = area,
+          startHour = startHour,
+          endHour = endHour,
+        )
+      if (bookedHours.isEmpty()) {
         fullyOpen.add(
           FieldAvailability(
             group = group,
@@ -426,12 +435,6 @@ internal fun computeAvailability(
           )
         )
       } else {
-        val bookedHours = mutableSetOf<Int>()
-        for (permit in groupPermits) {
-          val pStart = permit.start.toNyLocalDateTime().hour
-          val pEnd = permit.end.toNyLocalDateTime().hour.let { if (it == 0) 24 else it }
-          for (h in pStart until pEnd) bookedHours.add(h)
-        }
         val freeHours = (startHour until endHour).filter { it !in bookedHours }
         if (freeHours.isNotEmpty()) {
           partiallyOpen.add(
@@ -448,6 +451,36 @@ internal fun computeAvailability(
   }
 
   return fullyOpen.toImmutableList() to partiallyOpen.toImmutableList()
+}
+
+private fun bookedHoursForGroup(
+  permits: List<DbPermit>,
+  area: Area,
+  startHour: Int,
+  endHour: Int,
+): Set<Int> {
+  if (permits.isEmpty()) return emptySet()
+
+  val bookedHours = mutableSetOf<Int>()
+  for (permit in permits) {
+    if (permit.fieldId !in area.fieldMappings) continue
+
+    val permitStart = permit.start.toNyLocalDateTime()
+    val permitEnd = permit.end.toNyLocalDateTime()
+    val permitStartHour = permitStart.hour
+    val permitEndHour =
+      when {
+        permitEnd.hour == 0 && permitEnd.date > permitStart.date -> 24
+        permitEnd.minute > 0 || permitEnd.second > 0 || permitEnd.nanosecond > 0 ->
+          permitEnd.hour + 1
+        else -> permitEnd.hour
+      }
+
+    for (hour in max(startHour, permitStartHour) until min(endHour, permitEndHour)) {
+      bookedHours.add(hour)
+    }
+  }
+  return bookedHours
 }
 
 private fun formatFreeRanges(freeHours: List<Int>): String {
