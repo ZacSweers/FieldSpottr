@@ -205,7 +205,8 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
               val prevPermit = sortedPermits[currentPermitIndex - 1]
               if (permit.duration > prevPermit.duration) {
                 // Remove previous shorter permit and add this one
-                elements.removeLast()
+                // Not using removeLast() due to JDK 21 method
+                elements.removeAt(elements.lastIndex)
                 elements += permit
                 hour = permit.end
               }
