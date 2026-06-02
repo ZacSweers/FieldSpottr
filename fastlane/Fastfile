@@ -1,5 +1,7 @@
 skip_docs
 
+require 'fileutils'
+
 platform :android do
 
   lane :publish_prod do
@@ -98,13 +100,27 @@ platform :ios do
       build_number: ENV['FS_BUILD_NUMBER']
     ) unless env_nil_or_blank('FS_BUILD_NUMBER')
 
+    archive_path = File.expand_path("../build/#{options[:scheme]}.xcarchive", __dir__)
+    FileUtils.rm_rf(archive_path)
+
+    build_app(
+      project: "FieldSpottr/FieldSpottr.xcodeproj",
+      scheme: options[:scheme],
+      archive_path: archive_path,
+      buildlog_path: "build/fastlane-buildlog",
+      skip_package_ipa: true,
+      skip_codesigning: skip_certs,
+    )
+
+    next if skip_certs
+
     with_system_tools_first do
       build_app(
         project: "FieldSpottr/FieldSpottr.xcodeproj",
         scheme: options[:scheme],
+        archive_path: archive_path,
         buildlog_path: "build/fastlane-buildlog",
-        skip_package_ipa: skip_certs,
-        skip_codesigning: skip_certs,
+        skip_build_archive: true,
       )
     end
   end
