@@ -52,6 +52,7 @@ android {
     maybeCreate("release").apply {
       isDebuggable = false
       isMinifyEnabled = true
+      isShrinkResources = true
       matchingFallbacks += listOf("release")
       proguardFiles("proguardrules.pro")
       signingConfig = signingConfigs.findByName("release") ?: signingConfigs["debug"]

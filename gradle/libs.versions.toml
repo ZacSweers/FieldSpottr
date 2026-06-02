@@ -1,5 +1,5 @@
 [versions]
-aboutLicenses = "14.2.0"
+aboutLicenses = "14.2.1"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.7.1"
 agp = "9.2.1"
@@ -7,7 +7,7 @@ androidx-datastore = "1.2.1"
 assertk = "0.28.1"
 calf = "0.12.0"
 circuit = "0.33.1"
-compose-jb = "1.10.3"
+compose-jb = "1.11.1"
 androidCompileSdk = "36"
 jdk = "25"
 jvmTarget = "11"
@@ -16,11 +16,11 @@ kotlin = "2.3.21"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 ktfmt = "0.56"
-ktor = "3.4.3"
+ktor = "3.5.0"
 mapsCompose = "8.3.0"
-metro = "1.0.0"
+metro = "1.1.1"
 okio = "3.17.0"
-spotless = "8.4.0"
+spotless = "8.6.0"
 sqldelight = "2.3.2"
 
 [plugins]
@@ -83,12 +83,12 @@ ktor-client-engine-darwin = { module = "io.ktor:ktor-client-darwin", version.ref
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }
 
-lints-compose = "com.slack.lint.compose:compose-lint-checks:1.4.3"
+lints-compose = "com.slack.lint.compose:compose-lint-checks:1.5.1"
 
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
 
-slf4jNop = "org.slf4j:slf4j-nop:2.0.17"
+slf4jNop = "org.slf4j:slf4j-nop:2.0.18"
 
 sqldelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
 sqldelight-driver-jdbc = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
