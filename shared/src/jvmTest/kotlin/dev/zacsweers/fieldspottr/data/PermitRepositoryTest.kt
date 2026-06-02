@@ -136,6 +136,24 @@ class PermitRepositoryTest {
   }
 
   @Test
+  fun `allPermitsInWindow returns overlapping permits`() = runTest {
+    val eveningPermit =
+      morningPermit.copy(recordId = 8L, start = 6.pm, end = 8.pm, name = "Evening Permit")
+    val endingAtWindowStart = morningPermit.copy(recordId = 9L, start = 4.pm, end = 6.pm)
+    val startingAtWindowEnd =
+      morningPermit.copy(recordId = 10L, start = 11.pm, end = 11.pm + 1.hours.inWholeMilliseconds)
+    temporaryDatabase.db().transaction {
+      temporaryDatabase.db().fsdbQueries.addPermit(eveningPermit)
+      temporaryDatabase.db().fsdbQueries.addPermit(endingAtWindowStart)
+      temporaryDatabase.db().fsdbQueries.addPermit(startingAtWindowEnd)
+    }
+
+    val permits = repository.allPermitsInWindow(testDate, startHour = 18, endHour = 23).first()
+
+    assertThat(permits).isEqualTo(listOf(eveningPermit))
+  }
+
+  @Test
   fun `ensure time query is inclusive start`() = runTest {
     temporaryDatabase.db().transaction {
       temporaryDatabase.db().fsdbQueries.addPermit(midnightPermit)

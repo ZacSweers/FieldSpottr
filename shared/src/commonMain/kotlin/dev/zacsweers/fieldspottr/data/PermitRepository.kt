@@ -276,7 +276,7 @@ class PermitRepository(
         emitAll(
           db()
             .fsdbQueries
-            .getPermitsInTimeWindow(windowStart, windowEnd)
+            .getPermitsInTimeWindow(windowEnd = windowEnd, windowStart = windowStart)
             .asFlow()
             .mapToList(Dispatchers.IO)
         )

@@ -237,6 +237,58 @@ fun buildDefaultAreas(): Areas {
       }
     }
     area(
+      name = "Sara D. Roosevelt Park",
+      displayName = "Sara D. Roosevelt Park",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M105/csv",
+    ) {
+      group(
+        name = "Nike Field",
+        location =
+          Location(
+            "https://maps.app.goo.gl/oAhmjiWkU8uxef4w7",
+            "https://maps.apple.com/place?place-id=I877D8AD17649FAE0&coordinate=40.722017%2C-73.991512&name=Nike+Field",
+          ),
+      ) {
+        field(csvName = "Nike Field-Soccer-02", displayName = "Soccer")
+      }
+      group(
+        name = "Canal Street Mini Field",
+        location =
+          Location(
+            "https://maps.app.goo.gl/s5xrKUAMaxH6ciqv6",
+            "https://maps.apple.com/?ll=40.716021,-73.994258&q=Canal%20Street%20Mini%20Field",
+          ),
+      ) {
+        field(csvName = "Canal Street Mini Field-Soccer-01", displayName = "Soccer")
+      }
+      group(
+        name = "Sara D. Roosevelt Park Futsal",
+        location =
+          Location(
+            "https://maps.app.goo.gl/6dJosDeXYpMoCSwU8",
+            "https://maps.apple.com/?ll=40.719300,-73.992800&q=Sara%20D.%20Roosevelt%20Park%20Futsal",
+          ),
+      ) {
+        field(csvName = "Futsal-01", displayName = "Futsal")
+      }
+    }
+    area(
+      name = "Columbus Park",
+      displayName = "Columbus Park",
+      csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M015/csv",
+    ) {
+      group(
+        name = "Columbus Park",
+        location =
+          Location(
+            "https://maps.app.goo.gl/zQrviCTRajcKLoWB7",
+            "https://maps.apple.com/place?place-id=I945F817E3C2A5B6D&coordinate=40.715444%2C-74.000003&name=Columbus+Park+Soccer+Field",
+          ),
+      ) {
+        field(csvName = "Soccer-01", displayName = "Soccer")
+      }
+    }
+    area(
       name = "Pier 42",
       displayName = "Pier 42",
       csvUrl = "https://www.nycgovparks.org/permits/field-and-court/issued/M369/csv",

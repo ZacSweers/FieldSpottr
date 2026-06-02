@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "entries": [
     {
       "areaName": "Baruch",
@@ -54,11 +53,9 @@
       "areaName": "ERP",
       "displayName": "East River Park",
       "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M144/csv",
-      "subtitle": "Partially closed",
       "fieldGroups": [
         {
           "name": "Track",
-          "closed": "Reconstruction",
           "fields": [
             {
               "name": "Soccer-01A East 6th Street",
@@ -91,11 +88,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/bFmVPr5st28os4vQA",
             "amaps": "https://maps.apple.com/?address=E%20River%20Esplanade%20%26%20FDR%20Drive%0ANew%20York,%20NY%20%2010002%0AUnited%20States&auid=16002436924869229563&ll=40.721770,-73.973812&lsp=9902&q=East%20River%20Park%20Running%20Track"
-          }
+          },
+          "closed": "Closed for reconstruction"
         },
         {
           "name": "Field 6",
-          "closed": "Reconstruction",
           "fields": [
             {
               "name": "Baseball-06",
@@ -118,14 +115,15 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/KD27oHCF6Jw1UhX58",
             "amaps": "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20E%20River%20Esplanade,%20New%20York,%20NY%20%2010002,%20United%20States&auid=2997997111374685654&ll=40.719770,-73.974155&lsp=9902&q=John%20V.%20Lindsay%20East%20River%20Park%20Baseball%20Fields"
-          }
+          },
+          "closed": "Closed for reconstruction"
         },
         {
           "name": "Grand Street (Field 2)",
           "fields": [
             {
               "name": "Grand Street - Softball-01",
-              "displayName": "Softball (south))",
+              "displayName": "Softball (south)",
               "group": "Grand Street (Field 2)",
               "sharedFields": [
                 "field1"
@@ -169,7 +167,8 @@
             "amaps": "https://maps.apple.com/place?coordinate=40.713506,-73.976811&name=Marked%20Location"
           }
         }
-      ]
+      ],
+      "subtitle": "Partially closed"
     },
     {
       "areaName": "Corlears Hook",
@@ -194,6 +193,80 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/qhdRxmus8UPUtSyY8",
             "amaps": "https://maps.apple.com/?address=397%20FDR%20Drive,%20New%20York,%20NY%2010002,%20United%20States&auid=16313010153387216666&ll=40.711739,-73.979789&lsp=9902&q=Corlears%20Hook%20Park"
+          }
+        }
+      ]
+    },
+    {
+      "areaName": "Sara D. Roosevelt Park",
+      "displayName": "Sara D. Roosevelt Park",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M105/csv",
+      "fieldGroups": [
+        {
+          "name": "Nike Field",
+          "fields": [
+            {
+              "name": "Nike Field-Soccer-02",
+              "displayName": "Soccer",
+              "group": "Nike Field"
+            }
+          ],
+          "area": "Sara D. Roosevelt Park",
+          "location": {
+            "gmaps": "https://maps.app.goo.gl/oAhmjiWkU8uxef4w7",
+            "amaps": "https://maps.apple.com/place?place-id=I877D8AD17649FAE0&coordinate=40.722017%2C-73.991512&name=Nike+Field"
+          }
+        },
+        {
+          "name": "Canal Street Mini Field",
+          "fields": [
+            {
+              "name": "Canal Street Mini Field-Soccer-01",
+              "displayName": "Soccer",
+              "group": "Canal Street Mini Field"
+            }
+          ],
+          "area": "Sara D. Roosevelt Park",
+          "location": {
+            "gmaps": "https://maps.app.goo.gl/s5xrKUAMaxH6ciqv6",
+            "amaps": "https://maps.apple.com/?ll=40.716021,-73.994258&q=Canal%20Street%20Mini%20Field"
+          }
+        },
+        {
+          "name": "Sara D. Roosevelt Park Futsal",
+          "fields": [
+            {
+              "name": "Futsal-01",
+              "displayName": "Futsal",
+              "group": "Sara D. Roosevelt Park Futsal"
+            }
+          ],
+          "area": "Sara D. Roosevelt Park",
+          "location": {
+            "gmaps": "https://maps.app.goo.gl/6dJosDeXYpMoCSwU8",
+            "amaps": "https://maps.apple.com/?ll=40.719300,-73.992800&q=Sara%20D.%20Roosevelt%20Park%20Futsal"
+          }
+        }
+      ]
+    },
+    {
+      "areaName": "Columbus Park",
+      "displayName": "Columbus Park",
+      "csvUrl": "https://www.nycgovparks.org/permits/field-and-court/issued/M015/csv",
+      "fieldGroups": [
+        {
+          "name": "Columbus Park",
+          "fields": [
+            {
+              "name": "Soccer-01",
+              "displayName": "Soccer",
+              "group": "Columbus Park"
+            }
+          ],
+          "area": "Columbus Park",
+          "location": {
+            "gmaps": "https://maps.app.goo.gl/zQrviCTRajcKLoWB7",
+            "amaps": "https://maps.apple.com/place?place-id=I945F817E3C2A5B6D&coordinate=40.715444%2C-74.000003&name=Columbus+Park+Soccer+Field"
           }
         }
       ]
