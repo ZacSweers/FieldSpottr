@@ -98,13 +98,15 @@ platform :ios do
       build_number: ENV['FS_BUILD_NUMBER']
     ) unless env_nil_or_blank('FS_BUILD_NUMBER')
 
-    build_app(
-      project: "FieldSpottr/FieldSpottr.xcodeproj",
-      scheme: options[:scheme],
-      buildlog_path: "build/fastlane-buildlog",
-      skip_package_ipa: skip_certs,
-      skip_codesigning: skip_certs,
-    )
+    with_system_tools_first do
+      build_app(
+        project: "FieldSpottr/FieldSpottr.xcodeproj",
+        scheme: options[:scheme],
+        buildlog_path: "build/fastlane-buildlog",
+        skip_package_ipa: skip_certs,
+        skip_codesigning: skip_certs,
+      )
+    end
   end
 
   lane :build_prod do
@@ -158,4 +160,14 @@ end
 def env_nil_or_blank(name)
   value = ENV[name]
   return value.nil? || value.empty?
+end
+
+def with_system_tools_first
+  original_path = ENV['PATH']
+  system_paths = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+  # Xcode's IPA export calls /usr/bin/rsync, which starts its local server via PATH.
+  ENV['PATH'] = (system_paths + original_path.to_s.split(File::PATH_SEPARATOR)).uniq.join(File::PATH_SEPARATOR)
+  yield
+ensure
+  ENV['PATH'] = original_path
 end
