@@ -49,12 +49,14 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
+import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
@@ -269,9 +271,8 @@ class PermitRepository(
   }
 
   fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
-    val windowStart =
-      LocalDateTime(date, LocalTime(startHour, 0)).toNyInstant().toEpochMilliseconds()
-    val windowEnd = LocalDateTime(date, LocalTime(endHour, 0)).toNyInstant().toEpochMilliseconds()
+    val windowStart = windowBoundaryMillis(date, startHour)
+    val windowEnd = windowBoundaryMillis(date, endHour)
     return flow {
         emitAll(
           db()
@@ -282,6 +283,15 @@ class PermitRepository(
         )
       }
       .flowOn(Dispatchers.IO)
+  }
+
+  private fun windowBoundaryMillis(date: LocalDate, hour: Int): Long {
+    require(hour in 0..24) { "Hour must be in 0..24: $hour" }
+    val boundaryDate = if (hour == 24) date.plus(1, DateTimeUnit.DAY) else date
+    val boundaryHour = if (hour == 24) 0 else hour
+    return LocalDateTime(boundaryDate, LocalTime(boundaryHour, 0))
+      .toNyInstant()
+      .toEpochMilliseconds()
   }
 
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {

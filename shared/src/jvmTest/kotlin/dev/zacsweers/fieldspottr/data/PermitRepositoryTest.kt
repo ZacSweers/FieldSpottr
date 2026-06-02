@@ -154,6 +154,22 @@ class PermitRepositoryTest {
   }
 
   @Test
+  fun `allPermitsInWindow supports midnight end boundary`() = runTest {
+    val latePermit =
+      morningPermit.copy(
+        recordId = 11L,
+        start = 11.pm,
+        end = 11.pm + 1.hours.inWholeMilliseconds,
+        name = "Late Permit",
+      )
+    temporaryDatabase.db().fsdbQueries.addPermit(latePermit)
+
+    val permits = repository.allPermitsInWindow(testDate, startHour = 18, endHour = 24).first()
+
+    assertThat(permits).isEqualTo(listOf(latePermit))
+  }
+
+  @Test
   fun `ensure time query is inclusive start`() = runTest {
     temporaryDatabase.db().transaction {
       temporaryDatabase.db().fsdbQueries.addPermit(midnightPermit)
