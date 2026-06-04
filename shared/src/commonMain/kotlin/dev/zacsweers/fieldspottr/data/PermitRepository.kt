@@ -67,12 +67,6 @@ import okio.use
 /** The default buffer size when working with buffered streams. */
 private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
 
-// Lie and say we're a browser. NYC parks doesn't like bots
-// Can't really easily get a "real" UA without spinning up UI and doing async JS calls
-// on iOS.
-private const val USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-
 internal val FORMATTER = LocalDateTime.Format {
   monthNumber(padding = Padding.NONE)
   char('/')
@@ -101,6 +95,7 @@ class PermitRepository(
   private val json: Json,
   private val logger: Logger,
   private val db: suspend () -> FSDatabase,
+  private val client: HttpClient,
 ) {
 
   @Inject
@@ -109,6 +104,7 @@ class PermitRepository(
     appDirs: FSAppDirs,
     json: Json,
     logger: Logger,
+    client: HttpClient,
   ) : this(
     appDirs,
     json,
@@ -117,9 +113,8 @@ class PermitRepository(
       val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
       driver.createFSDatabase()
     },
+    client,
   )
-
-  private val client = lazySuspend { HttpClient() }
 
   private val areasJson by lazy { appDirs.userData / "areas.json" }
 
@@ -341,8 +336,8 @@ class PermitRepository(
   ): Boolean {
     try {
       appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
-        client()
-          .prepareGet(url) { userAgent(USER_AGENT) }
+        client
+          .prepareGet(url) { userAgent(NYC_PARKS_USER_AGENT) }
           .execute { httpResponse ->
             if (httpResponse.status == HttpStatusCode.Accepted) {
               if (attempt == maxAttempts) {
