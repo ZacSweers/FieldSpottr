@@ -14,7 +14,8 @@
               "group": "Baruch",
               "sharedFields": [
                 "field1"
-              ]
+              ],
+              "apiLocationId": "M165-BASEBALL-1"
             },
             {
               "name": "Football-01",
@@ -22,7 +23,8 @@
               "group": "Baruch",
               "sharedFields": [
                 "field1"
-              ]
+              ],
+              "apiLocationId": "M165-FOOTBALL-1"
             },
             {
               "name": "Football-02",
@@ -30,7 +32,8 @@
               "group": "Baruch",
               "sharedFields": [
                 "field2"
-              ]
+              ],
+              "apiLocationId": "M165-FOOTBALL-2"
             },
             {
               "name": "Softball-02",
@@ -38,7 +41,8 @@
               "group": "Baruch",
               "sharedFields": [
                 "field2"
-              ]
+              ],
+              "apiLocationId": "M165-BASEBALL-2"
             }
           ],
           "area": "Baruch",
@@ -64,7 +68,8 @@
               "sharedFields": [
                 "Track field",
                 "track field 1a"
-              ]
+              ],
+              "apiLocationId": "M144-ZN05-SOCCER-2"
             },
             {
               "name": "Soccer-04 East 6th Street",
@@ -72,7 +77,8 @@
               "group": "Track",
               "sharedFields": [
                 "Track field"
-              ]
+              ],
+              "apiLocationId": "M144-ZN05-SOCCER-1"
             },
             {
               "name": "Soccer-01B East 6th Street",
@@ -81,7 +87,8 @@
               "sharedFields": [
                 "Track field",
                 "track field 1b"
-              ]
+              ],
+              "apiLocationId": "M144-ZN05-SOCCER-3"
             }
           ],
           "area": "ERP",
@@ -100,7 +107,8 @@
               "group": "Field 6",
               "sharedFields": [
                 "field6"
-              ]
+              ],
+              "apiLocationId": "M144-ZN04-BASEBALL-2"
             },
             {
               "name": "Soccer-03 Houston St & FDR",
@@ -108,7 +116,8 @@
               "group": "Field 6",
               "sharedFields": [
                 "field6"
-              ]
+              ],
+              "apiLocationId": "M144-ZN04-SOCCER-1"
             }
           ],
           "area": "ERP",
@@ -126,29 +135,32 @@
               "displayName": "Softball (south)",
               "group": "Grand Street (Field 2)",
               "sharedFields": [
-                "field1"
-              ]
+                "field2"
+              ],
+              "apiLocationId": "M144-ZN02-BASEBALL-1"
             },
             {
               "name": "Grand Street - Soccer 01",
               "displayName": "Whole Field",
               "group": "Grand Street (Field 2)",
               "sharedFields": [
-                "field1"
-              ]
+                "field2"
+              ],
+              "apiLocationId": "M144-ZN02-SOCCER-1"
             },
             {
               "name": "Grand Street - Softball-02",
               "displayName": "Softball (north)",
               "group": "Grand Street (Field 2)",
               "sharedFields": [
-                "field1"
-              ]
+                "field2"
+              ],
+              "apiLocationId": "M144-ZN02-BASEBALL-2"
             }
           ],
           "area": "ERP",
           "location": {
-            "gmaps": "https://www.google.com/maps/place/40°42'44.2\"N+73°58'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
+            "gmaps": "https://www.google.com/maps/place/40\u00b042'44.2\"N+73\u00b058'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
             "amaps": "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20New%20York,%20NY%20%2010002,%20United%20States&ll=40.712206,-73.976992&q=Dropped%20Pin"
           }
         },
@@ -158,7 +170,8 @@
             {
               "name": "Grand Street Mini Field-Soccer-02",
               "displayName": "Whole Field",
-              "group": "Grand Street Mini Field (Field 3)"
+              "group": "Grand Street Mini Field (Field 3)",
+              "apiLocationId": "M144-ZN02-SOCCER-12"
             }
           ],
           "area": "ERP",
@@ -181,12 +194,14 @@
             {
               "name": "Soccer-01",
               "displayName": "Soccer",
-              "group": "Corlears Hook"
+              "group": "Corlears Hook",
+              "apiLocationId": "M017-SOCCER-1"
             },
             {
               "name": "Softball-01",
               "displayName": "Softball",
-              "group": "Corlears Hook"
+              "group": "Corlears Hook",
+              "apiLocationId": "M017-BASEBALL-1"
             }
           ],
           "area": "Corlears Hook",
@@ -208,7 +223,8 @@
             {
               "name": "Nike Field-Soccer-02",
               "displayName": "Soccer",
-              "group": "Nike Field"
+              "group": "Nike Field",
+              "apiLocationId": "M105-SOCCER-2"
             }
           ],
           "area": "Sara D. Roosevelt Park",
@@ -223,7 +239,8 @@
             {
               "name": "Canal Street Mini Field-Soccer-01",
               "displayName": "Soccer",
-              "group": "Canal Street Mini Field"
+              "group": "Canal Street Mini Field",
+              "apiLocationId": "M105-SOCCER-1"
             }
           ],
           "area": "Sara D. Roosevelt Park",
@@ -238,7 +255,8 @@
             {
               "name": "Futsal-01",
               "displayName": "Futsal",
-              "group": "Sara D. Roosevelt Park Futsal"
+              "group": "Sara D. Roosevelt Park Futsal",
+              "apiLocationId": "M105-SOCCER-3"
             }
           ],
           "area": "Sara D. Roosevelt Park",
@@ -260,7 +278,8 @@
             {
               "name": "Soccer-01",
               "displayName": "Soccer",
-              "group": "Columbus Park"
+              "group": "Columbus Park",
+              "apiLocationId": "M015-SOCCER-1"
             }
           ],
           "area": "Columbus Park",
@@ -282,7 +301,8 @@
             {
               "name": "Soccer-01",
               "displayName": "Soccer",
-              "group": "Pier 42"
+              "group": "Pier 42",
+              "apiLocationId": "M369-SOCCER-1"
             }
           ],
           "area": "Pier 42",
@@ -307,7 +327,8 @@
               "group": "Peter's Field",
               "sharedFields": [
                 "petersfield"
-              ]
+              ],
+              "apiLocationId": "M227-SOCCER-1"
             },
             {
               "name": "Softball-01",
@@ -315,7 +336,8 @@
               "group": "Peter's Field",
               "sharedFields": [
                 "petersfield"
-              ]
+              ],
+              "apiLocationId": "M227-BASEBALL-1"
             }
           ],
           "area": "Peter's Field",
@@ -337,7 +359,8 @@
             {
               "name": "Soccer-01",
               "displayName": "Soccer",
-              "group": "McCarren Track"
+              "group": "McCarren Track",
+              "apiLocationId": "B058-ZN02-FOOTBALL-1"
             }
           ],
           "area": "McCarren",
@@ -363,7 +386,8 @@
               "sharedFields": [
                 "bushwick inlet field",
                 "field 1a"
-              ]
+              ],
+              "apiLocationId": "B529-SOCCER-3"
             },
             {
               "name": "Soccer-01",
@@ -371,7 +395,8 @@
               "group": "Bushwick Inlet Park",
               "sharedFields": [
                 "bushwick inlet field"
-              ]
+              ],
+              "apiLocationId": "B529-SOCCER-2"
             },
             {
               "name": "Soccer-01B",
@@ -380,7 +405,8 @@
               "sharedFields": [
                 "bushwick inlet field",
                 "field 1b"
-              ]
+              ],
+              "apiLocationId": "B529-SOCCER-1"
             }
           ],
           "area": "Bushwick Inlet Park",
@@ -405,7 +431,8 @@
               "group": "Murphy Brothers Playground",
               "sharedFields": [
                 "murphy whole field"
-              ]
+              ],
+              "apiLocationId": "M059-BASEBALL-1"
             },
             {
               "name": "Tim McGinn Fields-Soccer-01",
@@ -413,7 +440,8 @@
               "group": "Murphy Brothers Playground",
               "sharedFields": [
                 "murphy whole field"
-              ]
+              ],
+              "apiLocationId": "M059-SOCCER-1"
             },
             {
               "name": "Tim McGinn Fields-Softball-02",
@@ -421,7 +449,8 @@
               "group": "Murphy Brothers Playground",
               "sharedFields": [
                 "murphy whole field"
-              ]
+              ],
+              "apiLocationId": "M059-BASEBALL-2"
             }
           ],
           "area": "Murphy Brothers Playground",
@@ -446,7 +475,8 @@
               "group": "St. Vartan Park",
               "sharedFields": [
                 "stvartan"
-              ]
+              ],
+              "apiLocationId": "M076-SOCCER-1"
             },
             {
               "name": "Softball-01",
@@ -454,7 +484,8 @@
               "group": "St. Vartan Park",
               "sharedFields": [
                 "stvartan"
-              ]
+              ],
+              "apiLocationId": "M076-BASEBALL-1"
             }
           ],
           "area": "St. Vartan Park",
@@ -465,5 +496,6 @@
         }
       ]
     }
-  ]
+  ],
+  "version": 2
 }
