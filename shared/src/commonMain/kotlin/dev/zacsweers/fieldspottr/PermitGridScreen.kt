@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
@@ -29,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
@@ -42,6 +45,7 @@ import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
+import dev.zacsweers.fieldspottr.data.LivePermitRepository
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -71,6 +75,8 @@ data object PermitGridScreen : Screen {
     val permits: PermitState?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
+    val canCheckLivePermits: Boolean,
+    val livePermitCheckState: LivePermitCheckState,
     val isDebug: Boolean,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
@@ -94,6 +100,8 @@ data object PermitGridScreen : Screen {
     data object ShowLocation : Event
 
     data object ToggleDefaultGroup : Event
+
+    data object CheckLivePermits : Event
   }
 }
 
@@ -101,6 +109,7 @@ data object PermitGridScreen : Screen {
 @Composable
 fun PermitGridPresenter(
   repository: PermitRepository,
+  livePermitRepository: () -> LivePermitRepository,
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): PermitGridScreen.State {
@@ -114,15 +123,22 @@ fun PermitGridPresenter(
   val defaultGroup by preferencesStore.defaultGroup.collectAsRetainedState(null)
   var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
   var userHasChangedGroup by rememberRetained { mutableStateOf(false) }
+  var livePermitCheckState by rememberRetained {
+    mutableStateOf<LivePermitCheckState>(LivePermitCheckState.NotChecked)
+  }
   LaunchedEffect(areas) {
     if (selectedGroup !in areas.groups) {
       selectedGroup = areas.entries[0].fieldGroups[0].name
       userHasChangedGroup = false
+      livePermitCheckState = LivePermitCheckState.NotChecked
     }
   }
   LaunchedEffect(defaultGroup) {
     val saved = defaultGroup
     if (!userHasChangedGroup && saved != null && saved in areas.groups) {
+      if (selectedGroup != saved) {
+        livePermitCheckState = LivePermitCheckState.NotChecked
+      }
       selectedGroup = saved
     }
   }
@@ -158,6 +174,14 @@ fun PermitGridPresenter(
   val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
+  val selectedFieldGroup = remember(selectedGroup, areas) { areas.groups[selectedGroup] }
+  val canCheckLivePermits =
+    remember(selectedFieldGroup) {
+      selectedFieldGroup?.let { group ->
+        group.closed == null && group.fields.any { it.apiLocationId != null }
+      } ?: false
+    }
+
   val uriHandler = LocalUriHandler.current
   return PermitGridScreen.State(
     areas = areas,
@@ -168,6 +192,8 @@ fun PermitGridPresenter(
     permits = permits,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
+    canCheckLivePermits = canCheckLivePermits,
+    livePermitCheckState = livePermitCheckState,
     isDebug = !BuildConfig.IS_RELEASE,
   ) { event ->
     when (event) {
@@ -175,9 +201,17 @@ fun PermitGridPresenter(
         scope.launch { repository.populateDb(forceRefresh = true) }
       }
       PermitGridScreen.Event.UseBuiltInAreas -> repository.useBuiltInAreas()
-      is PermitGridScreen.Event.FilterDate -> gridDate = event.date
+      is PermitGridScreen.Event.FilterDate -> {
+        if (gridDate != event.date) {
+          gridDate = event.date
+          livePermitCheckState = LivePermitCheckState.NotChecked
+        }
+      }
       is PermitGridScreen.Event.ChangeGroup -> {
-        selectedGroup = event.group
+        if (selectedGroup != event.group) {
+          selectedGroup = event.group
+          livePermitCheckState = LivePermitCheckState.NotChecked
+        }
         userHasChangedGroup = true
       }
       is PermitGridScreen.Event.ShowEventDetail -> {
@@ -202,6 +236,29 @@ fun PermitGridPresenter(
           if (isClearing) "Cleared default group" else "Set $selectedGroup as default"
         scope.launch { preferencesStore.setDefaultGroup(newDefault) }
       }
+      PermitGridScreen.Event.CheckLivePermits -> {
+        val group = selectedFieldGroup ?: return@State
+        if (
+          !canCheckLivePermits ||
+            livePermitCheckState == LivePermitCheckState.Loading ||
+            livePermitCheckState is LivePermitCheckState.Success
+        ) {
+          return@State
+        }
+        val date = gridDate
+        livePermitCheckState = LivePermitCheckState.Loading
+        scope.launch {
+          val result =
+            try {
+              LivePermitCheckState.Success(livePermitRepository().availability(group, date))
+            } catch (_: Exception) {
+              LivePermitCheckState.Failure("Failed to check live permits.")
+            }
+          if (selectedGroup == group.name && gridDate == date) {
+            livePermitCheckState = result
+          }
+        }
+      }
       PermitGridScreen.Event.ShowLocation -> {
         val location = areas.groups[selectedGroup]?.location ?: return@State
         val url =
@@ -219,88 +276,105 @@ fun PermitGridPresenter(
 @Composable
 fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()
-  Column(modifier = modifier, verticalArrangement = spacedBy(8.dp)) {
-    // Action buttons row
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-      horizontalArrangement = spacedBy(0.dp, alignment = Alignment.End),
-    ) {
-      IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleDefaultGroup) }) {
-        Icon(
-          Icons.Filled.Star,
-          contentDescription =
-            if (state.isDefaultGroup) "Clear default group"
-            else "Set ${state.selectedGroup} as default",
-          tint =
-            if (state.isDefaultGroup) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-        )
-      }
-      IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ShowLocation) }) {
-        Icon(Icons.Outlined.Place, contentDescription = "Location")
-      }
-      if (state.isDebug) {
-        val haptics = LocalHapticFeedback.current
-        Box(
-          modifier =
-            Modifier.minimumInteractiveComponentSize()
-              .combinedClickable(
-                onLongClick = {
-                  haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                  state.eventSink(PermitGridScreen.Event.UseBuiltInAreas)
-                },
-                onClick = { state.eventSink(PermitGridScreen.Event.Refresh) },
-              ),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
-        }
-      } else {
-        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.Refresh) }) {
-          Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
-        }
-      }
-    }
-
-    GroupSelector(state.selectedGroup, state.areas) { newGroup ->
-      state.eventSink(PermitGridScreen.Event.ChangeGroup(newGroup))
-    }
-    state.lastUpdated?.let { lastUpdated ->
-      Text(
-        lastUpdated,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp),
+  val liveAvailability = (state.livePermitCheckState as? LivePermitCheckState.Success)?.availability
+  Scaffold(
+    modifier = modifier,
+    containerColor = Color.Transparent,
+    floatingActionButton = {
+      LivePermitFloatingActionButton(
+        canCheckLivePermits = state.canCheckLivePermits,
+        livePermitCheckState = state.livePermitCheckState,
+        onCheckLivePermits = { state.eventSink(PermitGridScreen.Event.CheckLivePermits) },
       )
-    }
-
-    val cornerSlot =
-      remember(state.date, daySwipe.contentScale) {
-        movableContentOf {
-          DateSelector(
-            state.date,
-            id = "grid",
-            contentScale = daySwipe.contentScale,
-            permitDateRange = state.permitDateRange,
-          ) { newDate ->
-            state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
+    },
+  ) { innerPadding ->
+    Column(
+      modifier = Modifier.padding(innerPadding).fillMaxSize(),
+      verticalArrangement = spacedBy(8.dp),
+    ) {
+      // Action buttons row
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        horizontalArrangement = spacedBy(0.dp, alignment = Alignment.End),
+      ) {
+        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleDefaultGroup) }) {
+          Icon(
+            Icons.Filled.Star,
+            contentDescription =
+              if (state.isDefaultGroup) "Clear default group"
+              else "Set ${state.selectedGroup} as default",
+            tint =
+              if (state.isDefaultGroup) MaterialTheme.colorScheme.primary
+              else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+          )
+        }
+        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ShowLocation) }) {
+          Icon(Icons.Outlined.Place, contentDescription = "Location")
+        }
+        if (state.isDebug) {
+          val haptics = LocalHapticFeedback.current
+          Box(
+            modifier =
+              Modifier.minimumInteractiveComponentSize()
+                .combinedClickable(
+                  onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    state.eventSink(PermitGridScreen.Event.UseBuiltInAreas)
+                  },
+                  onClick = { state.eventSink(PermitGridScreen.Event.Refresh) },
+                ),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
+          }
+        } else {
+          IconButton(onClick = { state.eventSink(PermitGridScreen.Event.Refresh) }) {
+            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
           }
         }
       }
 
-    PermitGrid(
-      state.selectedGroup,
-      state.permits,
-      state.areas,
-      state.date,
-      cornerSlot = cornerSlot,
-      modifier =
-        Modifier.align(CenterHorizontally).weight(1f).daySwipeable(daySwipe, state.date) { newDate
-          ->
-          state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
-        },
-    ) { fieldName, index, event, orgVisible ->
-      state.eventSink(PermitGridScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible))
+      GroupSelector(state.selectedGroup, state.areas) { newGroup ->
+        state.eventSink(PermitGridScreen.Event.ChangeGroup(newGroup))
+      }
+      state.lastUpdated?.let { lastUpdated ->
+        Text(
+          lastUpdated,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(horizontal = 16.dp),
+        )
+      }
+
+      val cornerSlot =
+        remember(state.date, daySwipe.contentScale) {
+          movableContentOf {
+            DateSelector(
+              state.date,
+              id = "grid",
+              contentScale = daySwipe.contentScale,
+              permitDateRange = state.permitDateRange,
+            ) { newDate ->
+              state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
+            }
+          }
+        }
+
+      PermitGrid(
+        state.selectedGroup,
+        state.permits,
+        state.areas,
+        state.date,
+        liveAvailability = liveAvailability,
+        cornerSlot = cornerSlot,
+        modifier =
+          Modifier.align(CenterHorizontally).weight(1f).daySwipeable(daySwipe, state.date) { newDate
+            ->
+            state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
+          },
+      ) { fieldName, index, event, orgVisible ->
+        state.eventSink(PermitGridScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible))
+      }
     }
   }
 }
