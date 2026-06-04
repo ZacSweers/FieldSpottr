@@ -7,8 +7,8 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.util.toNyInstant
-import kotlin.time.Clock
 import kotlin.test.Test
+import kotlin.time.Clock
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.collections.immutable.toImmutableList

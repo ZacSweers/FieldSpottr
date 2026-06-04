@@ -161,7 +161,8 @@ internal fun LiveGroupAvailability.withOverlapsFrom(group: FieldGroup): LiveGrou
         } else {
           LiveFieldAvailability(
             field = field,
-            blocks = (direct?.blocks.orEmpty() + overlappingBlocks).mergeVisualBlocks().toImmutableList(),
+            blocks =
+              (direct?.blocks.orEmpty() + overlappingBlocks).mergeVisualBlocks().toImmutableList(),
             advisories = direct?.advisories.orEmpty().toImmutableList(),
           )
         }

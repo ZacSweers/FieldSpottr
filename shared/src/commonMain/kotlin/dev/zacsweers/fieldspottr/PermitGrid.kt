@@ -488,26 +488,27 @@ internal sealed interface PermitGridColumnItem {
   }
 }
 
-private fun PermitGridColumnItem.subtract(reservedSlots: List<IntRange>): List<PermitGridColumnItem> {
+private fun PermitGridColumnItem.subtract(
+  reservedSlots: List<IntRange>
+): List<PermitGridColumnItem> {
   var remaining = listOf(startSlot to endSlot)
   for (slots in reservedSlots) {
     val reservedStart = slots.first
     val reservedEnd = slots.last + 1
-    remaining =
-      remaining.flatMap { (start, end) ->
-        if (start >= reservedEnd || end <= reservedStart) {
-          listOf(start to end)
-        } else {
-          buildList {
-            if (start < reservedStart) {
-              add(start to minOf(end, reservedStart))
-            }
-            if (end > reservedEnd) {
-              add(maxOf(start, reservedEnd) to end)
-            }
+    remaining = remaining.flatMap { (start, end) ->
+      if (start >= reservedEnd || end <= reservedStart) {
+        listOf(start to end)
+      } else {
+        buildList {
+          if (start < reservedStart) {
+            add(start to minOf(end, reservedStart))
+          }
+          if (end > reservedEnd) {
+            add(maxOf(start, reservedEnd) to end)
           }
         }
       }
+    }
   }
   return remaining.mapNotNull { (start, end) -> copyWithSlots(start, end) }
 }
@@ -519,7 +520,8 @@ private fun PermitGridColumnItem.copyWithSlots(
   if (startSlot >= endSlot) return null
   return when (this) {
     is PermitGridColumnItem.Permit -> this
-    is PermitGridColumnItem.Block -> copy(block = block.copy(startSlot = startSlot, endSlot = endSlot))
+    is PermitGridColumnItem.Block ->
+      copy(block = block.copy(startSlot = startSlot, endSlot = endSlot))
     is PermitGridColumnItem.Advisory ->
       copy(advisory = advisory.copy(startSlot = startSlot, endSlot = endSlot))
   }
