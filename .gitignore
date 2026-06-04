@@ -16,6 +16,7 @@ env
 node_modules
 reports
 .cxx
+__pycache__/
 
 release/*.jks
 release/*.json
