@@ -107,6 +107,7 @@ kotlin {
         implementation(kotlin("test"))
         implementation(libs.assertk)
         implementation(libs.coroutines.test)
+        implementation(libs.ktor.client.mock)
         implementation(libs.okio.fakefilesystem)
         implementation(libs.sqldelight.driver.jdbc)
       }
