@@ -13,6 +13,9 @@ import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlinx.collections.immutable.toImmutableList
@@ -32,8 +35,26 @@ class PermitRepositoryTest {
   private val fakeFileSystem = FakeFileSystem()
   private val json = Json { ignoreUnknownKeys = true }
   private val appDirs = FakeFSAppDirs(fakeFileSystem)
+  private val httpClient =
+    HttpClient(
+      MockEngine { request ->
+        error("PermitRepositoryTest should not perform network request to ${request.url}")
+      }
+    )
+
   private val repository =
-    PermitRepository(appDirs, json, Logger.Companion, suspend { temporaryDatabase.db() })
+    PermitRepository(
+      appDirs,
+      json,
+      Logger.Companion,
+      suspend { temporaryDatabase.db() },
+      lazyOf(httpClient),
+    )
+
+  @AfterTest
+  fun closeHttpClient() {
+    httpClient.close()
+  }
 
   private val testDate = LocalDate(2025, 9, 18)
   private val midnight = testDate.atStartOfDayInNy().toEpochMilliseconds()
@@ -215,14 +236,14 @@ class PermitRepositoryTest {
   }
 
   @Test
-  fun `cached areas with older version is stale`() {
+  fun `cached areas with older version load built-in areas`() {
     val areasPath = appDirs.userData / "areas.json"
     val oldAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION - 1)
     fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(oldAreas)) }
 
     val loaded = repository.loadLocalAreas()
-    assertThat(loaded.version).isEqualTo(Areas.VERSION - 1)
-    assertThat(loaded.version < Areas.VERSION).isTrue()
+    assertThat(loaded).isSameInstanceAs(Areas.default)
+    assertThat(loaded.version).isEqualTo(Areas.VERSION)
   }
 
   @Test
@@ -234,6 +255,21 @@ class PermitRepositoryTest {
     val loaded = repository.loadLocalAreas()
     assertThat(loaded.version).isEqualTo(Areas.VERSION)
     assertThat(loaded.version < Areas.VERSION).isFalse()
+  }
+
+  @Test
+  fun `cached areas without version decode as current catalog version`() {
+    val areasWithoutVersion =
+      """
+      {
+        "entries": []
+      }
+      """
+        .trimIndent()
+
+    val loaded = json.decodeFromString<Areas>(areasWithoutVersion)
+
+    assertThat(loaded.version).isEqualTo(Areas.VERSION)
   }
 
   @Test
@@ -299,6 +335,22 @@ class PermitRepositoryTest {
 
     // Remote's modified entry should be used, not the default
     assertThat(merged.entries[0].displayName).isEqualTo("Modified Name")
+  }
+
+  @Test
+  fun `mergeWithDefaults ignores stale remote updates`() {
+    val defaultAreas = Areas.default
+    val modified = defaultAreas.entries[0].copy(displayName = "Modified Name")
+    val staleRemote =
+      defaultAreas.copy(
+        entries = (listOf(modified) + defaultAreas.entries.drop(1)).toImmutableList(),
+        version = Areas.VERSION - 1,
+      )
+
+    val merged = mergeWithDefaults(staleRemote, defaultAreas)
+
+    assertThat(merged.entries[0].displayName).isEqualTo(defaultAreas.entries[0].displayName)
+    assertThat(merged.version).isEqualTo(Areas.VERSION)
   }
 
   @Test

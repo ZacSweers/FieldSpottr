@@ -95,7 +95,7 @@ class PermitRepository(
   private val json: Json,
   private val logger: Logger,
   private val db: suspend () -> FSDatabase,
-  private val client: HttpClient,
+  private val client: Lazy<HttpClient>,
 ) {
 
   @Inject
@@ -104,7 +104,7 @@ class PermitRepository(
     appDirs: FSAppDirs,
     json: Json,
     logger: Logger,
-    client: HttpClient,
+    client: Lazy<HttpClient>,
   ) : this(
     appDirs,
     json,
@@ -336,7 +336,7 @@ class PermitRepository(
   ): Boolean {
     try {
       appDirs.fs.appendingSink(targetPath).buffer().use { sink ->
-        client
+        client.value
           .prepareGet(url) { userAgent(NYC_PARKS_USER_AGENT) }
           .execute { httpResponse ->
             if (httpResponse.status == HttpStatusCode.Accepted) {
@@ -461,10 +461,21 @@ class PermitRepository(
 
 /**
  * Merges [remote] areas with [Areas.default]. Remote is authoritative for areas it includes, but
- * built-in areas not present in remote are preserved. This prevents crashes when app code
- * references fields that the remote JSON doesn't include yet.
+ * only when it is at least as new as the built-in catalog. Built-in areas not present in remote are
+ * preserved. This prevents crashes when app code references fields that the remote JSON doesn't
+ * include yet.
  */
 internal fun mergeWithDefaults(remote: Areas, defaults: Areas = Areas.default): Areas {
+  if (remote.version < defaults.version) {
+    val defaultAreaNames = defaults.entries.map { it.areaName }.toSet()
+    val remoteOnly = remote.entries.filter { it.areaName !in defaultAreaNames }
+    return if (remoteOnly.isEmpty()) {
+      defaults
+    } else {
+      defaults.copy(entries = (defaults.entries + remoteOnly).toImmutableList())
+    }
+  }
+
   val remoteAreaNames = remote.entries.map { it.areaName }.toSet()
   val missingFromRemote = defaults.entries.filter { it.areaName !in remoteAreaNames }
   return if (missingFromRemote.isEmpty()) {
