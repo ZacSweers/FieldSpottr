@@ -12,6 +12,7 @@ import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
+import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
 import okio.FileSystem
 import okio.SYSTEM
@@ -27,6 +28,8 @@ interface FSGraph {
     ignoreUnknownKeys = true
     isLenient = true
   }
+
+  @Provides @SingleIn(AppScope::class) fun provideHttpClient(): HttpClient = HttpClient()
 
   @Provides
   @SingleIn(AppScope::class)
