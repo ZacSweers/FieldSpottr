@@ -20,10 +20,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +40,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
@@ -51,6 +56,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.slack.circuit.codegen.annotations.CircuitInject
@@ -64,6 +71,8 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
+import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
+import dev.zacsweers.fieldspottr.data.LivePermitRepository
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -104,6 +113,8 @@ data class AreaScreen(
     val permits: PermitState?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
+    val canCheckLivePermits: Boolean,
+    val livePermitCheckState: LivePermitCheckState,
     val isDebug: Boolean,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
@@ -128,8 +139,21 @@ data class AreaScreen(
 
     data object ToggleDefaultGroup : Event
 
+    data object CheckLivePermits : Event
+
     data object NavigateBack : Event
   }
+}
+
+@Immutable
+sealed interface LivePermitCheckState {
+  data object NotChecked : LivePermitCheckState
+
+  data object Loading : LivePermitCheckState
+
+  data class Success(val availability: LiveGroupAvailability) : LivePermitCheckState
+
+  data class Failure(val message: String) : LivePermitCheckState
 }
 
 @CircuitInject(AreaScreen::class, AppScope::class)
@@ -137,6 +161,7 @@ data class AreaScreen(
 fun AreaPresenter(
   screen: AreaScreen,
   repository: PermitRepository,
+  livePermitRepository: () -> LivePermitRepository,
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): AreaScreen.State {
@@ -155,16 +180,23 @@ fun AreaPresenter(
     mutableStateOf(screen.initialGroup ?: areas.entries[0].fieldGroups[0].name)
   }
   var userHasChangedGroup by rememberRetained { mutableStateOf(screen.initialGroup != null) }
+  var livePermitCheckState by rememberRetained {
+    mutableStateOf<LivePermitCheckState>(LivePermitCheckState.NotChecked)
+  }
 
   LaunchedEffect(areas) {
     if (selectedGroup !in areas.groups) {
       selectedGroup = areas.entries[0].fieldGroups[0].name
       userHasChangedGroup = false
+      livePermitCheckState = LivePermitCheckState.NotChecked
     }
   }
   LaunchedEffect(defaultGroup) {
     val saved = defaultGroup
     if (!userHasChangedGroup && saved != null && saved in areas.groups) {
+      if (selectedGroup != saved) {
+        livePermitCheckState = LivePermitCheckState.NotChecked
+      }
       selectedGroup = saved
     }
   }
@@ -200,6 +232,14 @@ fun AreaPresenter(
   val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
+  val selectedFieldGroup = remember(selectedGroup, areas) { areas.groups[selectedGroup] }
+  val canCheckLivePermits =
+    remember(selectedFieldGroup) {
+      selectedFieldGroup?.let { group ->
+        group.closed == null && group.fields.any { it.apiLocationId != null }
+      } ?: false
+    }
+
   val uriHandler = LocalUriHandler.current
   return AreaScreen.State(
     areas = areas,
@@ -212,6 +252,8 @@ fun AreaPresenter(
     permits = permits,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
+    canCheckLivePermits = canCheckLivePermits,
+    livePermitCheckState = livePermitCheckState,
     isDebug = !BuildConfig.IS_RELEASE,
   ) { event ->
     when (event) {
@@ -222,10 +264,16 @@ fun AreaPresenter(
         repository.useBuiltInAreas()
       }
       is AreaScreen.Event.FilterDate -> {
-        selectedDate = event.date
+        if (selectedDate != event.date) {
+          selectedDate = event.date
+          livePermitCheckState = LivePermitCheckState.NotChecked
+        }
       }
       is AreaScreen.Event.ChangeGroup -> {
-        selectedGroup = event.group
+        if (selectedGroup != event.group) {
+          selectedGroup = event.group
+          livePermitCheckState = LivePermitCheckState.NotChecked
+        }
         userHasChangedGroup = true
       }
       is AreaScreen.Event.ShowEventDetail -> {
@@ -249,6 +297,29 @@ fun AreaPresenter(
         defaultGroupMessage =
           if (isClearing) "Cleared default group" else "Set $selectedGroup as default"
         scope.launch { preferencesStore.setDefaultGroup(newDefault) }
+      }
+      AreaScreen.Event.CheckLivePermits -> {
+        val group = selectedFieldGroup ?: return@State
+        if (
+          !canCheckLivePermits ||
+            livePermitCheckState == LivePermitCheckState.Loading ||
+            livePermitCheckState is LivePermitCheckState.Success
+        ) {
+          return@State
+        }
+        val date = selectedDate
+        livePermitCheckState = LivePermitCheckState.Loading
+        scope.launch {
+          val result =
+            try {
+              LivePermitCheckState.Success(livePermitRepository().availability(group, date))
+            } catch (_: Exception) {
+              LivePermitCheckState.Failure("Failed to check live permits.")
+            }
+          if (selectedGroup == group.name && selectedDate == date) {
+            livePermitCheckState = result
+          }
+        }
       }
       AreaScreen.Event.ShowLocation -> {
         val location = areas.groups[selectedGroup]?.location ?: return@State
@@ -276,6 +347,12 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
       snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
     }
   }
+  LaunchedEffect(state.livePermitCheckState) {
+    val message = (state.livePermitCheckState as? LivePermitCheckState.Failure)?.message
+    if (message != null) {
+      snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
+    }
+  }
 
   // Background fades quickly - fully gone by 35% of the transition progress
   val earlyEasing = Easing { (it / 0.35f).coerceAtMost(1f) }
@@ -285,6 +362,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     }
 
   val isDetail = state.fixedTitle != null
+  val liveAvailability = (state.livePermitCheckState as? LivePermitCheckState.Success)?.availability
   Box(modifier.fillMaxSize()) {
     if (isDetail) {
       // Background - sharedElement, always opaque
@@ -378,8 +456,17 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
         }
       },
       floatingActionButton = {
-        if (state.permits?.fields.orEmpty().isEmpty()) {
-          ExtendedFloatingActionButton(onClick = {}) { Text("No permits today!") }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = spacedBy(16.dp)) {
+          val hasLiveBlocks =
+            liveAvailability?.fields?.values?.any { it.blocks.isNotEmpty() } == true
+          if (state.permits?.fields.orEmpty().isEmpty() && !hasLiveBlocks) {
+            ExtendedFloatingActionButton(onClick = {}) { Text("No permits today!") }
+          }
+          LivePermitFloatingActionButton(
+            canCheckLivePermits = state.canCheckLivePermits,
+            livePermitCheckState = state.livePermitCheckState,
+            onCheckLivePermits = { state.eventSink(AreaScreen.Event.CheckLivePermits) },
+          )
         }
       },
     ) { innerPadding ->
@@ -388,8 +475,6 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           GroupSelector(state.selectedGroup, state.areas) { newGroup ->
             state.eventSink(AreaScreen.Event.ChangeGroup(newGroup))
           }
-        }
-        if (state.fixedTitle == null) {
           state.lastUpdated?.let { lastUpdated ->
             Text(
               lastUpdated,
@@ -426,6 +511,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           state.permits,
           state.areas,
           state.date,
+          liveAvailability = liveAvailability,
           cornerSlot = cornerSlot,
           modifier =
             Modifier.align(CenterHorizontally)
@@ -462,4 +548,68 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
       }
     }
   }
+}
+
+internal fun LiveGroupAvailability.livePermitSummary(): String {
+  val blocks = fields.values.sumOf { it.blocks.size }
+  val advisories = fields.values.sumOf { it.advisories.size }
+  return when {
+    blocks > 0 && advisories > 0 -> "Live activity"
+    blocks > 0 -> "Live activity"
+    advisories > 0 -> "Pending notes"
+    else -> "No live activity"
+  }
+}
+
+@Composable
+internal fun LivePermitFloatingActionButton(
+  canCheckLivePermits: Boolean,
+  livePermitCheckState: LivePermitCheckState,
+  onCheckLivePermits: () -> Unit,
+) {
+  if (!canCheckLivePermits) return
+
+  val isLoading = livePermitCheckState == LivePermitCheckState.Loading
+  val availability = (livePermitCheckState as? LivePermitCheckState.Success)?.availability
+  val isChecked = availability != null
+  val containerColor =
+    if (isChecked) {
+      MaterialTheme.colorScheme.primaryContainer
+    } else {
+      MaterialTheme.colorScheme.secondaryContainer
+    }
+  val contentColor =
+    if (isChecked) {
+      MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+      MaterialTheme.colorScheme.onSecondaryContainer
+    }
+  ExtendedFloatingActionButton(
+    onClick = {
+      if (!isLoading && !isChecked) {
+        onCheckLivePermits()
+      }
+    },
+    icon = {
+      if (isLoading) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = contentColor)
+      } else if (isChecked) {
+        Icon(Icons.Outlined.Check, contentDescription = "Live permits checked")
+      } else {
+        Icon(Icons.Outlined.Refresh, contentDescription = "Check live permits")
+      }
+    },
+    text = {
+      Text(
+        when {
+          isLoading -> "Checking"
+          availability != null -> availability.livePermitSummary()
+          else -> "Check live"
+        }
+      )
+    },
+    modifier = if (isChecked) Modifier.semantics { disabled() } else Modifier,
+    containerColor = containerColor,
+    contentColor = contentColor,
+  )
 }

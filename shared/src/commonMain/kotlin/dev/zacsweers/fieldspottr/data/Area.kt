@@ -21,7 +21,7 @@ data class Areas(
   val groups by lazy { entries.flatMap { it.fieldGroups }.associateBy { it.name } }
 
   companion object {
-    const val VERSION = 1
+    const val VERSION = 2
     val default by lazy { buildDefaultAreas() }
   }
 }
@@ -50,7 +50,7 @@ fun buildAreas(block: AreasBuilder.() -> Unit): Areas {
   val builder = AreasBuilder()
   builder.block()
   val areas = builder.build()
-  return Areas(areas.toImmutableList())
+  return Areas(areas.toImmutableList(), version = Areas.VERSION)
 }
 
 @AreaDSL
@@ -104,8 +104,15 @@ class AreasBuilder {
     ) {
       private val fields = mutableListOf<Field>()
 
-      fun field(csvName: String, displayName: String, sharedFields: Set<String> = setOf(csvName)) {
-        fields.add(Field(csvName, displayName, this.name, sharedFields.toImmutableSet()))
+      fun field(
+        csvName: String,
+        displayName: String,
+        sharedFields: Set<String> = setOf(csvName),
+        apiLocationId: String? = null,
+      ) {
+        fields.add(
+          Field(csvName, displayName, this.name, sharedFields.toImmutableSet(), apiLocationId)
+        )
       }
 
       fun build(): FieldGroup {
@@ -130,10 +137,30 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground",
           ),
       ) {
-        field(csvName = "Softball-01", displayName = "Softball 1", sharedFields = setOf("field1"))
-        field(csvName = "Football-01", displayName = "Soccer 1", sharedFields = setOf("field1"))
-        field(csvName = "Football-02", displayName = "Soccer 2", sharedFields = setOf("field2"))
-        field(csvName = "Softball-02", displayName = "Softball 2", sharedFields = setOf("field2"))
+        field(
+          csvName = "Softball-01",
+          displayName = "Softball 1",
+          sharedFields = setOf("field1"),
+          apiLocationId = "M165-BASEBALL-1",
+        )
+        field(
+          csvName = "Football-01",
+          displayName = "Soccer 1",
+          sharedFields = setOf("field1"),
+          apiLocationId = "M165-FOOTBALL-1",
+        )
+        field(
+          csvName = "Football-02",
+          displayName = "Soccer 2",
+          sharedFields = setOf("field2"),
+          apiLocationId = "M165-FOOTBALL-2",
+        )
+        field(
+          csvName = "Softball-02",
+          displayName = "Softball 2",
+          sharedFields = setOf("field2"),
+          apiLocationId = "M165-BASEBALL-2",
+        )
       }
     }
     area(
@@ -155,16 +182,19 @@ fun buildDefaultAreas(): Areas {
           csvName = "Soccer-01A East 6th Street",
           displayName = "North Half",
           sharedFields = setOf("Track field", "track field 1a"),
+          apiLocationId = "M144-ZN05-SOCCER-2",
         )
         field(
           csvName = "Soccer-04 East 6th Street",
           displayName = "Whole Field",
           sharedFields = setOf("Track field"),
+          apiLocationId = "M144-ZN05-SOCCER-1",
         )
         field(
           csvName = "Soccer-01B East 6th Street",
           displayName = "South Half",
           sharedFields = setOf("Track field", "track field 1b"),
+          apiLocationId = "M144-ZN05-SOCCER-3",
         )
       }
       group(
@@ -176,11 +206,17 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20E%20River%20Esplanade,%20New%20York,%20NY%20%2010002,%20United%20States&auid=2997997111374685654&ll=40.719770,-73.974155&lsp=9902&q=John%20V.%20Lindsay%20East%20River%20Park%20Baseball%20Fields",
           ),
       ) {
-        field(csvName = "Baseball-06", displayName = "Baseball", sharedFields = setOf("field6"))
+        field(
+          csvName = "Baseball-06",
+          displayName = "Baseball",
+          sharedFields = setOf("field6"),
+          apiLocationId = "M144-ZN04-BASEBALL-2",
+        )
         field(
           csvName = "Soccer-03 Houston St & FDR",
           displayName = "Outfield",
           sharedFields = setOf("field6"),
+          apiLocationId = "M144-ZN04-SOCCER-1",
         )
       }
       group(
@@ -194,17 +230,20 @@ fun buildDefaultAreas(): Areas {
         field(
           csvName = "Grand Street - Softball-01",
           displayName = "Softball (south)",
-          sharedFields = setOf("field1"),
+          sharedFields = setOf("field2"),
+          apiLocationId = "M144-ZN02-BASEBALL-1",
         )
         field(
           csvName = "Grand Street - Soccer 01",
           displayName = "Whole Field",
-          sharedFields = setOf("field1"),
+          sharedFields = setOf("field2"),
+          apiLocationId = "M144-ZN02-SOCCER-1",
         )
         field(
           csvName = "Grand Street - Softball-02",
           displayName = "Softball (north)",
-          sharedFields = setOf("field1"),
+          sharedFields = setOf("field2"),
+          apiLocationId = "M144-ZN02-BASEBALL-2",
         )
       }
       // TODO the site says 03 but the CSV says 02?
@@ -216,7 +255,11 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/place?coordinate=40.713506,-73.976811&name=Marked%20Location",
           ),
       ) {
-        field(csvName = "Grand Street Mini Field-Soccer-02", displayName = "Whole Field")
+        field(
+          csvName = "Grand Street Mini Field-Soccer-02",
+          displayName = "Whole Field",
+          apiLocationId = "M144-ZN02-SOCCER-12",
+        )
       }
     }
     area(
@@ -232,8 +275,12 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=397%20FDR%20Drive,%20New%20York,%20NY%2010002,%20United%20States&auid=16313010153387216666&ll=40.711739,-73.979789&lsp=9902&q=Corlears%20Hook%20Park",
           ),
       ) {
-        field(csvName = "Soccer-01", displayName = "Soccer")
-        field(csvName = "Softball-01", displayName = "Softball")
+        field(csvName = "Soccer-01", displayName = "Soccer", apiLocationId = "M017-SOCCER-1")
+        field(
+          csvName = "Softball-01",
+          displayName = "Softball",
+          apiLocationId = "M017-BASEBALL-1",
+        )
       }
     }
     area(
@@ -249,7 +296,11 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/place?place-id=I877D8AD17649FAE0&coordinate=40.722017%2C-73.991512&name=Nike+Field",
           ),
       ) {
-        field(csvName = "Nike Field-Soccer-02", displayName = "Soccer")
+        field(
+          csvName = "Nike Field-Soccer-02",
+          displayName = "Soccer",
+          apiLocationId = "M105-SOCCER-2",
+        )
       }
       group(
         name = "Canal Street Mini Field",
@@ -259,7 +310,11 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?ll=40.716021,-73.994258&q=Canal%20Street%20Mini%20Field",
           ),
       ) {
-        field(csvName = "Canal Street Mini Field-Soccer-01", displayName = "Soccer")
+        field(
+          csvName = "Canal Street Mini Field-Soccer-01",
+          displayName = "Soccer",
+          apiLocationId = "M105-SOCCER-1",
+        )
       }
       group(
         name = "Sara D. Roosevelt Park Futsal",
@@ -269,7 +324,7 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?ll=40.719300,-73.992800&q=Sara%20D.%20Roosevelt%20Park%20Futsal",
           ),
       ) {
-        field(csvName = "Futsal-01", displayName = "Futsal")
+        field(csvName = "Futsal-01", displayName = "Futsal", apiLocationId = "M105-SOCCER-3")
       }
     }
     area(
@@ -285,7 +340,7 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/place?place-id=I945F817E3C2A5B6D&coordinate=40.715444%2C-74.000003&name=Columbus+Park+Soccer+Field",
           ),
       ) {
-        field(csvName = "Soccer-01", displayName = "Soccer")
+        field(csvName = "Soccer-01", displayName = "Soccer", apiLocationId = "M015-SOCCER-1")
       }
     }
     area(
@@ -301,7 +356,7 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=New%20York,%20NY%2010002,%20United%20States&auid=14094921999338982991&ll=40.709947,-73.982427&lsp=9902&q=Pier%2042",
           ),
       ) {
-        field(csvName = "Soccer-01", displayName = "Soccer")
+        field(csvName = "Soccer-01", displayName = "Soccer", apiLocationId = "M369-SOCCER-1")
       }
     }
     area(
@@ -317,11 +372,17 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=301%20E%2020th%20St,%20New%20York,%20NY%20%2010003,%20United%20States&auid=7985386323298652825&ll=40.736111,-73.981667&lsp=9902&q=Peter's%20Field",
           ),
       ) {
-        field(csvName = "Soccer-01", displayName = "Soccer", sharedFields = setOf("petersfield"))
+        field(
+          csvName = "Soccer-01",
+          displayName = "Soccer",
+          sharedFields = setOf("petersfield"),
+          apiLocationId = "M227-SOCCER-1",
+        )
         field(
           csvName = "Softball-01",
           displayName = "Softball",
           sharedFields = setOf("petersfield"),
+          apiLocationId = "M227-BASEBALL-1",
         )
       }
     }
@@ -338,7 +399,11 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?address=Lorimer%20Street,%20Union%20%26%20Driggs%20Avenue,%20Brooklyn,%20NY%2011211,%20United%20States&auid=2152782516168223158&ll=40.720052,-73.951718&lsp=9902&q=McCarren%20Park%20Track",
           ),
       ) {
-        field(csvName = "Soccer-01", displayName = "Soccer")
+        field(
+          csvName = "Soccer-01",
+          displayName = "Soccer",
+          apiLocationId = "B058-ZN02-FOOTBALL-1",
+        )
       }
     }
     area(
@@ -358,16 +423,19 @@ fun buildDefaultAreas(): Areas {
           csvName = "Soccer-01A",
           displayName = "West Half",
           sharedFields = setOf("bushwick inlet field", "field 1a"),
+          apiLocationId = "B529-SOCCER-3",
         )
         field(
           csvName = "Soccer-01",
           displayName = "Whole Field",
           sharedFields = setOf("bushwick inlet field"),
+          apiLocationId = "B529-SOCCER-2",
         )
         field(
           csvName = "Soccer-01B",
           displayName = "East Half",
           sharedFields = setOf("bushwick inlet field", "field 1b"),
+          apiLocationId = "B529-SOCCER-1",
         )
       }
     }
@@ -388,16 +456,19 @@ fun buildDefaultAreas(): Areas {
           csvName = "Tim McGinn Fields-Softball-01",
           displayName = "West Softball",
           sharedFields = setOf("murphy whole field"),
+          apiLocationId = "M059-BASEBALL-1",
         )
         field(
           csvName = "Tim McGinn Fields-Soccer-01",
           displayName = "Whole Field",
           sharedFields = setOf("murphy whole field"),
+          apiLocationId = "M059-SOCCER-1",
         )
         field(
           csvName = "Tim McGinn Fields-Softball-02",
           displayName = "East Softball",
           sharedFields = setOf("murphy whole field"),
+          apiLocationId = "M059-BASEBALL-2",
         )
       }
     }
@@ -414,8 +485,18 @@ fun buildDefaultAreas(): Areas {
             "https://maps.apple.com/?ll=40.745130,-73.973698&q=St%20Vartan%20Park",
           ),
       ) {
-        field(csvName = "Soccer-01", displayName = "Soccer", sharedFields = setOf("stvartan"))
-        field(csvName = "Softball-01", displayName = "Softball", sharedFields = setOf("stvartan"))
+        field(
+          csvName = "Soccer-01",
+          displayName = "Soccer",
+          sharedFields = setOf("stvartan"),
+          apiLocationId = "M076-SOCCER-1",
+        )
+        field(
+          csvName = "Softball-01",
+          displayName = "Softball",
+          sharedFields = setOf("stvartan"),
+          apiLocationId = "M076-BASEBALL-1",
+        )
       }
     }
   }
@@ -449,6 +530,7 @@ data class Field(
    */
   @Serializable(with = ImmutableSetSerializer::class)
   val sharedFields: ImmutableSet<String> = persistentSetOf(name),
+  val apiLocationId: String? = null,
 ) {
   fun overlapsWith(other: Field): Boolean {
     return sharedFields.intersect(other.sharedFields).isNotEmpty()

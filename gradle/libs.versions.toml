@@ -79,6 +79,7 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 ktor-client = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-engine-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-engine-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }

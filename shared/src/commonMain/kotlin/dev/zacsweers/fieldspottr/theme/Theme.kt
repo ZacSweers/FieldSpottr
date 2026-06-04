@@ -8,7 +8,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme as m3DarkColorScheme
 import androidx.compose.material3.lightColorScheme as m3LightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight.Companion.Bold
@@ -259,6 +262,30 @@ data class ColorFamily(
 val unspecified_scheme =
   ColorFamily(Color.Unspecified, Color.Unspecified, Color.Unspecified, Color.Unspecified)
 
+@Immutable
+data class FSColorScheme(
+  val pendingContainer: Color,
+  val onPendingContainer: Color,
+)
+
+private val lightFSColorScheme =
+  FSColorScheme(
+    pendingContainer = pendingContainerLight,
+    onPendingContainer = onPendingContainerLight,
+  )
+
+private val darkFSColorScheme =
+  FSColorScheme(
+    pendingContainer = pendingContainerDark,
+    onPendingContainer = onPendingContainerDark,
+  )
+
+private val LocalFSColorScheme = staticCompositionLocalOf { lightFSColorScheme }
+
+@Suppress("UnusedReceiverParameter")
+val MaterialTheme.fsColorScheme: FSColorScheme
+  @Composable @ReadOnlyComposable get() = LocalFSColorScheme.current
+
 @Composable
 expect fun platformSpecificMaterialColorScheme(
   useDarkTheme: Boolean,
@@ -287,8 +314,11 @@ fun FSTheme(
   val colorScheme =
     platformSpecificMaterialColorScheme(useDarkTheme, dynamicColor)
       ?: run { if (useDarkTheme) darkScheme else lightScheme }
+  val fsColorScheme = if (useDarkTheme) darkFSColorScheme else lightFSColorScheme
 
   PlatformSpecificThemeSideEffects()
 
-  MaterialTheme(colorScheme = colorScheme, typography = AppTypography) { content() }
+  MaterialTheme(colorScheme = colorScheme, typography = AppTypography) {
+    CompositionLocalProvider(LocalFSColorScheme provides fsColorScheme) { content() }
+  }
 }
