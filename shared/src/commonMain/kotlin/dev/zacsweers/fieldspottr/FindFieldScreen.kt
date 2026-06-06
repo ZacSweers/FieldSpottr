@@ -118,8 +118,9 @@ data object FindFieldScreen : Screen {
 fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): FindFieldScreen.State {
   val areasFlow = rememberRetained { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()
-  val currentLocalDateTime =
-    remember { System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }
+  val currentLocalDateTime = remember {
+    System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+  }
   val today = currentLocalDateTime.date
   var selectedDate by rememberRetained { mutableStateOf(today) }
   var selectedWindow by rememberRetained {
