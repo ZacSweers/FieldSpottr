@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -331,6 +332,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     Scaffold(
       modifier = contentModifier,
       containerColor = Color.Transparent,
+      contentWindowInsets = WindowInsets(0, 0, 0, 0),
       topBar = {
         TopAppBar(
           navigationIcon = {
