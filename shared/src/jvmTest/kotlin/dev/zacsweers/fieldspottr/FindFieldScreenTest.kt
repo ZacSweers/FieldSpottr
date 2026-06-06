@@ -7,6 +7,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.Location
+import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.buildAreas
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import kotlin.test.Test
@@ -17,6 +18,18 @@ import kotlinx.datetime.LocalTime
 class FindFieldScreenTest {
 
   private val date = LocalDate(2026, 6, 1)
+
+  @Test
+  fun `current time window maps by local hour`() {
+    assertThat(TimeWindow.forHour(5)).isEqualTo(null)
+    assertThat(TimeWindow.forHour(6)).isEqualTo(TimeWindow.MORNING)
+    assertThat(TimeWindow.forHour(11)).isEqualTo(TimeWindow.MORNING)
+    assertThat(TimeWindow.forHour(12)).isEqualTo(TimeWindow.AFTERNOON)
+    assertThat(TimeWindow.forHour(17)).isEqualTo(TimeWindow.AFTERNOON)
+    assertThat(TimeWindow.forHour(18)).isEqualTo(TimeWindow.EVENING)
+    assertThat(TimeWindow.forHour(22)).isEqualTo(TimeWindow.EVENING)
+    assertThat(TimeWindow.forHour(23)).isEqualTo(null)
+  }
 
   @Test
   fun `baruch evening permits are partially open`() {

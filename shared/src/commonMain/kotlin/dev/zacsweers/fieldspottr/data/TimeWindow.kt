@@ -13,4 +13,11 @@ enum class TimeWindow(
   EVENING("This evening", "Evening", 18, 23);
 
   fun label(isToday: Boolean): String = if (isToday) todayLabel else otherDayLabel
+
+  companion object {
+    fun forHour(hour: Int): TimeWindow? {
+      require(hour in 0..23) { "Hour must be between 0 and 23." }
+      return entries.firstOrNull { hour in it.startHour..<it.endHour }
+    }
+  }
 }
