@@ -369,10 +369,10 @@ private fun generateBbpPier5Rows(source: BbpPier5Source): List<AvailabilityFeedR
               fieldId = fieldId,
               start = date.atTime(block.startTime).atZone(nyZone).toInstant().toEpochMilli(),
               end = date.atTime(block.endTime).atZone(nyZone).toInstant().toEpochMilli(),
-              title = "Pier 5 turf schedule",
+              title = "Busy (Active permits)",
               org = "Brooklyn Bridge Park",
-              status = "In use",
-              kind = "BBP schedule",
+              status = "Active permits",
+              kind = "BBP active permits",
               sourceId = source.id,
             )
           }
@@ -653,10 +653,10 @@ private fun HrpField.toRow(
     fieldId = field.name,
     start = date.atTime(start).atZone(nyZone).toInstant().toEpochMilli(),
     end = endDate.atTime(end).atZone(nyZone).toInstant().toEpochMilli(),
-    title = sourceTitle,
+    title = "Busy (Active permits)",
     org = "Hudson River Park",
-    status = "Reserved",
-    kind = "HRP weekly schedule",
+    status = "Active permits",
+    kind = "HRP active permits",
     sourceId = "hrp-weekly-field-schedule:${fieldId}:${date}",
   )
 }

@@ -73,7 +73,8 @@ Each block should include `areaName`, `groupName`, `fieldIds`, `daysOfWeek`, `st
 ## Pier 5 Data
 
 Encode these recurring blocks for `2026-06-01` through `2026-08-31`, timezone
-`America/New_York`, title `Pier 5 turf schedule`, org `Brooklyn Bridge Park`, status `In use`.
+`America/New_York`, title `Busy (Active permits)`, org `Brooklyn Bridge Park`, status
+`Active permits`.
 
 ```text
 Sun: Field 1, Field 2, Field 3  08:00-23:00

@@ -169,7 +169,8 @@ class GeneratorTest {
       )
     assertThat(rows[0].areaName).isEqualTo("West Side Highway")
     assertThat(rows[0].groupName).isEqualTo("Pier 25")
-    assertThat(rows[0].kind).isEqualTo("HRP weekly schedule")
+    assertThat(rows[0].title).isEqualTo("Busy (Active permits)")
+    assertThat(rows[0].kind).isEqualTo("HRP active permits")
   }
 }
 
