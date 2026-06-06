@@ -29,7 +29,17 @@ class JvmSqlDriverFactory(private val appDirs: FSAppDirs) : SqlDriverFactory {
           val dbPath = appDirs.userConfig.resolve("$name.db")
           JdbcSqliteDriver(url = "jdbc:sqlite:${dbPath.toNioPath().absolutePathString()}")
         }
-        .also { schema.create(it).await() }
+        .also {
+          schema.create(it).await()
+          it.ensureDbPermitOverlayColumns()
+        }
     return driver
   }
+}
+
+private suspend fun SqlDriver.ensureDbPermitOverlayColumns() {
+  runCatching {
+    execute(null, "ALTER TABLE dbPermit ADD COLUMN isOverlap INTEGER NOT NULL DEFAULT 0", 0).await()
+  }
+  runCatching { execute(null, "ALTER TABLE dbPermit ADD COLUMN advisory TEXT", 0).await() }
 }

@@ -45,7 +45,7 @@ import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
-import dev.zacsweers.fieldspottr.data.LivePermitRepository
+import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -73,10 +73,9 @@ data object PermitGridScreen : Screen {
     val isDefaultGroup: Boolean,
     val defaultGroupMessage: String?,
     val permits: PermitState?,
+    val liveAvailability: LiveGroupAvailability?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
-    val canCheckLivePermits: Boolean,
-    val livePermitCheckState: LivePermitCheckState,
     val isDebug: Boolean,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
@@ -100,8 +99,6 @@ data object PermitGridScreen : Screen {
     data object ShowLocation : Event
 
     data object ToggleDefaultGroup : Event
-
-    data object CheckLivePermits : Event
   }
 }
 
@@ -109,7 +106,6 @@ data object PermitGridScreen : Screen {
 @Composable
 fun PermitGridPresenter(
   repository: PermitRepository,
-  livePermitRepository: () -> LivePermitRepository,
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): PermitGridScreen.State {
@@ -123,22 +119,15 @@ fun PermitGridPresenter(
   val defaultGroup by preferencesStore.defaultGroup.collectAsRetainedState(null)
   var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
   var userHasChangedGroup by rememberRetained { mutableStateOf(false) }
-  var livePermitCheckState by rememberRetained {
-    mutableStateOf<LivePermitCheckState>(LivePermitCheckState.NotChecked)
-  }
   LaunchedEffect(areas) {
     if (selectedGroup !in areas.groups) {
       selectedGroup = areas.entries[0].fieldGroups[0].name
       userHasChangedGroup = false
-      livePermitCheckState = LivePermitCheckState.NotChecked
     }
   }
   LaunchedEffect(defaultGroup) {
     val saved = defaultGroup
     if (!userHasChangedGroup && saved != null && saved in areas.groups) {
-      if (selectedGroup != saved) {
-        livePermitCheckState = LivePermitCheckState.NotChecked
-      }
       selectedGroup = saved
     }
   }
@@ -147,10 +136,13 @@ fun PermitGridPresenter(
   val permitsFlow =
     rememberRetained(gridDate, selectedGroup) {
       repository.permitsFlow(gridDate, selectedGroup).map {
-        PermitState.fromPermits(it, areas, selectedGroup)
+        PermitData(
+          permits = PermitState.fromPermits(it, areas, selectedGroup),
+          liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+        )
       }
     }
-  val permits by permitsFlow.collectAsRetainedState(null)
+  val permitData by permitsFlow.collectAsRetainedState(null)
 
   val currentAreaName = remember(selectedGroup, areas) { areas.groups[selectedGroup]?.area }
   val lastUpdateFlow =
@@ -174,14 +166,6 @@ fun PermitGridPresenter(
   val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
-  val selectedFieldGroup = remember(selectedGroup, areas) { areas.groups[selectedGroup] }
-  val canCheckLivePermits =
-    remember(selectedFieldGroup) {
-      selectedFieldGroup?.let { group ->
-        group.closed == null && group.fields.any { it.apiLocationId != null }
-      } ?: false
-    }
-
   val uriHandler = LocalUriHandler.current
   return PermitGridScreen.State(
     areas = areas,
@@ -189,11 +173,10 @@ fun PermitGridPresenter(
     selectedGroup = selectedGroup,
     isDefaultGroup = defaultGroup == selectedGroup,
     defaultGroupMessage = defaultGroupMessage,
-    permits = permits,
+    permits = permitData?.permits,
+    liveAvailability = permitData?.liveAvailability,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
-    canCheckLivePermits = canCheckLivePermits,
-    livePermitCheckState = livePermitCheckState,
     isDebug = !BuildConfig.IS_RELEASE,
   ) { event ->
     when (event) {
@@ -202,16 +185,10 @@ fun PermitGridPresenter(
       }
       PermitGridScreen.Event.UseBuiltInAreas -> repository.useBuiltInAreas()
       is PermitGridScreen.Event.FilterDate -> {
-        if (gridDate != event.date) {
-          gridDate = event.date
-          livePermitCheckState = LivePermitCheckState.NotChecked
-        }
+        gridDate = event.date
       }
       is PermitGridScreen.Event.ChangeGroup -> {
-        if (selectedGroup != event.group) {
-          selectedGroup = event.group
-          livePermitCheckState = LivePermitCheckState.NotChecked
-        }
+        selectedGroup = event.group
         userHasChangedGroup = true
       }
       is PermitGridScreen.Event.ShowEventDetail -> {
@@ -236,29 +213,6 @@ fun PermitGridPresenter(
           if (isClearing) "Cleared default group" else "Set $selectedGroup as default"
         scope.launch { preferencesStore.setDefaultGroup(newDefault) }
       }
-      PermitGridScreen.Event.CheckLivePermits -> {
-        val group = selectedFieldGroup ?: return@State
-        if (
-          !canCheckLivePermits ||
-            livePermitCheckState == LivePermitCheckState.Loading ||
-            livePermitCheckState is LivePermitCheckState.Success
-        ) {
-          return@State
-        }
-        val date = gridDate
-        livePermitCheckState = LivePermitCheckState.Loading
-        scope.launch {
-          val result =
-            try {
-              LivePermitCheckState.Success(livePermitRepository().availability(group, date))
-            } catch (_: Exception) {
-              LivePermitCheckState.Failure("Failed to check live permits.")
-            }
-          if (selectedGroup == group.name && gridDate == date) {
-            livePermitCheckState = result
-          }
-        }
-      }
       PermitGridScreen.Event.ShowLocation -> {
         val location = areas.groups[selectedGroup]?.location ?: return@State
         val url =
@@ -276,17 +230,9 @@ fun PermitGridPresenter(
 @Composable
 fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()
-  val liveAvailability = (state.livePermitCheckState as? LivePermitCheckState.Success)?.availability
   Scaffold(
     modifier = modifier,
     containerColor = Color.Transparent,
-    floatingActionButton = {
-      LivePermitFloatingActionButton(
-        canCheckLivePermits = state.canCheckLivePermits,
-        livePermitCheckState = state.livePermitCheckState,
-        onCheckLivePermits = { state.eventSink(PermitGridScreen.Event.CheckLivePermits) },
-      )
-    },
   ) { innerPadding ->
     Column(
       modifier = Modifier.padding(innerPadding).fillMaxSize(),
@@ -365,7 +311,7 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
         state.permits,
         state.areas,
         state.date,
-        liveAvailability = liveAvailability,
+        liveAvailability = state.liveAvailability,
         cornerSlot = cornerSlot,
         modifier =
           Modifier.align(CenterHorizontally).weight(1f).daySwipeable(daySwipe, state.date) { newDate

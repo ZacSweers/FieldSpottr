@@ -56,6 +56,7 @@ kotlin {
         implementation(libs.androidx.datastore.preferences)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
+        implementation(project(":models"))
         implementation(libs.kotlinx.datetime)
         implementation(libs.kotlinx.serialization.core)
         implementation(libs.kotlinx.serialization.json)
@@ -140,6 +141,25 @@ val fsVersionCode = providers.gradleProperty("fs_versioncode").map(String::toLon
 val fsVersionName = providers.gradleProperty("fs_versionname").get()
 
 val isReleasing = providers.environmentVariable("RELEASING").map(String::toBoolean).orElse(false)
+val gitBranch =
+  providers
+    .exec { commandLine("git", "branch", "--show-current") }
+    .standardOutput
+    .asText
+    .map {
+      it.trim()
+    }
+val repoDataRef =
+  providers
+    .gradleProperty("fs_repo_data_ref")
+    .orElse(providers.environmentVariable("GITHUB_HEAD_REF"))
+    .orElse(providers.environmentVariable("GITHUB_REF_NAME"))
+    .orElse(gitBranch)
+    .map { it.ifBlank { "main" } }
+val repoDataPathRef = repoDataRef.map { if (it.startsWith("refs/")) it else "refs/heads/$it" }
+val repoDataBaseUrl = repoDataPathRef.map {
+  "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/$it"
+}
 
 buildConfig {
   packageName("dev.zacsweers.fieldspottr")
@@ -156,6 +176,7 @@ buildConfig {
     providers.gradleProperty("fs_bugsnag_key").orNull,
   )
   buildConfigField("String?", "MAPS_API_KEY", providers.gradleProperty("fs_maps_api_key").orNull)
+  buildConfigField("String", "REPO_DATA_BASE_URL", repoDataBaseUrl.map { "\"$it\"" })
   generateAtSync = true
 }
 

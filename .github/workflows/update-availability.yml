@@ -1,0 +1,73 @@
+name: Update availability
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-availability
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Dump HRP fields page
+        continue-on-error: true
+        run: |
+          mkdir -p build/hrp
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          "$CHROME" \
+              --headless=new \
+              --disable-gpu \
+              --no-sandbox \
+              --dump-dom \
+              https://hudsonriverpark.org/visit/events/permits/fields/ \
+              > build/hrp/fields.html
+
+      - name: Generate availability data
+        run: |
+          ARGS="--output=."
+          if [ -s build/hrp/fields.html ]; then
+            ARGS="$ARGS --hrp-source-file=build/hrp/fields.html"
+          fi
+          ./gradlew :generator:run --args="$ARGS"
+
+      - name: Commit generated data
+        run: |
+          if git diff --quiet -- areas.json availability; then
+            echo "No availability changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add areas.json availability
+          git commit -m "Update availability data"
+          git push
+
+      - name: (Fail-only) Upload generated data
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: availability-debug
+          path: |
+            areas.json
+            availability/**
+            build/hrp/**
+            generator/build/reports/**

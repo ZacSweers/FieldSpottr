@@ -118,9 +118,14 @@ data object FindFieldScreen : Screen {
 fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): FindFieldScreen.State {
   val areasFlow = rememberRetained { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()
-  val today = remember { System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date }
+  val currentLocalDateTime = remember {
+    System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+  }
+  val today = currentLocalDateTime.date
   var selectedDate by rememberRetained { mutableStateOf(today) }
-  var selectedWindow by rememberRetained { mutableStateOf<TimeWindow?>(TimeWindow.AFTERNOON) }
+  var selectedWindow by rememberRetained {
+    mutableStateOf(TimeWindow.forHour(currentLocalDateTime.hour))
+  }
 
   val scope = rememberCoroutineScope()
 
@@ -175,7 +180,8 @@ fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): Find
             initialGroup = event.group,
             fixedTitle = group.name,
             fixedSubtitle = subtitle,
-            selectedDate = selectedDate.atStartOfDayIn(TimeZone.UTC).epochSeconds,
+            selectedDate =
+              selectedDate.atStartOfDayIn(TimeZone.currentSystemDefault()).epochSeconds,
           )
         )
       }
@@ -463,6 +469,7 @@ private fun bookedHoursForGroup(
 
   val bookedHours = mutableSetOf<Int>()
   for (permit in permits) {
+    if (permit.isAvailabilityOverlay) continue
     if (permit.fieldId !in area.fieldMappings) continue
 
     val permitStart = permit.start.toNyLocalDateTime()

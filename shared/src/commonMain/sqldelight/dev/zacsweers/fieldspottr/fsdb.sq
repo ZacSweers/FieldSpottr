@@ -11,12 +11,23 @@ CREATE TABLE IF NOT EXISTS dbPermit (
   -- May be empty
   org TEXT NOT NULL,
   status TEXT NOT NULL,
+  isOverlap INTEGER NOT NULL DEFAULT 0,
+  advisory TEXT,
   PRIMARY KEY(recordId)
 );
 
 CREATE TABLE IF NOT EXISTS dbArea (
   name TEXT NOT NULL,
   lastUpdated INTEGER NOT NULL,
+  PRIMARY KEY(name)
+);
+
+CREATE TABLE IF NOT EXISTS dbAreaFeed (
+  name TEXT NOT NULL,
+  areaName TEXT NOT NULL,
+  feedGeneratedAt INTEGER,
+  feedFetchedAt INTEGER NOT NULL,
+  hash TEXT NOT NULL,
   PRIMARY KEY(name)
 );
 
@@ -48,6 +59,13 @@ VALUES ?;
 
 lastAreaUpdate:
 SELECT lastUpdated FROM dbArea WHERE name = ?;
+
+upsertAreaFeed:
+INSERT OR REPLACE INTO dbAreaFeed
+VALUES ?;
+
+getAreaFeed:
+SELECT * FROM dbAreaFeed WHERE name = ?;
 
 permitDateRange:
 SELECT MIN(start) AS minDate, MAX(start) AS maxDate FROM dbPermit;
