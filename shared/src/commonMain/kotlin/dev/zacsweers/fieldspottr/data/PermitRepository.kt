@@ -61,8 +61,6 @@ import okio.use
 
 /** The default buffer size when working with buffered streams. */
 private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
-private const val RAW_GITHUB_BASE_URL =
-  "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main"
 
 internal fun SqlDriver.createFSDatabase(): FSDatabase {
   return FSDatabase(this)
@@ -271,7 +269,7 @@ class PermitRepository(
     if (!forceRefresh && cached != null && appDirs.fs.exists(areasJson)) return
 
     val tempPath = tempPathFor(areasJson)
-    if (!downloadFile("$RAW_GITHUB_BASE_URL/areas.json", tempPath)) return
+    if (!downloadFile("${BuildConfig.REPO_DATA_BASE_URL}/areas.json", tempPath)) return
     val downloaded = readValidAreas(tempPath)
     if (downloaded == null) {
       appDirs.delete(tempPath)
@@ -289,7 +287,7 @@ class PermitRepository(
     }
 
     val tempPath = tempPathFor(manifestJson)
-    if (downloadFile("$RAW_GITHUB_BASE_URL/availability/manifest.json", tempPath)) {
+    if (downloadFile("${BuildConfig.REPO_DATA_BASE_URL}/availability/manifest.json", tempPath)) {
       val downloaded = decodeAvailabilityManifest(tempPath)
       if (downloaded != null) {
         replaceDownloadedFile(tempPath, manifestJson)
@@ -319,7 +317,7 @@ class PermitRepository(
     val areaName = manifestArea.resolvedAreaName
     val feedPath = areaFeedsDir / "$areaName.json"
     val tempPath = tempPathFor(feedPath)
-    val url = "$RAW_GITHUB_BASE_URL/${manifestArea.resolvedPath}"
+    val url = "${BuildConfig.REPO_DATA_BASE_URL}/${manifestArea.resolvedPath}"
     if (!downloadFile(url, tempPath)) {
       return false
     }

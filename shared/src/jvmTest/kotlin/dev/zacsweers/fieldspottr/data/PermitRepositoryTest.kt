@@ -10,6 +10,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import co.touchlab.kermit.Logger
+import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
@@ -82,7 +83,7 @@ class PermitRepositoryTest {
 
   private val testGroup = "TestGroup"
   private val testOrg = "TestOrg"
-  private val rawGithubBaseUrl = "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/main"
+  private val rawGithubBaseUrl = BuildConfig.REPO_DATA_BASE_URL
 
   private val morningPermit =
     DbPermit(
