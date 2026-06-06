@@ -463,6 +463,7 @@ private fun bookedHoursForGroup(
 
   val bookedHours = mutableSetOf<Int>()
   for (permit in permits) {
+    if (permit.isAvailabilityOverlay) continue
     if (permit.fieldId !in area.fieldMappings) continue
 
     val permitStart = permit.start.toNyLocalDateTime()

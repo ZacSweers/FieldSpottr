@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data
 
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -50,5 +51,6 @@ data class AvailabilityFeedRow(
   val status: String = "",
   val kind: String = "availability",
   val sourceId: String? = null,
+  @EncodeDefault(EncodeDefault.Mode.NEVER) val isOverlap: Boolean = false,
   @SerialName("advisory") val advisoryText: String? = null,
 )

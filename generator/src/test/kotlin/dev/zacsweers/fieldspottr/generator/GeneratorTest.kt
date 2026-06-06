@@ -48,6 +48,11 @@ class GeneratorTest {
           },
           "${nyEpochSecond("2026-06-05T18:30")}": {
             "num_pending_permits": 2
+          },
+          "${nyEpochSecond("2026-06-05T19:00")}": {
+            "permit_is_for_overlapping_field": true,
+            "permit_holder": "Downtown Little League",
+            "permit_number": 123
           }
         }
       }
@@ -63,11 +68,13 @@ class GeneratorTest {
         endDateExclusive = java.time.LocalDate.of(2026, 6, 6),
       )
 
-    assertThat(rows).hasSize(2)
+    assertThat(rows).hasSize(3)
     assertThat(rows[0].kind).isEqualTo("NYC live")
     assertThat(rows[0].title).isEqualTo("Pending final approval")
     assertThat(rows[1].kind).isEqualTo("advisory")
     assertThat(rows[1].advisoryText).isEqualTo("2 pending permits")
+    assertThat(rows[2].title).isEqualTo("Overlapping field permit")
+    assertThat(rows[2].isOverlap).isEqualTo(true)
   }
 
   @Test

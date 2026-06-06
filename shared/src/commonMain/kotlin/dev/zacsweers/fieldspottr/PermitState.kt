@@ -257,13 +257,14 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         }
       }
 
-      if (dbPermits.isEmpty()) return PermitState(emptyMap())
+      val displayPermits = dbPermits.filterNot { it.isAvailabilityOverlay }
+      if (displayPermits.isEmpty()) return PermitState(emptyMap())
 
       val areasByName = areas.entries.associateBy { it.areaName }
       // TODO
       //  get the group ID, get fields for each group, show those too
       val fields =
-        dbPermits
+        displayPermits
           .groupBy { areasByName[it.area]?.fieldMappings?.get(it.fieldId) }
           .filterKeys { it != null }
           .let {

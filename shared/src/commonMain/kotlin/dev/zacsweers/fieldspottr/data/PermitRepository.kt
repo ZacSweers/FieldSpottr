@@ -425,7 +425,6 @@ class PermitRepository(
       fsdbQueries.deleteAreaPermits(feed.areaName)
       feed.rows.forEach { row ->
         if (row.end <= row.start) return@forEach
-        if (row.kind == "advisory") return@forEach
         fsdbQueries.addPermit(
           DbPermit(
             recordId =
@@ -447,6 +446,8 @@ class PermitRepository(
             name = row.title,
             org = row.org,
             status = row.status,
+            isOverlap = if (row.isOverlap) 1L else 0L,
+            advisory = row.advisoryText,
           )
         )
       }

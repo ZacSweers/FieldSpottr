@@ -64,6 +64,7 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
+import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -102,6 +103,7 @@ data class AreaScreen(
     val isDefaultGroup: Boolean,
     val defaultGroupMessage: String?,
     val permits: PermitState?,
+    val liveAvailability: LiveGroupAvailability?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val isDebug: Boolean,
@@ -173,10 +175,13 @@ fun AreaPresenter(
   val permitsFlow =
     rememberRetained(selectedDate, selectedGroup) {
       repository.permitsFlow(selectedDate, selectedGroup).map {
-        PermitState.fromPermits(it, areas, selectedGroup)
+        PermitData(
+          permits = PermitState.fromPermits(it, areas, selectedGroup),
+          liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+        )
       }
     }
-  val permits by permitsFlow.collectAsRetainedState(null)
+  val permitData by permitsFlow.collectAsRetainedState(null)
 
   val currentAreaName = remember(selectedGroup, areas) { areas.groups[selectedGroup]?.area }
   val lastUpdateFlow =
@@ -209,7 +214,8 @@ fun AreaPresenter(
     fixedSubtitle = screen.fixedSubtitle,
     isDefaultGroup = defaultGroup == selectedGroup,
     defaultGroupMessage = defaultGroupMessage,
-    permits = permits,
+    permits = permitData?.permits,
+    liveAvailability = permitData?.liveAvailability,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     isDebug = !BuildConfig.IS_RELEASE,
@@ -429,7 +435,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           state.permits,
           state.areas,
           state.date,
-          liveAvailability = null,
+          liveAvailability = state.liveAvailability,
           cornerSlot = cornerSlot,
           modifier =
             Modifier.align(CenterHorizontally)

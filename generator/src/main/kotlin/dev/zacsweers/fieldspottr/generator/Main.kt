@@ -266,6 +266,7 @@ internal fun String.toNycLiveRows(
         status = block.status,
         kind = "NYC live",
         sourceId = "nyc-parks-live:${field.apiLocationId}",
+        isOverlap = block.isOverlap,
       )
     } else {
       slot.toLiveAdvisory()?.let { advisory ->
@@ -293,6 +294,7 @@ private fun LivePermitSlot.toLiveBlock(): LiveBlock? {
         title = "Overlapping field permit",
         org = permitHolder ?: "",
         status = permitNumber?.let { "Permit #$it" } ?: "Overlapping field",
+        isOverlap = true,
       )
 
     inSeason == false -> LiveBlock(title = "Out of season", org = "", status = "Closed")
@@ -321,7 +323,12 @@ private fun LivePermitSlot.toLiveAdvisory(): String? {
   return if (pending > 0) "$pending pending permit${if (pending == 1) "" else "s"}" else null
 }
 
-private data class LiveBlock(val title: String, val org: String, val status: String)
+private data class LiveBlock(
+  val title: String,
+  val org: String,
+  val status: String,
+  val isOverlap: Boolean = false,
+)
 
 @Serializable
 private data class LivePermitResponse(val availability: Map<String, LivePermitSlot> = emptyMap())
@@ -718,6 +725,7 @@ private fun AvailabilityFeedRow.canMergeWith(other: AvailabilityFeedRow): Boolea
     status == other.status &&
     kind == other.kind &&
     sourceId == other.sourceId &&
+    isOverlap == other.isOverlap &&
     advisoryText == other.advisoryText
 }
 
@@ -732,6 +740,7 @@ private val feedRowComparator =
     .thenBy { it.org }
     .thenBy { it.status }
     .thenBy { it.sourceId.orEmpty() }
+    .thenBy { it.isOverlap }
     .thenBy { it.advisoryText.orEmpty() }
 
 internal fun AvailabilityAreaFeed.contentHash(): String {

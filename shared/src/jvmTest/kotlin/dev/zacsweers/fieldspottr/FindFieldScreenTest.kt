@@ -111,6 +111,8 @@ class FindFieldScreenTest {
       name = "Test Permit",
       org = "Test Org",
       status = "Approved",
+      isOverlap = 0L,
+      advisory = null,
     )
   }
 }

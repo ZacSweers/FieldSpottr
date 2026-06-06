@@ -97,6 +97,8 @@ class PermitRepositoryTest {
       name = "Test League",
       org = testOrg,
       status = "Approved",
+      isOverlap = 0L,
+      advisory = null,
     )
 
   private val afternoonPermit =
@@ -111,6 +113,8 @@ class PermitRepositoryTest {
       name = "Team Practice",
       org = "Test Team",
       status = "Approved",
+      isOverlap = 0L,
+      advisory = null,
     )
 
   private val midnightPermit =
@@ -125,6 +129,8 @@ class PermitRepositoryTest {
       name = "Midnight Permit",
       org = "Org1",
       status = "Approved",
+      isOverlap = 0L,
+      advisory = null,
     )
 
   private val noonPermit =
@@ -139,6 +145,8 @@ class PermitRepositoryTest {
       name = "Noon Game",
       org = "Org2",
       status = "Approved",
+      isOverlap = 0L,
+      advisory = null,
     )
 
   private data class TestResponse(
@@ -439,17 +447,60 @@ class PermitRepositoryTest {
 
     repository.importAreaFeed(feed, manifestArea, fetchedAt = 300L)
 
-    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList().sortedBy { it.start }
     assertThat(permits).hasSize(1)
     assertThat(permits[0].area).isEqualTo("TestArea")
     assertThat(permits[0].groupName).isEqualTo(testGroup)
     assertThat(permits[0].fieldId).isEqualTo("Soccer-01")
     assertThat(permits[0].name).isEqualTo("Generated Permit")
+    assertThat(permits[0].isOverlap).isEqualTo(0L)
+    assertThat(permits[0].advisory).isEqualTo(null)
 
     val metadata = temporaryDatabase.db().fsdbQueries.getAreaFeed("TestArea").executeAsOneOrNull()
     assertThat(metadata?.feedGeneratedAt).isEqualTo(200L)
     assertThat(metadata?.feedFetchedAt).isEqualTo(300L)
     assertThat(metadata?.hash).isEqualTo("hash")
+  }
+
+  @Test
+  fun `area feed import preserves overlap and advisory rows`() = runTest {
+    val feed =
+      AvailabilityAreaFeed(
+        areaName = "TestArea",
+        rows =
+          listOf(
+            AvailabilityFeedRow(
+              groupName = testGroup,
+              fieldId = "Soccer-01",
+              start = 1.pm,
+              end = 2.pm,
+              title = "Overlapping field permit",
+              status = "Permit #123",
+              kind = "NYC live",
+              isOverlap = true,
+            ),
+            AvailabilityFeedRow(
+              groupName = testGroup,
+              fieldId = "Soccer-01",
+              start = 2.pm,
+              end = 3.pm,
+              title = "Pending permits",
+              status = "2 pending permits",
+              kind = "advisory",
+              advisoryText = "2 pending permits",
+            ),
+          ),
+      )
+    val manifestArea = AvailabilityManifestArea(areaName = "TestArea", hash = "hash")
+
+    repository.importAreaFeed(feed, manifestArea, fetchedAt = 300L)
+
+    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList().sortedBy { it.start }
+    assertThat(permits).hasSize(2)
+    assertThat(permits[0].isOverlap).isEqualTo(1L)
+    assertThat(permits[0].advisory).isEqualTo(null)
+    assertThat(permits[1].type).isEqualTo("advisory")
+    assertThat(permits[1].advisory).isEqualTo("2 pending permits")
   }
 
   @Test
@@ -620,6 +671,8 @@ class PermitRepositoryTest {
         name = "Permit1",
         org = "Org1",
         status = "Approved",
+        isOverlap = 0L,
+        advisory = null,
       )
 
     val area2Permit =
@@ -634,6 +687,8 @@ class PermitRepositoryTest {
         name = "Permit2",
         org = "Org2",
         status = "Approved",
+        isOverlap = 0L,
+        advisory = null,
       )
 
     temporaryDatabase.db().transaction {

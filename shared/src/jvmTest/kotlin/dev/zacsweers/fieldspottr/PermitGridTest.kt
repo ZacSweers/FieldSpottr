@@ -10,10 +10,14 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.LiveFieldAvailability
 import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
+import dev.zacsweers.fieldspottr.util.toNyInstant
 import kotlin.test.Test
 import kotlin.time.Clock
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableMap
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.LocalTime
 
 class PermitGridTest {
   private val group = Areas.default.groups.getValue("Baruch")
@@ -84,6 +88,46 @@ class PermitGridTest {
   }
 
   @Test
+  fun `db availability overlays render outside normal permits`() {
+    val normalPermit =
+      dbPermit(
+        recordId = 1L,
+        fieldId = softball1.name,
+        name = "Reserved",
+        start = 8,
+        end = 10,
+      )
+    val overlapPermit =
+      dbPermit(
+        recordId = 2L,
+        fieldId = softball1.name,
+        name = "Overlapping field permit",
+        start = 12,
+        end = 14,
+        isOverlap = true,
+      )
+    val advisory =
+      dbPermit(
+        recordId = 3L,
+        fieldId = softball1.name,
+        name = "Pending permits",
+        start = 14,
+        end = 15,
+        type = "advisory",
+        advisory = "2 pending permits",
+      )
+
+    val permitState =
+      PermitState.fromPermits(listOf(normalPermit, overlapPermit, advisory), Areas.default, "Baruch")
+    val overlays = listOf(normalPermit, overlapPermit, advisory).availabilityOverlays(Areas.default, "Baruch")!!
+
+    assertThat(permitState.fields.getValue(softball1).filterIsInstance<Reserved>()).hasSize(1)
+    val liveField = overlays.fields.getValue(softball1)
+    assertThat(liveField.blocks.single().isOverlap).isEqualTo(true)
+    assertThat(liveField.advisories.single().message).isEqualTo("2 pending permits")
+  }
+
+  @Test
   fun `grid live normalization is idempotent`() {
     val availability = rawSoccerPendingAvailability()
     val once = liveAvailabilityForGrid(group, availability)!!
@@ -136,5 +180,35 @@ class PermitGridTest {
       isBlocked = false,
       isOverlap = false,
     )
+  }
+
+  private fun dbPermit(
+    recordId: Long,
+    fieldId: String,
+    name: String,
+    start: Int,
+    end: Int,
+    type: String = "Athletic League",
+    isOverlap: Boolean = false,
+    advisory: String? = null,
+  ): DbPermit {
+    return DbPermit(
+      recordId = recordId,
+      area = group.area,
+      groupName = group.name,
+      start = LocalDateTime(testDate, LocalTime(start, 0)).toNyInstant().toEpochMilliseconds(),
+      end = LocalDateTime(testDate, LocalTime(end, 0)).toNyInstant().toEpochMilliseconds(),
+      fieldId = fieldId,
+      type = type,
+      name = name,
+      org = "Test Org",
+      status = "Approved",
+      isOverlap = if (isOverlap) 1L else 0L,
+      advisory = advisory,
+    )
+  }
+
+  private companion object {
+    val testDate = LocalDate(2026, 6, 6)
   }
 }

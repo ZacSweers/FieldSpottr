@@ -45,6 +45,7 @@ import com.slack.circuit.runtime.screen.Screen
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
+import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -72,6 +73,7 @@ data object PermitGridScreen : Screen {
     val isDefaultGroup: Boolean,
     val defaultGroupMessage: String?,
     val permits: PermitState?,
+    val liveAvailability: LiveGroupAvailability?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val isDebug: Boolean,
@@ -134,10 +136,13 @@ fun PermitGridPresenter(
   val permitsFlow =
     rememberRetained(gridDate, selectedGroup) {
       repository.permitsFlow(gridDate, selectedGroup).map {
-        PermitState.fromPermits(it, areas, selectedGroup)
+        PermitData(
+          permits = PermitState.fromPermits(it, areas, selectedGroup),
+          liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+        )
       }
     }
-  val permits by permitsFlow.collectAsRetainedState(null)
+  val permitData by permitsFlow.collectAsRetainedState(null)
 
   val currentAreaName = remember(selectedGroup, areas) { areas.groups[selectedGroup]?.area }
   val lastUpdateFlow =
@@ -168,7 +173,8 @@ fun PermitGridPresenter(
     selectedGroup = selectedGroup,
     isDefaultGroup = defaultGroup == selectedGroup,
     defaultGroupMessage = defaultGroupMessage,
-    permits = permits,
+    permits = permitData?.permits,
+    liveAvailability = permitData?.liveAvailability,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     isDebug = !BuildConfig.IS_RELEASE,
@@ -305,7 +311,7 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
         state.permits,
         state.areas,
         state.date,
-        liveAvailability = null,
+        liveAvailability = state.liveAvailability,
         cornerSlot = cornerSlot,
         modifier =
           Modifier.align(CenterHorizontally).weight(1f).daySwipeable(daySwipe, state.date) { newDate
