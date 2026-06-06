@@ -32,6 +32,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.collections.immutable.toImmutableList
@@ -61,6 +62,9 @@ import okio.use
 
 /** The default buffer size when working with buffered streams. */
 private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
+private val REPO_DATA_REFRESH_INTERVAL = 1.hours
+private const val LAST_AREAS_FETCH_AT = "last_areas_fetch_at"
+private const val LAST_MANIFEST_FETCH_AT = "last_manifest_fetch_at"
 
 internal fun SqlDriver.createFSDatabase(): FSDatabase {
   return FSDatabase(this)
@@ -128,6 +132,7 @@ class PermitRepository(
     return try {
       withContext(Dispatchers.IO) {
         log("Starting populateDb with forceRefresh=$forceRefresh")
+        val refreshStartedAt = System.now().toEpochMilliseconds()
         // Check if the app version has changed since last fetch
         val currentAppVersion = BuildConfig.VERSION_CODE
         val storedAppVersion =
@@ -140,13 +145,26 @@ class PermitRepository(
         if (appVersionChanged) {
           log("App version changed ($currentAppVersion), will fetch fresh areas")
         }
-        refreshAreasJson(forceRefresh = forceRefresh || appVersionChanged)
+        refreshAreasJson(
+          forceRefresh =
+            forceRefresh ||
+              appVersionChanged ||
+              isMetadataRefreshStale(LAST_AREAS_FETCH_AT, refreshStartedAt),
+          fetchedAt = refreshStartedAt,
+        )
         val areas = loadLocalAreas()
         log("Loaded areas: ${areas.entries.map { it.areaName }}")
         areasStateFlow.value = areas
 
         _loadingMessage.value = "Refreshing availability..."
-        val manifest = refreshAvailabilityManifest(forceRefresh)
+        val manifest =
+          refreshAvailabilityManifest(
+            forceRefresh =
+              forceRefresh ||
+                appVersionChanged ||
+                isMetadataRefreshStale(LAST_MANIFEST_FETCH_AT, refreshStartedAt),
+            fetchedAt = refreshStartedAt,
+          )
         if (manifest == null) {
           val hasCachedPermits = db().hasAnyPermits()
           _loadingMessage.value =
@@ -161,11 +179,11 @@ class PermitRepository(
             feedAreas
           } else {
             feedAreas.filter { manifestArea ->
-              db()
-                .fsdbQueries
-                .getAreaFeed(manifestArea.resolvedAreaName)
-                .executeAsOneOrNull()
-                ?.hash != manifestArea.hash
+              val cachedFeed =
+                db().fsdbQueries.getAreaFeed(manifestArea.resolvedAreaName).executeAsOneOrNull()
+              cachedFeed == null ||
+                cachedFeed.hash != manifestArea.hash ||
+                isRefreshStale(cachedFeed.feedFetchedAt, refreshStartedAt)
             }
           }
         if (staleFeeds.isNotEmpty()) {
@@ -261,7 +279,7 @@ class PermitRepository(
     return mergeWithDefaults(parsed)
   }
 
-  private suspend fun refreshAreasJson(forceRefresh: Boolean) {
+  private suspend fun refreshAreasJson(forceRefresh: Boolean, fetchedAt: Long) {
     val cached = readValidAreas(areasJson)
     if (cached != null) {
       areasStateFlow.value = cached
@@ -276,10 +294,14 @@ class PermitRepository(
       return
     }
     replaceDownloadedFile(tempPath, areasJson)
+    db().fsdbQueries.setMetadata(LAST_AREAS_FETCH_AT, fetchedAt.toString())
     areasStateFlow.value = downloaded
   }
 
-  private suspend fun refreshAvailabilityManifest(forceRefresh: Boolean): AvailabilityManifest? {
+  private suspend fun refreshAvailabilityManifest(
+    forceRefresh: Boolean,
+    fetchedAt: Long,
+  ): AvailabilityManifest? {
     if (!forceRefresh && appDirs.fs.exists(manifestJson)) {
       decodeAvailabilityManifest(manifestJson)?.let {
         return it
@@ -291,12 +313,22 @@ class PermitRepository(
       val downloaded = decodeAvailabilityManifest(tempPath)
       if (downloaded != null) {
         replaceDownloadedFile(tempPath, manifestJson)
+        db().fsdbQueries.setMetadata(LAST_MANIFEST_FETCH_AT, fetchedAt.toString())
         return downloaded
       }
       appDirs.delete(tempPath)
     }
 
     return decodeAvailabilityManifest(manifestJson)
+  }
+
+  private suspend fun isMetadataRefreshStale(key: String, now: Long): Boolean {
+    val fetchedAt = db().fsdbQueries.getMetadata(key).executeAsOneOrNull()?.toLongOrNull()
+    return fetchedAt == null || isRefreshStale(fetchedAt, now)
+  }
+
+  private fun isRefreshStale(fetchedAt: Long, now: Long): Boolean {
+    return now - fetchedAt >= REPO_DATA_REFRESH_INTERVAL.inWholeMilliseconds
   }
 
   private fun decodeAvailabilityManifest(path: Path): AvailabilityManifest? {

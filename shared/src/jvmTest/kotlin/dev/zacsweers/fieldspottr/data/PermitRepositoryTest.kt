@@ -20,6 +20,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.hours
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
@@ -175,6 +176,50 @@ class PermitRepositoryTest {
   }
 
   private fun rawGithubPath(path: String): String = "$rawGithubBaseUrl/$path"
+
+  private fun writeCachedAreas(areaName: String = "TestArea") {
+    val path = appDirs.userData / "areas.json"
+    fakeFileSystem.createDirectories(path.parent!!)
+    fakeFileSystem.sink(path).buffer().use { it.writeUtf8(testAreasJson(areaName)) }
+  }
+
+  private fun cachedManifest(hash: String): AvailabilityManifest {
+    return AvailabilityManifest(
+      areas =
+        listOf(
+          AvailabilityManifestArea(
+            areaName = "TestArea",
+            path = "availability/areas/test-area.json",
+            hash = hash,
+          )
+        )
+    )
+  }
+
+  private fun writeCachedManifest(hash: String) {
+    val path = appDirs.userData / "availability" / "manifest.json"
+    fakeFileSystem.createDirectories(path.parent!!)
+    fakeFileSystem.sink(path).buffer().use {
+      it.writeUtf8(json.encodeToString(cachedManifest(hash)))
+    }
+  }
+
+  private fun downloadedFeed(title: String): AvailabilityAreaFeed {
+    return AvailabilityAreaFeed(
+      areaName = "TestArea",
+      rows =
+        listOf(
+          AvailabilityFeedRow(
+            groupName = testGroup,
+            fieldId = "Soccer-01",
+            start = 9.am,
+            end = 11.am,
+            title = title,
+            org = testOrg,
+          )
+        ),
+    )
+  }
 
   private fun testAreasJson(areaName: String = "TestArea"): String {
     return json.encodeToString(
@@ -627,6 +672,102 @@ class PermitRepositoryTest {
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
       assertThat(permits[0]).isEqualTo(morningPermit)
+    } finally {
+      client.close()
+    }
+  }
+
+  @Test
+  fun `populateDb skips network when repo data is newer than an hour`() = runTest {
+    val now = System.now().toEpochMilliseconds()
+    writeCachedAreas()
+    writeCachedManifest("hash-1")
+    temporaryDatabase
+      .db()
+      .fsdbQueries
+      .setMetadata("last_areas_app_version", BuildConfig.VERSION_CODE.toString())
+    temporaryDatabase.db().fsdbQueries.setMetadata("last_areas_fetch_at", now.toString())
+    temporaryDatabase.db().fsdbQueries.setMetadata("last_manifest_fetch_at", now.toString())
+    repository.importAreaFeed(
+      downloadedFeed("Cached Permit"),
+      cachedManifest("hash-1").areas.single(),
+      now,
+    )
+
+    assertThat(repository.populateDb(forceRefresh = false)).isTrue()
+
+    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+    assertThat(permits).hasSize(1)
+    assertThat(permits.single().name).isEqualTo("Cached Permit")
+  }
+
+  @Test
+  fun `populateDb refreshes area feeds older than an hour`() = runTest {
+    val oldFetch = System.now().toEpochMilliseconds() - 2.hours.inWholeMilliseconds
+    writeCachedAreas()
+    writeCachedManifest("hash-1")
+    temporaryDatabase
+      .db()
+      .fsdbQueries
+      .setMetadata("last_areas_app_version", BuildConfig.VERSION_CODE.toString())
+    temporaryDatabase.db().fsdbQueries.setMetadata("last_areas_fetch_at", oldFetch.toString())
+    temporaryDatabase.db().fsdbQueries.setMetadata("last_manifest_fetch_at", oldFetch.toString())
+    repository.importAreaFeed(
+      downloadedFeed("Cached Permit"),
+      cachedManifest("hash-1").areas.single(),
+      oldFetch,
+    )
+    val routes =
+      mutableMapOf(
+        rawGithubPath("areas.json") to TestResponse(testAreasJson()),
+        rawGithubPath("availability/manifest.json") to
+          TestResponse(json.encodeToString(cachedManifest("hash-1"))),
+        rawGithubPath("availability/areas/test-area.json") to
+          TestResponse(json.encodeToString(downloadedFeed("Hourly Refresh Permit"))),
+      )
+    val (refreshRepository, client) = testRepository(routes)
+    try {
+      assertThat(refreshRepository.populateDb(forceRefresh = false)).isTrue()
+
+      val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+      assertThat(permits).hasSize(1)
+      assertThat(permits.single().name).isEqualTo("Hourly Refresh Permit")
+    } finally {
+      client.close()
+    }
+  }
+
+  @Test
+  fun `populateDb failed hourly area feed refresh keeps prior rows`() = runTest {
+    val oldFetch = System.now().toEpochMilliseconds() - 2.hours.inWholeMilliseconds
+    writeCachedAreas()
+    writeCachedManifest("hash-1")
+    temporaryDatabase
+      .db()
+      .fsdbQueries
+      .setMetadata("last_areas_app_version", BuildConfig.VERSION_CODE.toString())
+    temporaryDatabase.db().fsdbQueries.setMetadata("last_areas_fetch_at", oldFetch.toString())
+    temporaryDatabase.db().fsdbQueries.setMetadata("last_manifest_fetch_at", oldFetch.toString())
+    repository.importAreaFeed(
+      downloadedFeed("Cached Permit"),
+      cachedManifest("hash-1").areas.single(),
+      oldFetch,
+    )
+    val routes =
+      mutableMapOf(
+        rawGithubPath("areas.json") to TestResponse(testAreasJson()),
+        rawGithubPath("availability/manifest.json") to
+          TestResponse(json.encodeToString(cachedManifest("hash-1"))),
+        rawGithubPath("availability/areas/test-area.json") to
+          TestResponse("{}", HttpStatusCode.InternalServerError),
+      )
+    val (refreshRepository, client) = testRepository(routes)
+    try {
+      assertThat(refreshRepository.populateDb(forceRefresh = false)).isTrue()
+
+      val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+      assertThat(permits).hasSize(1)
+      assertThat(permits.single().name).isEqualTo("Cached Permit")
     } finally {
       client.close()
     }
