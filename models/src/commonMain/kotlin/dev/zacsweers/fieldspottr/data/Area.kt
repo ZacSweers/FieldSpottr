@@ -21,7 +21,7 @@ data class Areas(
   val groups by lazy { entries.flatMap { it.fieldGroups }.associateBy { it.name } }
 
   companion object {
-    const val VERSION = 4
+    const val VERSION = 5
     val default by lazy { buildDefaultAreas() }
   }
 }
@@ -501,7 +501,7 @@ fun buildDefaultAreas(): Areas {
     }
     area(name = "Brooklyn Bridge Park", displayName = "Brooklyn Bridge Park") {
       group(
-        name = "Pier 5 Turf",
+        name = "Pier 5",
         location =
           Location(
             "https://www.google.com/maps/search/?api=1&query=Brooklyn%20Bridge%20Park%20Pier%205",

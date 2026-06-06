@@ -7,10 +7,13 @@ a Gradle JVM app:
 ./gradlew :generator:run --args=--output=.
 ```
 
-## Brooklyn Bridge Park
+## Brooklyn Bridge Park Pier 5
 
-Brooklyn Bridge Park Pier 5 availability is generated from a manually read transcription of the
-official schedule image on the Pier 5 page:
+Brooklyn Bridge Park is the area in the app. Pier 5 is the field/group inside that area, and
+`Field 1`, `Field 2`, and `Field 3` are the subfields shown as columns in the grid.
+
+Pier 5 availability is generated from a manually read transcription of the official schedule image
+on the Pier 5 page:
 
 https://brooklynbridgepark.org/places-to-see/pier-5/
 
@@ -23,7 +26,7 @@ The current checked-in source snapshot is `data/bbp/pier5-summer-2026.png`, and 
 4. Update `data/bbp/pier5-summer-2026.json`, including:
    - valid date range
    - days of week
-   - field numbers
+   - Pier 5 subfield numbers
    - start and end times
 5. Regenerate repo data:
 

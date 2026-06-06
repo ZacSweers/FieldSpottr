@@ -372,7 +372,7 @@ private fun generateBbpPier5Rows(source: BbpPier5Source): List<AvailabilityFeedR
           block.fieldIds.map { fieldId ->
             AvailabilityFeedRow(
               areaName = "Brooklyn Bridge Park",
-              groupName = "Pier 5 Turf",
+              groupName = "Pier 5",
               fieldId = fieldId,
               start = date.atTime(block.startTime).atZone(nyZone).toInstant().toEpochMilli(),
               end = date.atTime(block.endTime).atZone(nyZone).toInstant().toEpochMilli(),

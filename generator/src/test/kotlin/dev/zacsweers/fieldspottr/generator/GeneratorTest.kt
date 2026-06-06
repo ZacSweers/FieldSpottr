@@ -28,6 +28,7 @@ class GeneratorTest {
       }
 
     assertThat(juneFirst).hasSize(1)
+    assertThat(juneFirst.single().groupName).isEqualTo("Pier 5")
     assertThat(mondayField1.map { it.start to it.end })
       .containsExactly(
         nyMillis("2026-06-01T09:00") to nyMillis("2026-06-01T10:00"),

@@ -553,12 +553,12 @@
       "csvUrl": null,
       "fieldGroups": [
         {
-          "name": "Pier 5 Turf",
+          "name": "Pier 5",
           "fields": [
             {
               "name": "pier5-field-1",
               "displayName": "Field 1",
-              "group": "Pier 5 Turf",
+              "group": "Pier 5",
               "sharedFields": [
                 "pier5-field-1"
               ],
@@ -567,7 +567,7 @@
             {
               "name": "pier5-field-2",
               "displayName": "Field 2",
-              "group": "Pier 5 Turf",
+              "group": "Pier 5",
               "sharedFields": [
                 "pier5-field-2"
               ],
@@ -576,7 +576,7 @@
             {
               "name": "pier5-field-3",
               "displayName": "Field 3",
-              "group": "Pier 5 Turf",
+              "group": "Pier 5",
               "sharedFields": [
                 "pier5-field-3"
               ],
@@ -738,5 +738,5 @@
       "subtitle": "Hudson River Park"
     }
   ],
-  "version": 4
+  "version": 5
 }

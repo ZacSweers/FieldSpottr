@@ -3,7 +3,7 @@
 ## Summary
 
 Add a provider-neutral "third mechanism" for non-NYC-Parks field availability, starting with
-Brooklyn Bridge Park Pier 5 Turf. This must stay separate from NYC Parks CSV/live APIs, and must
+Brooklyn Bridge Park Pier 5. This must stay separate from NYC Parks CSV/live APIs, and must
 not use `scripts/update_live_field_ids.py`.
 
 The v1 source of truth for Pier 5 is BBP's official schedule image:
@@ -18,9 +18,9 @@ should not drive v1 availability.
 
 - Add BBP Pier 5 to the catalog as an external-source area/group:
   - Area: `Brooklyn Bridge Park`
-  - Group: `Pier 5 Turf`
-  - Fields: `pier5-field-1`, `pier5-field-2`, `pier5-field-3`
-  - Display names: `Field 1`, `Field 2`, `Field 3`
+  - Group/field: `Pier 5`
+  - Subfields: `pier5-field-1`, `pier5-field-2`, `pier5-field-3`
+  - Subfield display names: `Field 1`, `Field 2`, `Field 3`
   - Google Maps: `https://www.google.com/maps/search/?api=1&query=Brooklyn%20Bridge%20Park%20Pier%205`
   - Apple Maps: `https://maps.apple.com/?q=Brooklyn%20Bridge%20Park%20Pier%205`
 - Make area CSV support optional:
@@ -73,8 +73,8 @@ Each block should include `areaName`, `groupName`, `fieldIds`, `daysOfWeek`, `st
 ## Pier 5 Data
 
 Encode these recurring blocks for `2026-06-01` through `2026-08-31`, timezone
-`America/New_York`, title `Busy (Active permits)`, org `Brooklyn Bridge Park`, status
-`Active permits`.
+`America/New_York`, area `Brooklyn Bridge Park`, group `Pier 5`, title
+`Busy (Active permits)`, org `Brooklyn Bridge Park`, status `Active permits`.
 
 ```text
 Sun: Field 1, Field 2, Field 3  08:00-23:00
@@ -133,7 +133,7 @@ Sat: Field 1, Field 2, Field 3  08:00-23:00
 
 ## Assumptions
 
-- v1 supports Brooklyn Bridge Park Pier 5 Turf only for this external source work.
+- v1 supports Brooklyn Bridge Park Pier 5 only for this external source work.
 - The official BBP schedule image is authoritative for recurring field unavailability.
 - LeagueApps is useful future detail, but not reliable enough for v1 availability because current
   rows were sparse and event end times were marked TBD.

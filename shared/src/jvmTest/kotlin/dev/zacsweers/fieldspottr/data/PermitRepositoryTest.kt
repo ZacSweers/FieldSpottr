@@ -296,6 +296,8 @@ class PermitRepositoryTest {
     val loaded = repository.loadLocalAreas()
     assertThat(loaded).isSameInstanceAs(Areas.default)
     assertThat(loaded.version).isEqualTo(Areas.VERSION)
+    assertThat(loaded.entries.single { it.areaName == "Brooklyn Bridge Park" }.fieldGroups.single().name)
+      .isEqualTo("Pier 5")
   }
 
   @Test
