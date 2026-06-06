@@ -31,6 +31,11 @@ Hudson River Park / West Side Highway schedules can be supplied from a browser-d
 If that source is blocked or cannot be parsed, the generator preserves the previous West Side
 Highway feed instead of replacing it with empty data.
 
+Brooklyn Bridge Park Pier 5 is generated from the checked-in schedule transcription in
+`data/bbp/pier5-summer-2026.json`, read from the checked-in source image in `data/bbp/`. The
+generator scans the official Pier 5 page and prints a warning if it appears to link a newer turf
+schedule image.
+
 The generated manifest lists one hash per area feed. App refreshes download only stale/missing area
 feeds, and each feed replaces that area's DB rows transactionally after it parses successfully.
 Failed manifest or feed downloads keep the existing cached DB data in place.

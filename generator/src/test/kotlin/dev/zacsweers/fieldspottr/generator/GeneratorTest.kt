@@ -95,6 +95,34 @@ class GeneratorTest {
   }
 
   @Test
+  fun `bbp schedule image discovery canonicalizes optimized images and chooses latest season`() {
+    val springImage =
+      "https://www.brooklynbridgepark.org/nitropack_static/assets/images/optimized/rev/" +
+        "brooklynbridgepark.org/wp-content/uploads/2023/07/PIer-5-Turf-Spring-2026-e111-1024x461.png"
+    val summerImage =
+      "https:\\/\\/www.brooklynbridgepark.org\\/nitropack_static\\/assets\\/images\\/" +
+        "optimized\\/rev\\/brooklynbridgepark.org\\/wp-content\\/uploads\\/2023\\/07\\/" +
+        "PIer-5-Turf-Summer-2026-e222-300x135.png"
+    val volleyballImage =
+      "https://brooklynbridgepark.org/wp-content/uploads/2023/07/" +
+        "Volleyball-Court-Schedule-Summer-2026-e333.png"
+    val page =
+      """
+      <html>
+        <img src="$springImage">
+        <img srcset="$summerImage 300w">
+        <img src="$volleyballImage">
+      </html>
+      """
+        .trimIndent()
+
+    assertThat(page.findBbpPier5ScheduleImageUrl())
+      .isEqualTo(
+        "https://brooklynbridgepark.org/wp-content/uploads/2023/07/PIer-5-Turf-Summer-2026-e222.png"
+      )
+  }
+
+  @Test
   fun `cloudflare block detection ignores normal email protection snippets`() {
     val page =
       """

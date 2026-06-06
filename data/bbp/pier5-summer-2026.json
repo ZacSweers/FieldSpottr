@@ -1,0 +1,112 @@
+{
+  "id": "bbp-pier5-turf-summer-2026",
+  "sourcePageUrl": "https://brooklynbridgepark.org/places-to-see/pier-5/",
+  "imageUrl": "https://brooklynbridgepark.org/wp-content/uploads/2023/07/PIer-5-Turf-Summer-2026-e1779906422445.png",
+  "imagePath": "data/bbp/pier5-summer-2026.png",
+  "validFrom": "2026-06-01",
+  "validTo": "2026-08-31",
+  "blocks": [
+    {
+      "day": "SUNDAY",
+      "fieldIds": ["pier5-field-1", "pier5-field-2", "pier5-field-3"],
+      "start": "08:00",
+      "end": "23:00"
+    },
+    {
+      "day": "MONDAY",
+      "fieldIds": ["pier5-field-1"],
+      "start": "09:00",
+      "end": "10:00"
+    },
+    {
+      "day": "MONDAY",
+      "fieldIds": ["pier5-field-1"],
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "day": "MONDAY",
+      "fieldIds": ["pier5-field-2"],
+      "start": "15:00",
+      "end": "23:00"
+    },
+    {
+      "day": "MONDAY",
+      "fieldIds": ["pier5-field-3"],
+      "start": "19:00",
+      "end": "23:00"
+    },
+    {
+      "day": "TUESDAY",
+      "fieldIds": ["pier5-field-1", "pier5-field-2", "pier5-field-3"],
+      "start": "16:00",
+      "end": "23:00"
+    },
+    {
+      "day": "WEDNESDAY",
+      "fieldIds": ["pier5-field-1"],
+      "start": "16:00",
+      "end": "23:00"
+    },
+    {
+      "day": "WEDNESDAY",
+      "fieldIds": ["pier5-field-2"],
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "day": "WEDNESDAY",
+      "fieldIds": ["pier5-field-3"],
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "day": "THURSDAY",
+      "fieldIds": ["pier5-field-1"],
+      "start": "09:00",
+      "end": "10:00"
+    },
+    {
+      "day": "THURSDAY",
+      "fieldIds": ["pier5-field-1"],
+      "start": "18:00",
+      "end": "23:00"
+    },
+    {
+      "day": "THURSDAY",
+      "fieldIds": ["pier5-field-2"],
+      "start": "16:00",
+      "end": "23:00"
+    },
+    {
+      "day": "THURSDAY",
+      "fieldIds": ["pier5-field-3"],
+      "start": "18:00",
+      "end": "23:00"
+    },
+    {
+      "day": "FRIDAY",
+      "fieldIds": ["pier5-field-1"],
+      "start": "19:00",
+      "end": "23:00"
+    },
+    {
+      "day": "FRIDAY",
+      "fieldIds": ["pier5-field-2"],
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "day": "FRIDAY",
+      "fieldIds": ["pier5-field-3"],
+      "start": "19:00",
+      "end": "23:00"
+    },
+    {
+      "day": "SATURDAY",
+      "fieldIds": ["pier5-field-1", "pier5-field-2", "pier5-field-3"],
+      "start": "08:00",
+      "end": "23:00"
+    }
+  ]
+}

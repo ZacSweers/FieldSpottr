@@ -7,6 +7,40 @@ a Gradle JVM app:
 ./gradlew :generator:run --args=--output=.
 ```
 
+## Brooklyn Bridge Park
+
+Brooklyn Bridge Park Pier 5 availability is generated from a manually read transcription of the
+official schedule image on the Pier 5 page:
+
+https://brooklynbridgepark.org/places-to-see/pier-5/
+
+The current checked-in source snapshot is `data/bbp/pier5-summer-2026.png`, and the generator reads
+`data/bbp/pier5-summer-2026.json`.
+
+1. Open the official Pier 5 page and find the current turf schedule image.
+2. If the image changed, replace `data/bbp/pier5-summer-2026.png`.
+3. Read the field/date/time table from the image.
+4. Update `data/bbp/pier5-summer-2026.json`, including:
+   - valid date range
+   - days of week
+   - field numbers
+   - start and end times
+5. Regenerate repo data:
+
+   ```bash
+   ./gradlew :generator:run --args=--output=.
+   ```
+
+6. Confirm `availability/areas/brooklyn-bridge-park.json` changed as expected.
+7. Run generator tests:
+
+   ```bash
+   ./gradlew :generator:test
+   ```
+
+The generator checks the Pier 5 page for a current turf schedule image URL and prints a warning if
+it differs from the checked-in transcription metadata.
+
 ## Hudson River Park / West Side Highway
 
 Hudson River Park schedules are parsed from the official fields page:

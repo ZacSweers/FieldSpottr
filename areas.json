@@ -613,8 +613,8 @@
           ],
           "area": "West Side Highway",
           "location": {
-            "gmaps": "https://www.google.com/maps/search/?api=1&query=Hudson%20River%20Park%20Pier%2025%20Turf%20Field",
-            "amaps": "https://maps.apple.com/?q=Hudson%20River%20Park%20Pier%2025%20Turf%20Field"
+            "gmaps": "https://maps.app.goo.gl/qyYbXBdnKhtw7YqaA",
+            "amaps": "https://maps.apple.com/place?place-id=IDE5918E11FFD238&name=Pier+25"
           },
           "closed": null
         },
@@ -633,8 +633,8 @@
           ],
           "area": "West Side Highway",
           "location": {
-            "gmaps": "https://www.google.com/maps/search/?api=1&query=Hudson%20River%20Park%20Pier%2026%20Sports%20Court",
-            "amaps": "https://maps.apple.com/?q=Hudson%20River%20Park%20Pier%2026%20Sports%20Court"
+            "gmaps": "https://maps.app.goo.gl/PLaSjB1xydkoweQr8",
+            "amaps": "https://maps.apple.com/place?place-id=I3968485F9D7A5F7C&name=Pier+26"
           },
           "closed": null
         },
@@ -689,8 +689,8 @@
           ],
           "area": "West Side Highway",
           "location": {
-            "gmaps": "https://www.google.com/maps/search/?api=1&query=Hudson%20River%20Park%20Pier%2040%20Fields",
-            "amaps": "https://maps.apple.com/?q=Hudson%20River%20Park%20Pier%2040%20Fields"
+            "gmaps": "https://maps.app.goo.gl/YotVakYm2CvujW327",
+            "amaps": "https://maps.apple.com/place?place-id=I581492885D67A922&name=Pier+40"
           },
           "closed": null
         },
@@ -709,8 +709,8 @@
           ],
           "area": "West Side Highway",
           "location": {
-            "gmaps": "https://www.google.com/maps/search/?api=1&query=Gansevoort%20Peninsula%20Athletic%20Field",
-            "amaps": "https://maps.apple.com/?q=Gansevoort%20Peninsula%20Athletic%20Field"
+            "gmaps": "https://maps.app.goo.gl/cE7qwosFWaGVoGpA6",
+            "amaps": "https://maps.apple.com/place?place-id=IDB7530DD0251C60E&name=Gansevoort+Peninsula+Athletic+Field"
           },
           "closed": null
         },
@@ -729,8 +729,8 @@
           ],
           "area": "West Side Highway",
           "location": {
-            "gmaps": "https://www.google.com/maps/search/?api=1&query=Chelsea%20Waterside%20Athletic%20Field",
-            "amaps": "https://maps.apple.com/?q=Chelsea%20Waterside%20Athletic%20Field"
+            "gmaps": "https://maps.app.goo.gl/5wBBEcQDzXL2W1Cp8",
+            "amaps": "https://maps.apple.com/place?place-id=IBACE6BE8C5CDE7BE&name=Chelsea+Waterside+Park"
           },
           "closed": null
         }
