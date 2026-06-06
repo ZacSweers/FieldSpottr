@@ -11,8 +11,8 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.Field
-import kotlinx.collections.immutable.persistentListOf
 import kotlin.test.Test
+import kotlinx.collections.immutable.persistentListOf
 
 class GeneratorTest {
   @Test
@@ -21,9 +21,11 @@ class GeneratorTest {
       generateBbpPier5Rows().filter { row ->
         row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
       }
-    val mondayField1 = generateBbpPier5Rows().filter { row ->
-      row.fieldId == "pier5-field-1" && row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
-    }
+    val mondayField1 =
+      generateBbpPier5Rows().filter { row ->
+        row.fieldId == "pier5-field-1" &&
+          row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
+      }
 
     assertThat(juneFirst).hasSize(1)
     assertThat(mondayField1.map { it.start to it.end })
@@ -167,12 +169,9 @@ class GeneratorTest {
 
     assertThat(rows.map { row -> row.fieldId to (row.start to row.end) })
       .containsExactly(
-        "pier25-turf-field" to
-          (nyMillis("2026-06-07T08:00") to nyMillis("2026-06-07T12:00")),
-        "pier40-courtyard-east" to
-          (nyMillis("2026-06-07T15:00") to nyMillis("2026-06-07T16:00")),
-        "pier40-courtyard-east" to
-          (nyMillis("2026-06-08T17:30") to nyMillis("2026-06-08T23:30")),
+        "pier25-turf-field" to (nyMillis("2026-06-07T08:00") to nyMillis("2026-06-07T12:00")),
+        "pier40-courtyard-east" to (nyMillis("2026-06-07T15:00") to nyMillis("2026-06-07T16:00")),
+        "pier40-courtyard-east" to (nyMillis("2026-06-08T17:30") to nyMillis("2026-06-08T23:30")),
       )
     assertThat(rows[0].areaName).isEqualTo("West Side Highway")
     assertThat(rows[0].groupName).isEqualTo("Pier 25")
@@ -213,16 +212,14 @@ private val hrpFixture =
     .trimIndent()
 
 private fun nyMillis(value: String): Long {
-  return java.time.LocalDateTime
-    .parse(value)
+  return java.time.LocalDateTime.parse(value)
     .atZone(java.time.ZoneId.of("America/New_York"))
     .toInstant()
     .toEpochMilli()
 }
 
 private fun nyEpochSecond(value: String): Long {
-  return java.time.LocalDateTime
-    .parse(value)
+  return java.time.LocalDateTime.parse(value)
     .atZone(java.time.ZoneId.of("America/New_York"))
     .toInstant()
     .epochSecond

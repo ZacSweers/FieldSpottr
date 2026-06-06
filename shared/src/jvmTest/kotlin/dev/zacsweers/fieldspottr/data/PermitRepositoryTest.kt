@@ -154,7 +154,9 @@ class PermitRepositoryTest {
     val statusCode: HttpStatusCode = HttpStatusCode.OK,
   )
 
-  private fun testRepository(routes: MutableMap<String, TestResponse>): Pair<PermitRepository, HttpClient> {
+  private fun testRepository(
+    routes: MutableMap<String, TestResponse>
+  ): Pair<PermitRepository, HttpClient> {
     val client =
       HttpClient(
         MockEngine { request ->
@@ -447,7 +449,8 @@ class PermitRepositoryTest {
 
     repository.importAreaFeed(feed, manifestArea, fetchedAt = 300L)
 
-    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList().sortedBy { it.start }
+    val permits =
+      temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList().sortedBy { it.start }
     assertThat(permits).hasSize(1)
     assertThat(permits[0].area).isEqualTo("TestArea")
     assertThat(permits[0].groupName).isEqualTo(testGroup)
@@ -495,7 +498,8 @@ class PermitRepositoryTest {
 
     repository.importAreaFeed(feed, manifestArea, fetchedAt = 300L)
 
-    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList().sortedBy { it.start }
+    val permits =
+      temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList().sortedBy { it.start }
     assertThat(permits).hasSize(2)
     assertThat(permits[0].isOverlap).isEqualTo(1L)
     assertThat(permits[0].advisory).isEqualTo(null)
@@ -630,7 +634,11 @@ class PermitRepositoryTest {
       Areas(
         entries =
           persistentListOf(
-            Area(areaName = "CachedArea", displayName = "Cached Area", fieldGroups = persistentListOf())
+            Area(
+              areaName = "CachedArea",
+              displayName = "Cached Area",
+              fieldGroups = persistentListOf(),
+            )
           ),
         version = Areas.VERSION,
       )

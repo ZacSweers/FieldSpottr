@@ -142,9 +142,13 @@ val fsVersionName = providers.gradleProperty("fs_versionname").get()
 
 val isReleasing = providers.environmentVariable("RELEASING").map(String::toBoolean).orElse(false)
 val gitBranch =
-  providers.exec { commandLine("git", "branch", "--show-current") }.standardOutput.asText.map {
-    it.trim()
-  }
+  providers
+    .exec { commandLine("git", "branch", "--show-current") }
+    .standardOutput
+    .asText
+    .map {
+      it.trim()
+    }
 val repoDataRef =
   providers
     .gradleProperty("fs_repo_data_ref")
@@ -153,8 +157,9 @@ val repoDataRef =
     .orElse(gitBranch)
     .map { it.ifBlank { "main" } }
 val repoDataPathRef = repoDataRef.map { if (it.startsWith("refs/")) it else "refs/heads/$it" }
-val repoDataBaseUrl =
-  repoDataPathRef.map { "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/$it" }
+val repoDataBaseUrl = repoDataPathRef.map {
+  "https://raw.githubusercontent.com/ZacSweers/FieldSpottr/$it"
+}
 
 buildConfig {
   packageName("dev.zacsweers.fieldspottr")

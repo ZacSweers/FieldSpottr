@@ -525,7 +525,8 @@ private suspend fun HttpClient.fetchHrpRows(
 
 internal fun String.toHrpRows(area: Area): List<AvailabilityFeedRow> {
   if (area.areaName != "West Side Highway") return emptyList()
-  val fieldIdsByTitle = area.fieldGroups.flatMap { group -> group.fields.map { it.name to it } }.toMap()
+  val fieldIdsByTitle =
+    area.fieldGroups.flatMap { group -> group.fields.map { it.name to it } }.toMap()
   val text = toScheduleText()
   val year = Regex("""\b(\d{4})\b""").findAll(text).lastOrNull()?.value?.toIntOrNull()
   val rows = mutableListOf<AvailabilityFeedRow>()
@@ -584,7 +585,11 @@ private val hrpFields =
       HrpField("pier40-indoor-youth-field", "Pier 40 Indoor Youth Field"),
       HrpField("pier40-rooftop-field-1", "Pier 40 Rooftop Field #1"),
       HrpField("pier40-rooftop-field-2", "Pier 40 Rooftop Field #2"),
-      HrpField("pier40-rooftop-field-2", "Pier 40 Rooftop Field #2 – Youth Only", "Pier 40 Rooftop Field #2"),
+      HrpField(
+        "pier40-rooftop-field-2",
+        "Pier 40 Rooftop Field #2 – Youth Only",
+        "Pier 40 Rooftop Field #2",
+      ),
       HrpField("gansevoort-peninsula-athletic-field", "Gansevoort Peninsula Athletic Field"),
       HrpField("gansevoort-peninsula-athletic-field", "Gansevoort Peninsula Playing Field"),
       HrpField("chelsea-waterside-athletic-field", "Chelsea Waterside Athletic Field"),
@@ -671,8 +676,7 @@ private fun HrpField.toRow(
 private fun String.toCompleteTimeRange(): Pair<LocalTime, LocalTime>? {
   val match =
     Regex("""^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[–-]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$""")
-      .find(this)
-      ?: return null
+      .find(this) ?: return null
   val endMeridiem = match.groupValues[6]
   val startMeridiem = match.groupValues[3].ifBlank { endMeridiem }
   val start = time(match.groupValues[1], match.groupValues[2], startMeridiem)
@@ -703,16 +707,15 @@ private fun String.toNyEpochMillis(): Long {
 }
 
 private fun List<AvailabilityFeedRow>.mergeAdjacentRows(): List<AvailabilityFeedRow> {
-  return sortedWith(feedRowComparator)
-    .fold(mutableListOf()) { result, row ->
-      val previous = result.lastOrNull()
-      if (previous != null && previous.canMergeWith(row)) {
-        result[result.lastIndex] = previous.copy(end = row.end)
-      } else {
-        result += row
-      }
-      result
+  return sortedWith(feedRowComparator).fold(mutableListOf()) { result, row ->
+    val previous = result.lastOrNull()
+    if (previous != null && previous.canMergeWith(row)) {
+      result[result.lastIndex] = previous.copy(end = row.end)
+    } else {
+      result += row
     }
+    result
+  }
 }
 
 private fun AvailabilityFeedRow.canMergeWith(other: AvailabilityFeedRow): Boolean {

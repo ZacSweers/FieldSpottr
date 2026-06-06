@@ -175,7 +175,8 @@ fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): Find
             initialGroup = event.group,
             fixedTitle = group.name,
             fixedSubtitle = subtitle,
-            selectedDate = selectedDate.atStartOfDayIn(TimeZone.currentSystemDefault()).epochSeconds,
+            selectedDate =
+              selectedDate.atStartOfDayIn(TimeZone.currentSystemDefault()).epochSeconds,
           )
         )
       }

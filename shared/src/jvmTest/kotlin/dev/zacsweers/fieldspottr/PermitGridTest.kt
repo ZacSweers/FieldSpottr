@@ -118,8 +118,13 @@ class PermitGridTest {
       )
 
     val permitState =
-      PermitState.fromPermits(listOf(normalPermit, overlapPermit, advisory), Areas.default, "Baruch")
-    val overlays = listOf(normalPermit, overlapPermit, advisory).availabilityOverlays(Areas.default, "Baruch")!!
+      PermitState.fromPermits(
+        listOf(normalPermit, overlapPermit, advisory),
+        Areas.default,
+        "Baruch",
+      )
+    val overlays =
+      listOf(normalPermit, overlapPermit, advisory).availabilityOverlays(Areas.default, "Baruch")!!
 
     assertThat(permitState.fields.getValue(softball1).filterIsInstance<Reserved>()).hasSize(1)
     val liveField = overlays.fields.getValue(softball1)
