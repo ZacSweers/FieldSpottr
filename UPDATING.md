@@ -7,6 +7,42 @@ a Gradle JVM app:
 ./gradlew :generator:run --args=--output=.
 ```
 
+## NYC Parks
+
+NYC Parks areas can be added from their issued-permits page. The helper script fetches the page and
+CSV with a browser-like user agent, discovers CSV field names, tries to match live `apiLocationId`
+values from NYC Parks map tiles, inserts a Kotlin catalog block into `Area.kt`, and bumps
+`Areas.VERSION`.
+
+Start with a dry run:
+
+```bash
+scripts/add_nyc_park.py https://www.nycgovparks.org/permits/field-and-court/issued/<PARK_ID> --dry-run
+```
+
+Then add it:
+
+```bash
+scripts/add_nyc_park.py https://www.nycgovparks.org/permits/field-and-court/issued/<PARK_ID>
+```
+
+Review the generated `Area.kt` block before committing. The script can infer simple whole/half-field
+overlaps, but group names, display names, map links, and unusual shared-field relationships may need
+manual cleanup. Useful overrides:
+
+```bash
+scripts/add_nyc_park.py <url> --name "Short Area Name" --group "Field Group Name"
+scripts/add_nyc_park.py <url> --display-name "Display Name"
+scripts/add_nyc_park.py <url> --no-live-ids
+```
+
+After adding or adjusting a park, regenerate repo data and run generator tests:
+
+```bash
+./gradlew :generator:run --args=--output=.
+./gradlew :generator:test
+```
+
 ## Brooklyn Bridge Park Pier 5
 
 Brooklyn Bridge Park is the area in the app. Pier 5 is the field/group inside that area, and
