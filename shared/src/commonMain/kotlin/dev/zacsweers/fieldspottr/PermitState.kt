@@ -232,7 +232,8 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
       // If the selected group is closed, show all-day blocked permits for every field
       if (selectedGroup != null) {
         val group = areas.groups[selectedGroup]
-        if (group?.closed != null) {
+        val closed = group?.closed
+        if (closed != null) {
           val closedFields = buildMap {
             for (field in group.fields) {
               put(
@@ -242,7 +243,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
                     start = 0,
                     end = 24,
                     timeRange = "All day",
-                    title = group.closed,
+                    title = closed,
                     org = "",
                     status = "Closed",
                     isBlocked = true,

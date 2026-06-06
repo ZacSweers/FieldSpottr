@@ -21,7 +21,7 @@ data class Areas(
   val groups by lazy { entries.flatMap { it.fieldGroups }.associateBy { it.name } }
 
   companion object {
-    const val VERSION = 2
+    const val VERSION = 3
     val default by lazy { buildDefaultAreas() }
   }
 }
@@ -31,7 +31,7 @@ data class Areas(
 data class Area(
   val areaName: String,
   val displayName: String,
-  val csvUrl: String,
+  val csvUrl: String? = null,
   @Serializable(with = ImmutableListSerializer::class) val fieldGroups: ImmutableList<FieldGroup>,
   val subtitle: String? = null,
 ) {
@@ -60,7 +60,7 @@ class AreasBuilder {
   fun area(
     name: String,
     displayName: String,
-    csvUrl: String,
+    csvUrl: String? = null,
     subtitle: String? = null,
     block: AreaBuilder.() -> Unit,
   ) {
@@ -76,7 +76,7 @@ class AreasBuilder {
   class AreaBuilder(
     val name: String,
     val displayName: String,
-    val csvUrl: String,
+    val csvUrl: String?,
     val subtitle: String?,
   ) {
     private val fieldGroups = mutableListOf<FieldGroup>()
@@ -497,6 +497,20 @@ fun buildDefaultAreas(): Areas {
           sharedFields = setOf("stvartan"),
           apiLocationId = "M076-BASEBALL-1",
         )
+      }
+    }
+    area(name = "Brooklyn Bridge Park", displayName = "Brooklyn Bridge Park") {
+      group(
+        name = "Pier 5 Turf",
+        location =
+          Location(
+            "https://www.google.com/maps/search/?api=1&query=Brooklyn%20Bridge%20Park%20Pier%205",
+            "https://maps.apple.com/?q=Brooklyn%20Bridge%20Park%20Pier%205",
+          ),
+      ) {
+        field(csvName = "pier5-field-1", displayName = "Field 1")
+        field(csvName = "pier5-field-2", displayName = "Field 2")
+        field(csvName = "pier5-field-3", displayName = "Field 3")
       }
     }
   }

@@ -49,9 +49,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/S6x4PgTCGucMKnB9A",
             "amaps": "https://maps.apple.com/?address=Baruch%20Pl,%20New%20York,%20NY%2010002,%20United%20States&auid=13062604862514247086&ll=40.717599,-73.976666&lsp=9902&q=Baruch%20Playground"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "ERP",
@@ -160,9 +162,10 @@
           ],
           "area": "ERP",
           "location": {
-            "gmaps": "https://www.google.com/maps/place/40\u00b042'44.2\"N+73\u00b058'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
+            "gmaps": "https://www.google.com/maps/place/40°42'44.2\"N+73°58'37.4\"W/@40.712286,-73.9792062,17z/data=!3m1!4b1!4m4!3m3!8m2!3d40.712286!4d-73.977041",
             "amaps": "https://maps.apple.com/?address=John%20V.%20Lindsay%20East%20River%20Park,%20New%20York,%20NY%20%2010002,%20United%20States&ll=40.712206,-73.976992&q=Dropped%20Pin"
-          }
+          },
+          "closed": null
         },
         {
           "name": "Grand Street Mini Field (Field 3)",
@@ -171,6 +174,9 @@
               "name": "Grand Street Mini Field-Soccer-02",
               "displayName": "Whole Field",
               "group": "Grand Street Mini Field (Field 3)",
+              "sharedFields": [
+                "Grand Street Mini Field-Soccer-02"
+              ],
               "apiLocationId": "M144-ZN02-SOCCER-12"
             }
           ],
@@ -178,7 +184,8 @@
           "location": {
             "gmaps": "https://www.google.com/maps/place/East+River+Park+*+Grand+Street+Mini+Field/@40.7135106,-73.9766765,19.39z/data=!4m6!3m5!1s0x89c25b0020f63825:0x94cfd8ce67954ddd!8m2!3d40.7133945!4d-73.9768339!16s%2Fg%2F11yft3l7v2",
             "amaps": "https://maps.apple.com/place?coordinate=40.713506,-73.976811&name=Marked%20Location"
-          }
+          },
+          "closed": null
         }
       ],
       "subtitle": "Partially closed"
@@ -195,12 +202,18 @@
               "name": "Soccer-01",
               "displayName": "Soccer",
               "group": "Corlears Hook",
+              "sharedFields": [
+                "Soccer-01"
+              ],
               "apiLocationId": "M017-SOCCER-1"
             },
             {
               "name": "Softball-01",
               "displayName": "Softball",
               "group": "Corlears Hook",
+              "sharedFields": [
+                "Softball-01"
+              ],
               "apiLocationId": "M017-BASEBALL-1"
             }
           ],
@@ -208,9 +221,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/qhdRxmus8UPUtSyY8",
             "amaps": "https://maps.apple.com/?address=397%20FDR%20Drive,%20New%20York,%20NY%2010002,%20United%20States&auid=16313010153387216666&ll=40.711739,-73.979789&lsp=9902&q=Corlears%20Hook%20Park"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "Sara D. Roosevelt Park",
@@ -224,6 +239,9 @@
               "name": "Nike Field-Soccer-02",
               "displayName": "Soccer",
               "group": "Nike Field",
+              "sharedFields": [
+                "Nike Field-Soccer-02"
+              ],
               "apiLocationId": "M105-SOCCER-2"
             }
           ],
@@ -231,7 +249,8 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/oAhmjiWkU8uxef4w7",
             "amaps": "https://maps.apple.com/place?place-id=I877D8AD17649FAE0&coordinate=40.722017%2C-73.991512&name=Nike+Field"
-          }
+          },
+          "closed": null
         },
         {
           "name": "Canal Street Mini Field",
@@ -240,6 +259,9 @@
               "name": "Canal Street Mini Field-Soccer-01",
               "displayName": "Soccer",
               "group": "Canal Street Mini Field",
+              "sharedFields": [
+                "Canal Street Mini Field-Soccer-01"
+              ],
               "apiLocationId": "M105-SOCCER-1"
             }
           ],
@@ -247,7 +269,8 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/s5xrKUAMaxH6ciqv6",
             "amaps": "https://maps.apple.com/?ll=40.716021,-73.994258&q=Canal%20Street%20Mini%20Field"
-          }
+          },
+          "closed": null
         },
         {
           "name": "Sara D. Roosevelt Park Futsal",
@@ -256,6 +279,9 @@
               "name": "Futsal-01",
               "displayName": "Futsal",
               "group": "Sara D. Roosevelt Park Futsal",
+              "sharedFields": [
+                "Futsal-01"
+              ],
               "apiLocationId": "M105-SOCCER-3"
             }
           ],
@@ -263,9 +289,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/6dJosDeXYpMoCSwU8",
             "amaps": "https://maps.apple.com/?ll=40.719300,-73.992800&q=Sara%20D.%20Roosevelt%20Park%20Futsal"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "Columbus Park",
@@ -279,6 +307,9 @@
               "name": "Soccer-01",
               "displayName": "Soccer",
               "group": "Columbus Park",
+              "sharedFields": [
+                "Soccer-01"
+              ],
               "apiLocationId": "M015-SOCCER-1"
             }
           ],
@@ -286,9 +317,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/zQrviCTRajcKLoWB7",
             "amaps": "https://maps.apple.com/place?place-id=I945F817E3C2A5B6D&coordinate=40.715444%2C-74.000003&name=Columbus+Park+Soccer+Field"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "Pier 42",
@@ -302,6 +335,9 @@
               "name": "Soccer-01",
               "displayName": "Soccer",
               "group": "Pier 42",
+              "sharedFields": [
+                "Soccer-01"
+              ],
               "apiLocationId": "M369-SOCCER-1"
             }
           ],
@@ -309,9 +345,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/d9Qi6Dqu8z5yPdU56",
             "amaps": "https://maps.apple.com/?address=New%20York,%20NY%2010002,%20United%20States&auid=14094921999338982991&ll=40.709947,-73.982427&lsp=9902&q=Pier%2042"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "Peter's Field",
@@ -344,9 +382,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/Q1rftzTaKiVHRNDz6",
             "amaps": "https://maps.apple.com/?address=301%20E%2020th%20St,%20New%20York,%20NY%20%2010003,%20United%20States&auid=7985386323298652825&ll=40.736111,-73.981667&lsp=9902&q=Peter's%20Field"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "McCarren",
@@ -360,6 +400,9 @@
               "name": "Soccer-01",
               "displayName": "Soccer",
               "group": "McCarren Track",
+              "sharedFields": [
+                "Soccer-01"
+              ],
               "apiLocationId": "B058-ZN02-FOOTBALL-1"
             }
           ],
@@ -367,9 +410,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/4oHKgX7kkxTPcwWS7",
             "amaps": "https://maps.apple.com/?address=Lorimer%20Street,%20Union%20%26%20Driggs%20Avenue,%20Brooklyn,%20NY%2011211,%20United%20States&auid=2152782516168223158&ll=40.720052,-73.951718&lsp=9902&q=McCarren%20Park%20Track"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "Bushwick Inlet Park",
@@ -413,9 +458,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/P1J6DhgdAVmG8Syq6",
             "amaps": "https://maps.apple.com/?address=86%20Kent%20Ave,%20Brooklyn,%20NY%2011249,%20United%20States&auid=17553726733896206163&ll=40.722201,-73.961238&lsp=9902&q=Bushwick%20Inlet%20Park"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "Murphy Brothers Playground",
@@ -457,9 +504,11 @@
           "location": {
             "gmaps": "https://maps.app.goo.gl/ji38JTioKTi1aCZu8",
             "amaps": "https://maps.apple.com/?address=729%20E%2016th%20St,%20New%20York,%20NY%20%2010009,%20United%20States&auid=6845864669219202528&ll=40.730238,-73.973458&lsp=9902&q=Murphy%20Brothers%20Playground"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
     },
     {
       "areaName": "St. Vartan Park",
@@ -492,10 +541,58 @@
           "location": {
             "gmaps": "http://maps.google.com/maps?t=h&daddr=40.74512959480%2C%20-73.97369761560%20%28Center%20of%20St%20Vartan%20Park%29",
             "amaps": "https://maps.apple.com/?ll=40.745130,-73.973698&q=St%20Vartan%20Park"
-          }
+          },
+          "closed": null
         }
-      ]
+      ],
+      "subtitle": null
+    },
+    {
+      "areaName": "Brooklyn Bridge Park",
+      "displayName": "Brooklyn Bridge Park",
+      "csvUrl": null,
+      "fieldGroups": [
+        {
+          "name": "Pier 5 Turf",
+          "fields": [
+            {
+              "name": "pier5-field-1",
+              "displayName": "Field 1",
+              "group": "Pier 5 Turf",
+              "sharedFields": [
+                "pier5-field-1"
+              ],
+              "apiLocationId": null
+            },
+            {
+              "name": "pier5-field-2",
+              "displayName": "Field 2",
+              "group": "Pier 5 Turf",
+              "sharedFields": [
+                "pier5-field-2"
+              ],
+              "apiLocationId": null
+            },
+            {
+              "name": "pier5-field-3",
+              "displayName": "Field 3",
+              "group": "Pier 5 Turf",
+              "sharedFields": [
+                "pier5-field-3"
+              ],
+              "apiLocationId": null
+            }
+          ],
+          "area": "Brooklyn Bridge Park",
+          "location": {
+            "gmaps": "https://www.google.com/maps/search/?api=1&query=Brooklyn%20Bridge%20Park%20Pier%205",
+            "amaps": "https://maps.apple.com/?q=Brooklyn%20Bridge%20Park%20Pier%205"
+          },
+          "closed": null
+        }
+      ],
+      "subtitle": null
     }
   ],
-  "version": 2
+  "version": 3
 }

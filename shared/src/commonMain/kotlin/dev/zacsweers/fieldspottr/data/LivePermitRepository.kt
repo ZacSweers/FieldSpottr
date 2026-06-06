@@ -4,9 +4,6 @@ package dev.zacsweers.fieldspottr.data
 
 import androidx.compose.runtime.Immutable
 import co.touchlab.kermit.Logger
-import dev.zacsweers.metro.AppScope
-import dev.zacsweers.metro.Inject
-import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -77,8 +74,6 @@ data class LivePermitAdvisory(
     get() = endSlot - startSlot
 }
 
-@Inject
-@SingleIn(AppScope::class)
 class LivePermitRepository(
   private val json: Json,
   private val client: HttpClient,

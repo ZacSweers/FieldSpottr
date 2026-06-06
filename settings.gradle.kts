@@ -69,4 +69,8 @@ rootProject.name = "field-spottr-root"
 
 include(":android")
 
+include(":generator")
+
+include(":models")
+
 include(":shared")

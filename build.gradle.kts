@@ -3,6 +3,7 @@
 buildscript { dependencies { classpath(platform(libs.kotlin.plugins.bom)) } }
 
 plugins {
+  alias(libs.plugins.kotlin.jvm) apply false
   alias(libs.plugins.kotlin.multiplatform) apply false
   alias(libs.plugins.agp.application) apply false
   alias(libs.plugins.agp.kotlin.multiplatform) apply false

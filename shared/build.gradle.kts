@@ -56,6 +56,7 @@ kotlin {
         implementation(libs.androidx.datastore.preferences)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
+        implementation(project(":models"))
         implementation(libs.kotlinx.datetime)
         implementation(libs.kotlinx.serialization.core)
         implementation(libs.kotlinx.serialization.json)
