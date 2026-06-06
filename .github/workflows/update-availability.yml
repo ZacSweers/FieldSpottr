@@ -28,8 +28,26 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Dump HRP fields page
+        continue-on-error: true
+        run: |
+          mkdir -p build/hrp
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          "$CHROME" \
+              --headless=new \
+              --disable-gpu \
+              --no-sandbox \
+              --dump-dom \
+              https://hudsonriverpark.org/visit/events/permits/fields/ \
+              > build/hrp/fields.html
+
       - name: Generate availability data
-        run: ./gradlew :generator:run --args=--output=.
+        run: |
+          ARGS="--output=."
+          if [ -s build/hrp/fields.html ]; then
+            ARGS="$ARGS --hrp-source-file=build/hrp/fields.html"
+          fi
+          ./gradlew :generator:run --args="$ARGS"
 
       - name: Commit generated data
         run: |
@@ -51,4 +69,5 @@ jobs:
           path: |
             areas.json
             availability/**
+            build/hrp/**
             generator/build/reports/**

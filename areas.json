@@ -592,7 +592,151 @@
         }
       ],
       "subtitle": null
+    },
+    {
+      "areaName": "West Side Highway",
+      "displayName": "West Side Highway Fields",
+      "csvUrl": null,
+      "fieldGroups": [
+        {
+          "name": "Pier 25",
+          "fields": [
+            {
+              "name": "pier25-turf-field",
+              "displayName": "Turf Field",
+              "group": "Pier 25",
+              "sharedFields": [
+                "pier25-turf-field"
+              ],
+              "apiLocationId": null
+            }
+          ],
+          "area": "West Side Highway",
+          "location": {
+            "gmaps": "https://www.google.com/maps/search/?api=1&query=Hudson%20River%20Park%20Pier%2025%20Turf%20Field",
+            "amaps": "https://maps.apple.com/?q=Hudson%20River%20Park%20Pier%2025%20Turf%20Field"
+          },
+          "closed": null
+        },
+        {
+          "name": "Pier 26",
+          "fields": [
+            {
+              "name": "pier26-sports-court",
+              "displayName": "Sports Court",
+              "group": "Pier 26",
+              "sharedFields": [
+                "pier26-sports-court"
+              ],
+              "apiLocationId": null
+            }
+          ],
+          "area": "West Side Highway",
+          "location": {
+            "gmaps": "https://www.google.com/maps/search/?api=1&query=Hudson%20River%20Park%20Pier%2026%20Sports%20Court",
+            "amaps": "https://maps.apple.com/?q=Hudson%20River%20Park%20Pier%2026%20Sports%20Court"
+          },
+          "closed": null
+        },
+        {
+          "name": "Pier 40",
+          "fields": [
+            {
+              "name": "pier40-courtyard-east",
+              "displayName": "Courtyard East",
+              "group": "Pier 40",
+              "sharedFields": [
+                "pier40-courtyard-east"
+              ],
+              "apiLocationId": null
+            },
+            {
+              "name": "pier40-courtyard-west",
+              "displayName": "Courtyard West",
+              "group": "Pier 40",
+              "sharedFields": [
+                "pier40-courtyard-west"
+              ],
+              "apiLocationId": null
+            },
+            {
+              "name": "pier40-indoor-youth-field",
+              "displayName": "Indoor Youth Field",
+              "group": "Pier 40",
+              "sharedFields": [
+                "pier40-indoor-youth-field"
+              ],
+              "apiLocationId": null
+            },
+            {
+              "name": "pier40-rooftop-field-1",
+              "displayName": "Rooftop Field 1",
+              "group": "Pier 40",
+              "sharedFields": [
+                "pier40-rooftop-field-1"
+              ],
+              "apiLocationId": null
+            },
+            {
+              "name": "pier40-rooftop-field-2",
+              "displayName": "Rooftop Field 2",
+              "group": "Pier 40",
+              "sharedFields": [
+                "pier40-rooftop-field-2"
+              ],
+              "apiLocationId": null
+            }
+          ],
+          "area": "West Side Highway",
+          "location": {
+            "gmaps": "https://www.google.com/maps/search/?api=1&query=Hudson%20River%20Park%20Pier%2040%20Fields",
+            "amaps": "https://maps.apple.com/?q=Hudson%20River%20Park%20Pier%2040%20Fields"
+          },
+          "closed": null
+        },
+        {
+          "name": "Gansevoort Peninsula",
+          "fields": [
+            {
+              "name": "gansevoort-peninsula-athletic-field",
+              "displayName": "Athletic Field",
+              "group": "Gansevoort Peninsula",
+              "sharedFields": [
+                "gansevoort-peninsula-athletic-field"
+              ],
+              "apiLocationId": null
+            }
+          ],
+          "area": "West Side Highway",
+          "location": {
+            "gmaps": "https://www.google.com/maps/search/?api=1&query=Gansevoort%20Peninsula%20Athletic%20Field",
+            "amaps": "https://maps.apple.com/?q=Gansevoort%20Peninsula%20Athletic%20Field"
+          },
+          "closed": null
+        },
+        {
+          "name": "Chelsea Waterside",
+          "fields": [
+            {
+              "name": "chelsea-waterside-athletic-field",
+              "displayName": "Athletic Field",
+              "group": "Chelsea Waterside",
+              "sharedFields": [
+                "chelsea-waterside-athletic-field"
+              ],
+              "apiLocationId": null
+            }
+          ],
+          "area": "West Side Highway",
+          "location": {
+            "gmaps": "https://www.google.com/maps/search/?api=1&query=Chelsea%20Waterside%20Athletic%20Field",
+            "amaps": "https://maps.apple.com/?q=Chelsea%20Waterside%20Athletic%20Field"
+          },
+          "closed": null
+        }
+      ],
+      "subtitle": "Hudson River Park"
     }
   ],
-  "version": 3
+  "version": 4
 }

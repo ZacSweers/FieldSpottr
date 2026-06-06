@@ -21,7 +21,7 @@ data class Areas(
   val groups by lazy { entries.flatMap { it.fieldGroups }.associateBy { it.name } }
 
   companion object {
-    const val VERSION = 3
+    const val VERSION = 4
     val default by lazy { buildDefaultAreas() }
   }
 }
@@ -511,6 +511,66 @@ fun buildDefaultAreas(): Areas {
         field(csvName = "pier5-field-1", displayName = "Field 1")
         field(csvName = "pier5-field-2", displayName = "Field 2")
         field(csvName = "pier5-field-3", displayName = "Field 3")
+      }
+    }
+    area(
+      name = "West Side Highway",
+      displayName = "West Side Highway Fields",
+      subtitle = "Hudson River Park",
+    ) {
+      group(
+        name = "Pier 25",
+        location =
+          Location(
+            "https://maps.app.goo.gl/qyYbXBdnKhtw7YqaA",
+            "https://maps.apple.com/place?place-id=IDE5918E11FFD238&name=Pier+25",
+          ),
+      ) {
+        field(csvName = "pier25-turf-field", displayName = "Turf Field")
+      }
+      group(
+        name = "Pier 26",
+        location =
+          Location(
+            "https://maps.app.goo.gl/PLaSjB1xydkoweQr8",
+            "https://maps.apple.com/place?place-id=I3968485F9D7A5F7C&name=Pier+26",
+          ),
+      ) {
+        field(csvName = "pier26-sports-court", displayName = "Sports Court")
+      }
+      group(
+        name = "Pier 40",
+        location =
+          Location(
+            "https://maps.app.goo.gl/YotVakYm2CvujW327",
+            "https://maps.apple.com/place?place-id=I581492885D67A922&name=Pier+40",
+          ),
+      ) {
+        field(csvName = "pier40-courtyard-east", displayName = "Courtyard East")
+        field(csvName = "pier40-courtyard-west", displayName = "Courtyard West")
+        field(csvName = "pier40-indoor-youth-field", displayName = "Indoor Youth Field")
+        field(csvName = "pier40-rooftop-field-1", displayName = "Rooftop Field 1")
+        field(csvName = "pier40-rooftop-field-2", displayName = "Rooftop Field 2")
+      }
+      group(
+        name = "Gansevoort Peninsula",
+        location =
+          Location(
+            "https://maps.app.goo.gl/cE7qwosFWaGVoGpA6",
+            "https://maps.apple.com/place?place-id=IDB7530DD0251C60E&name=Gansevoort+Peninsula+Athletic+Field",
+          ),
+      ) {
+        field(csvName = "gansevoort-peninsula-athletic-field", displayName = "Athletic Field")
+      }
+      group(
+        name = "Chelsea Waterside",
+        location =
+          Location(
+            "https://maps.app.goo.gl/5wBBEcQDzXL2W1Cp8",
+            "https://maps.apple.com/place?place-id=IBACE6BE8C5CDE7BE&name=Chelsea+Waterside+Park",
+          ),
+      ) {
+        field(csvName = "chelsea-waterside-athletic-field", displayName = "Athletic Field")
       }
     }
   }

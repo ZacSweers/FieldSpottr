@@ -24,6 +24,13 @@ Run the generator with:
 Use `--live-days=<days>` to adjust the NYC Parks live availability window. GitHub Actions runs the
 same Gradle task daily and commits changed generated JSON.
 
+Hudson River Park / West Side Highway schedules can be supplied from a browser-dumped page source:
+
+    ./gradlew :generator:run --args="--output=. --hrp-source-file=build/hrp/fields.html"
+
+If that source is blocked or cannot be parsed, the generator preserves the previous West Side
+Highway feed instead of replacing it with empty data.
+
 The generated manifest lists one hash per area feed. App refreshes download only stale/missing area
 feeds, and each feed replaces that area's DB rows transactionally after it parses successfully.
 Failed manifest or feed downloads keep the existing cached DB data in place.

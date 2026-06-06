@@ -34,8 +34,11 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 private const val NYC_LIVE_URL = "https://www.nycgovparks.org/api/athletic-fields"
+private const val HRP_FIELDS_URL = "https://hudsonriverpark.org/visit/events/permits/fields/"
 private const val NYC_PARKS_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+private const val BROWSER_LIKE_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 
 private val nyZone = ZoneId.of("America/New_York")
 private val csvFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm a", Locale.US)
@@ -65,10 +68,11 @@ fun main(args: Array<String>) = runBlocking {
     Files.createDirectories(feedsRoot)
 
     areas.entries.sortedBy(Area::areaName).forEach { area ->
-      val feed = generateFeed(client, area, today, options.liveDays, generatedAt)
       val areaId = area.areaName.slug()
       val relativePath = "availability/areas/$areaId.json"
       val feedPath = options.outputRoot.resolve(relativePath)
+      val existingFeed = feedPath.decodeFeedOrNull()
+      val feed = generateFeed(client, area, today, options.liveDays, generatedAt, options, existingFeed)
       val feedJson = json.encodeToString(feed)
       Files.writeString(feedPath, feedJson)
       manifestAreas +=
@@ -90,10 +94,14 @@ fun main(args: Array<String>) = runBlocking {
   }
 }
 
-private data class Options(val outputRoot: Path, val liveDays: Long)
+private data class Options(val outputRoot: Path, val liveDays: Long, val hrpSourceFile: Path?)
 
 private fun Array<String>.options(): Options {
-  return Options(outputRoot = outputRoot(), liveDays = longOption("live-days") ?: defaultLiveDays)
+  return Options(
+    outputRoot = outputRoot(),
+    liveDays = longOption("live-days") ?: defaultLiveDays,
+    hrpSourceFile = stringOption("hrp-source-file")?.let(Path::of),
+  )
 }
 
 private fun Array<String>.outputRoot(): Path {
@@ -118,20 +126,27 @@ private suspend fun generateFeed(
   today: LocalDate,
   liveDays: Long,
   generatedAt: Long?,
+  options: Options,
+  existingFeed: AvailabilityAreaFeed?,
 ): AvailabilityAreaFeed {
+  val hrpRows = client.fetchHrpRows(area, options.hrpSourceFile)
+  val preservedHrpRows =
+    if (area.areaName == "West Side Highway" && hrpRows == null) {
+      existingFeed?.rows.orEmpty().also {
+        if (it.isNotEmpty()) {
+          System.err.println("Preserving previous West Side Highway feed rows")
+        }
+      }
+    } else {
+      emptyList()
+    }
   val rows =
     (area.csvUrl?.let { csvUrl -> client.fetchNycCsv(csvUrl).toAvailabilityRows(area) }.orEmpty() +
         area.toBbpRows() +
+        (hrpRows ?: preservedHrpRows) +
         client.fetchNycLiveRows(area, today, liveDays))
       .mergeAdjacentRows()
-      .sortedWith(
-        compareBy<AvailabilityFeedRow> { it.groupName }
-          .thenBy { it.fieldId }
-          .thenBy { it.start }
-          .thenBy { it.end }
-          .thenBy { it.kind }
-          .thenBy { it.title }
-      )
+      .sortedWith(feedRowComparator)
   return AvailabilityAreaFeed(areaName = area.areaName, generatedAt = generatedAt, rows = rows)
 }
 
@@ -389,19 +404,219 @@ private fun block(fieldIds: List<String>, start: String, end: String): Recurring
   return RecurringBlock(fieldIds, LocalTime.parse(start), LocalTime.parse(end))
 }
 
+private suspend fun HttpClient.fetchHrpRows(
+  area: Area,
+  sourceFile: Path?,
+): List<AvailabilityFeedRow>? {
+  if (area.areaName != "West Side Highway") return emptyList()
+  val response =
+    if (sourceFile != null && Files.exists(sourceFile)) {
+      Files.readString(sourceFile)
+    } else {
+      try {
+        get(HRP_FIELDS_URL) {
+            header(HttpHeaders.UserAgent, BROWSER_LIKE_USER_AGENT)
+            header(HttpHeaders.Accept, "text/html")
+          }
+          .body<String>()
+      } catch (e: Exception) {
+        System.err.println("Failed to fetch Hudson River Park field schedule: $e")
+        return null
+      }
+    }
+  if (response.isCloudflareBlockPage()) {
+    System.err.println("Hudson River Park field schedule fetch was blocked")
+    return null
+  }
+  val rows = response.toHrpRows(area)
+  if (rows.isEmpty()) {
+    System.err.println("Hudson River Park field schedule produced no rows")
+    return null
+  }
+  return rows
+}
+
+internal fun String.toHrpRows(area: Area): List<AvailabilityFeedRow> {
+  if (area.areaName != "West Side Highway") return emptyList()
+  val fieldIdsByTitle = area.fieldGroups.flatMap { group -> group.fields.map { it.name to it } }.toMap()
+  val text = toScheduleText()
+  val year = Regex("""\b(\d{4})\b""").findAll(text).lastOrNull()?.value?.toIntOrNull()
+  val rows = mutableListOf<AvailabilityFeedRow>()
+  val lines = text.lines().map(String::trim).filter(String::isNotEmpty)
+  for ((index, line) in lines.withIndex()) {
+    val field = hrpFields[line.removePrefix("Image:").trim()] ?: continue
+    val scheduleLines =
+      lines.drop(index + 1).takeWhile { !it.startsWith("Image:") && it !in hrpFields.keys }
+    val dates = scheduleLines.dateColumns(year ?: continue)
+    if (dates.isEmpty()) continue
+    rows += scheduleLines.toHrpScheduleRows(field, fieldIdsByTitle, dates)
+  }
+  return rows
+}
+
+private fun String.toScheduleText(): String {
+  return replace(Regex("""(?is)<img\b[^>]*alt=["']([^"']+)["'][^>]*>"""), "\nImage: $1\n")
+    .replace(Regex("""(?is)<br\s*/?>"""), "\n")
+    .replace(Regex("""(?is)</t[dh]>"""), " | ")
+    .replace(Regex("""(?is)</tr>"""), "\n")
+    .replace(Regex("""(?is)<[^>]+>"""), " ")
+    .replace("&nbsp;", " ")
+    .replace("&amp;", "&")
+    .replace("&#8211;", "–")
+    .replace("&#8212;", "–")
+    .replace(Regex("""[ \t]+"""), " ")
+}
+
+internal fun String.isCloudflareBlockPage(): Boolean {
+  if (!contains("Cloudflare", ignoreCase = true)) return false
+  val blockSignals =
+    listOf(
+      "Attention Required",
+      "Sorry, you have been blocked",
+      "cf-error-details",
+      "cf-wrapper",
+      "Cloudflare Ray ID",
+      "Why have I been blocked?",
+      "Performance & security by",
+    )
+  return blockSignals.count { contains(it, ignoreCase = true) } >= 2
+}
+
+private data class HrpField(
+  val fieldId: String,
+  val title: String,
+  val sourceTitle: String = title,
+)
+
+private val hrpFields =
+  listOf(
+      HrpField("pier25-turf-field", "Pier 25 Turf Field"),
+      HrpField("pier26-sports-court", "Pier 26 Sports Court"),
+      HrpField("pier40-courtyard-east", "Pier 40 Courtyard East"),
+      HrpField("pier40-courtyard-west", "Pier 40 Courtyard West"),
+      HrpField("pier40-indoor-youth-field", "Pier 40 Indoor Youth Field"),
+      HrpField("pier40-rooftop-field-1", "Pier 40 Rooftop Field #1"),
+      HrpField("pier40-rooftop-field-2", "Pier 40 Rooftop Field #2"),
+      HrpField("pier40-rooftop-field-2", "Pier 40 Rooftop Field #2 – Youth Only", "Pier 40 Rooftop Field #2"),
+      HrpField("gansevoort-peninsula-athletic-field", "Gansevoort Peninsula Athletic Field"),
+      HrpField("gansevoort-peninsula-athletic-field", "Gansevoort Peninsula Playing Field"),
+      HrpField("chelsea-waterside-athletic-field", "Chelsea Waterside Athletic Field"),
+      HrpField("chelsea-waterside-athletic-field", "Chelsea Waterside Field"),
+    )
+    .associateBy(HrpField::title)
+
+private fun List<String>.dateColumns(year: Int): List<LocalDate> {
+  val dateRegex = Regex("""\b(\d{1,2})/(\d{1,2})\b""")
+  val tokens = take(12).flatMap { line -> dateRegex.findAll(line).map { it.groupValues } }.take(8)
+  if (tokens.isEmpty()) return emptyList()
+  var inferredYear = year
+  var previousMonth = tokens.first()[1].toInt()
+  return tokens.mapIndexed { index, token ->
+    val month = token[1].toInt()
+    val day = token[2].toInt()
+    if (index == 0 && month == 12 && tokens.last()[1].toInt() == 1) inferredYear = year - 1
+    if (index > 0 && month < previousMonth) inferredYear += 1
+    previousMonth = month
+    LocalDate.of(inferredYear, month, day)
+  }
+}
+
+private fun List<String>.toHrpScheduleRows(
+  hrpField: HrpField,
+  fieldsById: Map<String, Field>,
+  dates: List<LocalDate>,
+): List<AvailabilityFeedRow> {
+  val field = fieldsById[hrpField.fieldId] ?: return emptyList()
+  val rows = mutableListOf<AvailabilityFeedRow>()
+  val pendingStarts = Array<LocalTime?>(dates.size) { null }
+  for (line in this) {
+    if (!line.contains("|")) continue
+    val cells = line.split("|").map { it.trim() }
+    if (cells.firstOrNull()?.toLocalTimeOrNull() == null) continue
+    cells.drop(1).take(dates.size).forEachIndexed { column, cell ->
+      val normalized = cell.removeSuffix(" |").trim()
+      val completeRange = normalized.toCompleteTimeRange()
+      when {
+        completeRange != null -> {
+          rows += hrpField.toRow(field, dates[column], completeRange.first, completeRange.second)
+          pendingStarts[column] = null
+        }
+        normalized.endsWith("–") || normalized.endsWith("-") -> {
+          pendingStarts[column] = normalized.dropLast(1).trim().toLocalTimeOrNull()
+        }
+        normalized.toLocalTimeOrNull() != null && pendingStarts[column] != null -> {
+          rows +=
+            hrpField.toRow(
+              field,
+              dates[column],
+              pendingStarts[column]!!,
+              normalized.toLocalTimeOrNull()!!,
+            )
+          pendingStarts[column] = null
+        }
+      }
+    }
+  }
+  return rows
+}
+
+private fun HrpField.toRow(
+  field: Field,
+  date: LocalDate,
+  start: LocalTime,
+  end: LocalTime,
+): AvailabilityFeedRow {
+  val endDate = if (end <= start) date.plusDays(1) else date
+  return AvailabilityFeedRow(
+    areaName = "West Side Highway",
+    groupName = field.group,
+    fieldId = field.name,
+    start = date.atTime(start).atZone(nyZone).toInstant().toEpochMilli(),
+    end = endDate.atTime(end).atZone(nyZone).toInstant().toEpochMilli(),
+    title = sourceTitle,
+    org = "Hudson River Park",
+    status = "Reserved",
+    kind = "HRP weekly schedule",
+    sourceId = "hrp-weekly-field-schedule:${fieldId}:${date}",
+  )
+}
+
+private fun String.toCompleteTimeRange(): Pair<LocalTime, LocalTime>? {
+  val match =
+    Regex("""^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[–-]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$""")
+      .find(this)
+      ?: return null
+  val endMeridiem = match.groupValues[6]
+  val startMeridiem = match.groupValues[3].ifBlank { endMeridiem }
+  val start = time(match.groupValues[1], match.groupValues[2], startMeridiem)
+  val end = time(match.groupValues[4], match.groupValues[5], endMeridiem)
+  return start to end
+}
+
+private fun String.toLocalTimeOrNull(): LocalTime? {
+  val match = Regex("""^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$""").find(this) ?: return null
+  return time(match.groupValues[1], match.groupValues[2], match.groupValues[3])
+}
+
+private fun time(hourText: String, minuteText: String, meridiem: String): LocalTime {
+  val hour = hourText.toInt()
+  val minute = minuteText.ifBlank { "00" }.toInt()
+  val normalizedHour =
+    when (meridiem) {
+      "AM" -> if (hour == 12) 0 else hour
+      "PM" -> if (hour == 12) 12 else hour + 12
+      else -> error("Unexpected meridiem $meridiem")
+    }
+  return LocalTime.of(normalizedHour, minute)
+}
+
 private fun String.toNyEpochMillis(): Long {
   val normalized = replace("a.m.", "AM").replace("p.m.", "PM")
   return LocalDateTime.parse(normalized, csvFormatter).atZone(nyZone).toInstant().toEpochMilli()
 }
 
 private fun List<AvailabilityFeedRow>.mergeAdjacentRows(): List<AvailabilityFeedRow> {
-  return sortedWith(
-      compareBy<AvailabilityFeedRow> { it.areaName.orEmpty() }
-        .thenBy { it.groupName }
-        .thenBy { it.fieldId }
-        .thenBy { it.start }
-        .thenBy { it.end }
-    )
+  return sortedWith(feedRowComparator)
     .fold(mutableListOf()) { result, row ->
       val previous = result.lastOrNull()
       if (previous != null && previous.canMergeWith(row)) {
@@ -426,8 +641,30 @@ private fun AvailabilityFeedRow.canMergeWith(other: AvailabilityFeedRow): Boolea
     advisoryText == other.advisoryText
 }
 
+private val feedRowComparator =
+  compareBy<AvailabilityFeedRow> { it.areaName.orEmpty() }
+    .thenBy { it.groupName }
+    .thenBy { it.fieldId }
+    .thenBy { it.start }
+    .thenBy { it.end }
+    .thenBy { it.kind }
+    .thenBy { it.title }
+    .thenBy { it.org }
+    .thenBy { it.status }
+    .thenBy { it.sourceId.orEmpty() }
+    .thenBy { it.advisoryText.orEmpty() }
+
 internal fun AvailabilityAreaFeed.contentHash(): String {
   return json.encodeToString(copy(generatedAt = null)).sha256()
+}
+
+private fun Path.decodeFeedOrNull(): AvailabilityAreaFeed? {
+  return try {
+    if (!Files.exists(this)) return null
+    json.decodeFromString<AvailabilityAreaFeed>(Files.readString(this))
+  } catch (_: Exception) {
+    null
+  }
 }
 
 private inline fun <reified T> Path.writeJson(value: T) {

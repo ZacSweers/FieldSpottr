@@ -7,6 +7,7 @@ import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.Area
+import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.Field
@@ -92,7 +93,88 @@ class GeneratorTest {
     assertThat("Brooklyn Bridge Park".slug()).isEqualTo("brooklyn-bridge-park")
     assertThat("Peter's Field".slug()).isEqualTo("peter-s-field")
   }
+
+  @Test
+  fun `cloudflare block detection ignores normal email protection snippets`() {
+    val page =
+      """
+      <html>
+        <a href="/cdn-cgi/l/email-protection#abc">[email protected]</a>
+        <span>Performance content unrelated to a block page</span>
+      </html>
+      """
+        .trimIndent()
+
+    assertThat(page.isCloudflareBlockPage()).isEqualTo(false)
+  }
+
+  @Test
+  fun `cloudflare block detection accepts block page variants`() {
+    val page =
+      """
+      <html>
+        <title>Attention Required! | Cloudflare</title>
+        <div class="cf-error-details-wrapper">
+          <h1>Sorry, you have been blocked</h1>
+          <span>Cloudflare Ray ID: abc</span>
+        </div>
+      </html>
+      """
+        .trimIndent()
+
+    assertThat(page.isCloudflareBlockPage()).isEqualTo(true)
+  }
+
+  @Test
+  fun `hrp weekly schedule parser expands table rows`() {
+    val area = Areas.default.entries.single { it.areaName == "West Side Highway" }
+    val rows = hrpFixture.toHrpRows(area)
+
+    assertThat(rows.map { row -> row.fieldId to (row.start to row.end) })
+      .containsExactly(
+        "pier25-turf-field" to
+          (nyMillis("2026-06-07T08:00") to nyMillis("2026-06-07T12:00")),
+        "pier40-courtyard-east" to
+          (nyMillis("2026-06-07T15:00") to nyMillis("2026-06-07T16:00")),
+        "pier40-courtyard-east" to
+          (nyMillis("2026-06-08T17:30") to nyMillis("2026-06-08T23:30")),
+      )
+    assertThat(rows[0].areaName).isEqualTo("West Side Highway")
+    assertThat(rows[0].groupName).isEqualTo("Pier 25")
+    assertThat(rows[0].kind).isEqualTo("HRP weekly schedule")
+  }
 }
+
+private val hrpFixture =
+  """
+  #### June 7–14, 2026
+
+  Image: Pier 25 Turf Field
+
+  Time | Sun
+  6/7 | Mon
+  6/8
+  --- | --- | ---
+  6:00 AM | |
+  7:00 AM | |
+  8:00 AM | |
+  9:00 AM | 8:00 AM– |
+  10:00 AM | 12:00 PM |
+  11:00 AM | |
+
+  Image: Pier 40 Courtyard East
+
+  Time | Sun
+  6/7 | Mon
+  6/8
+  --- | --- | ---
+  3:00 PM | 3–4:00 PM |
+  5:00 PM | |
+  6:00 PM | | 5:30 PM–
+  7:00 PM | |
+  8:00 PM | | 11:30 PM
+  """
+    .trimIndent()
 
 private fun nyMillis(value: String): Long {
   return java.time.LocalDateTime
