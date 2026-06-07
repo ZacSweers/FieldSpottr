@@ -82,6 +82,33 @@ class GeneratorTest {
   }
 
   @Test
+  fun `nyc csv parser rejects html block pages`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val response =
+      """
+      <!doctype html>
+      <html>
+        <title>Attention Required</title>
+      </html>
+      """
+        .trimIndent()
+
+    val rows = response.toAvailabilityRowsOrNull(area, source = "test")
+
+    assertThat(rows).isEqualTo(null)
+  }
+
+  @Test
+  fun `nyc csv parser accepts empty csv responses`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val response = "Start Date,End Date,Field Name,Type,Title,Org,Status\n"
+
+    val rows = response.toAvailabilityRowsOrNull(area, source = "test")
+
+    assertThat(rows).isEqualTo(emptyList<AvailabilityFeedRow>())
+  }
+
+  @Test
   fun `nyc live parser ignores html block pages`() {
     val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
     val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")

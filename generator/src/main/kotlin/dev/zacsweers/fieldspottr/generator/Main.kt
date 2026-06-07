@@ -158,26 +158,26 @@ private suspend fun generateFeed(
       emptyList()
     }
 
+  val csvResult =
+    area.csvUrl?.let { csvUrl -> client.fetchNycCsvRows(area, csvUrl) } ?: SourceFetchResult()
+  val preservedCsvRows =
+    if (csvResult.failedSourceIds.isNotEmpty()) {
+      existingFeed.preserveRows(csvResult.failedSourceIds, "NYC Parks CSV")
+    } else {
+      emptyList()
+    }
+
   val liveResult = client.fetchNycLiveRows(area, today, liveDays, options.nycLiveSourceDir)
   val preservedLiveRows =
     if (liveResult.failedSourceIds.isNotEmpty()) {
-      existingFeed
-        ?.rows
-        .orEmpty()
-        .filter { row -> row.sourceId in liveResult.failedSourceIds }
-        .also { preservedRows ->
-          if (preservedRows.isNotEmpty()) {
-            System.err.println(
-              "Preserving previous NYC live rows for ${liveResult.failedSourceIds.sorted()}"
-            )
-          }
-        }
+      existingFeed.preserveRows(liveResult.failedSourceIds, "NYC live")
     } else {
       emptyList()
     }
 
   val sourceRows = buildList {
-    area.csvUrl?.let { csvUrl -> addAll(client.fetchNycCsv(csvUrl).toAvailabilityRows(area)) }
+    addAll(csvResult.rows)
+    addAll(preservedCsvRows)
     addAll(client.fetchBbpRows(area, options.bbpSourceFile))
     addAll(hrpRows ?: preservedHrpRows)
     addAll(liveResult.rows)
@@ -187,45 +187,125 @@ private suspend fun generateFeed(
   return AvailabilityAreaFeed(areaName = area.areaName, generatedAt = generatedAt, rows = rows)
 }
 
-private suspend fun HttpClient.fetchNycCsv(url: String): String {
-  return get(url) {
+private fun AvailabilityAreaFeed?.preserveRows(
+  sourceIds: Set<String>,
+  label: String,
+): List<AvailabilityFeedRow> {
+  return this
+    ?.rows
+    .orEmpty()
+    .filter { row -> row.sourceId in sourceIds }
+    .also { preservedRows ->
+      if (preservedRows.isNotEmpty()) {
+        System.err.println("Preserving previous $label rows for ${sourceIds.sorted()}")
+      }
+    }
+}
+
+private suspend fun HttpClient.fetchNycCsvRows(area: Area, url: String): SourceFetchResult {
+  val sourceId = nycCsvSourceId(area)
+  val response =
+    try {
+      fetchNycCsvResponse(url)
+    } catch (e: Exception) {
+      System.err.println("Failed to fetch NYC Parks CSV data for ${area.areaName}: $e")
+      return SourceFetchResult(failedSourceIds = setOf(sourceId))
+    }
+
+  val rows =
+    response.body.toAvailabilityRowsOrNull(area, response.source)
+      ?: return SourceFetchResult(failedSourceIds = setOf(sourceId))
+
+  return SourceFetchResult(rows)
+}
+
+private suspend fun HttpClient.fetchNycCsvResponse(url: String): SourceResponseBody {
+  val response =
+    get(url) {
       header(HttpHeaders.UserAgent, NYC_PARKS_USER_AGENT)
       header(HttpHeaders.Accept, "text/csv")
     }
-    .body()
+  val contentType = response.headers[HttpHeaders.ContentType] ?: "unknown content type"
+  return SourceResponseBody(
+    body = response.bodyAsText(),
+    source = "$url (${response.status.value} ${response.status.description}, $contentType)",
+  )
 }
 
+private fun nycCsvSourceId(area: Area): String = "nyc-parks-csv:${area.areaName}"
+
+private data class SourceFetchResult(
+  val rows: List<AvailabilityFeedRow> = emptyList(),
+  val failedSourceIds: Set<String> = emptySet(),
+)
+
+private data class SourceResponseBody(
+  val body: String,
+  val source: String,
+)
+
 internal fun String.toAvailabilityRows(area: Area): List<AvailabilityFeedRow> {
-  return lineSequence()
-    .drop(1)
-    .mapNotNull { line ->
-      val segments = line.split(",").map { it.removeSurrounding("\"").trim() }
-      if (segments.size < 7) return@mapNotNull null
-      val start = segments[0]
-      val end = segments[1]
-      val field = segments[2]
-      val type = segments[3]
-      val title = segments[4]
-      val org = segments[5]
-      val status = segments[6]
-      val mappedField = area.fieldMappings[field] ?: return@mapNotNull null
-      val startMillis = start.toNyEpochMillis()
-      val endMillis = end.toNyEpochMillis()
-      if (startMillis == endMillis) return@mapNotNull null
-      AvailabilityFeedRow(
-        areaName = area.areaName,
-        groupName = mappedField.group,
-        fieldId = field,
-        start = startMillis,
-        end = endMillis,
-        title = title,
-        org = org,
-        status = status,
-        kind = type,
-        sourceId = "nyc-parks-csv:${area.areaName}",
+  return toAvailabilityRowsOrNull(area, source = "inline CSV").orEmpty()
+}
+
+internal fun String.toAvailabilityRowsOrNull(
+  area: Area,
+  source: String,
+): List<AvailabilityFeedRow>? {
+  val rows =
+    try {
+      lineSequence()
+        .drop(1)
+        .mapNotNull { line ->
+          val segments = line.split(",").map { it.removeSurrounding("\"").trim() }
+          if (segments.size < 7) return@mapNotNull null
+          val start = segments[0]
+          val end = segments[1]
+          val field = segments[2]
+          val type = segments[3]
+          val title = segments[4]
+          val org = segments[5]
+          val status = segments[6]
+          val mappedField = area.fieldMappings[field] ?: return@mapNotNull null
+          val startMillis = start.toNyEpochMillis()
+          val endMillis = end.toNyEpochMillis()
+          if (startMillis == endMillis) return@mapNotNull null
+          AvailabilityFeedRow(
+            areaName = area.areaName,
+            groupName = mappedField.group,
+            fieldId = field,
+            start = startMillis,
+            end = endMillis,
+            title = title,
+            org = org,
+            status = status,
+            kind = type,
+            sourceId = nycCsvSourceId(area),
+          )
+        }
+        .toList()
+    } catch (e: Exception) {
+      System.err.println(
+        "Skipping NYC Parks CSV data for ${area.areaName} from $source because parsing failed " +
+          "in ${length} chars: ${e.message}. Preview: ${preview()}"
       )
+      return null
     }
-    .toList()
+
+  if (rows.isEmpty() && !isNycCsvResponse()) {
+    System.err.println(
+      "Skipping NYC Parks CSV data for ${area.areaName} from $source because no CSV rows were " +
+        "found in ${length} chars. Preview: ${preview()}"
+    )
+    return null
+  }
+
+  return rows
+}
+
+private fun String.isNycCsvResponse(): Boolean {
+  val header = lineSequence().firstOrNull()?.lowercase(Locale.US) ?: return false
+  return "start" in header && "end" in header && "field" in header
 }
 
 private suspend fun HttpClient.fetchNycLiveRows(
