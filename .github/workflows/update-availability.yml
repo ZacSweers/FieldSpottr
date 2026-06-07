@@ -19,8 +19,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.FIELDSPOTTR_BOT_TOKEN || github.token }}
 
       - name: Install JDK
         uses: actions/setup-java@v5
@@ -91,16 +89,41 @@ jobs:
           fi
           ./gradlew :generator:run --args="$ARGS"
 
-      - name: Commit generated data
-        id: commit
+      - name: Write generated data diff
+        id: diff
         run: |
-          if [ -z "$(git status --porcelain -- areas.json availability)" ]; then
+          mkdir -p build/availability-diff
+          git status --short -- areas.json availability > build/availability-diff/status.txt
+
+          if [ ! -s build/availability-diff/status.txt ]; then
             echo "No availability changes to commit."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          git add --intent-to-add areas.json availability
+          git diff --stat -- areas.json availability > build/availability-diff/diff.stat
+          git diff --binary -- areas.json availability > build/availability-diff/availability.patch
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check bot token
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          FIELDSPOTTR_BOT_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
+        run: |
+          if [ -z "$FIELDSPOTTR_BOT_TOKEN" ]; then
+            echo "::error::FIELDSPOTTR_BOT_TOKEN is required to create availability update PRs. GITHUB_TOKEN is blocked by repository settings from creating pull requests."
+            exit 1
+          fi
+
+      - name: Commit generated data
+        id: commit
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          FIELDSPOTTR_BOT_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
+        run: |
           branch="automation/update-availability-${GITHUB_RUN_ID}"
+          git remote set-url origin "https://x-access-token:${FIELDSPOTTR_BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
@@ -114,7 +137,7 @@ jobs:
         id: pr
         if: steps.commit.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
         run: |
           pr_url="$(
             gh pr create \
@@ -128,7 +151,7 @@ jobs:
       - name: Enable auto-merge
         if: steps.pr.outputs.url != ''
         env:
-          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
         run: gh pr merge --auto --squash --delete-branch "${{ steps.pr.outputs.url }}"
 
       - name: (Fail-only) Upload generated data
@@ -142,3 +165,11 @@ jobs:
             build/hrp/**
             build/nyc-live/**
             generator/build/reports/**
+
+      - name: Upload generated data diff
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: availability-diff
+          if-no-files-found: ignore
+          path: build/availability-diff/**
