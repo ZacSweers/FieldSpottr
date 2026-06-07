@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: update-availability
@@ -18,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.FIELDSPOTTR_BOT_TOKEN || github.token }}
 
       - name: Install JDK
         uses: actions/setup-java@v5
@@ -50,16 +53,44 @@ jobs:
           ./gradlew :generator:run --args="$ARGS"
 
       - name: Commit generated data
+        id: commit
         run: |
-          if git diff --quiet -- areas.json availability; then
+          if [ -z "$(git status --porcelain -- areas.json availability)" ]; then
             echo "No availability changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          branch="automation/update-availability-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
           git add areas.json availability
           git commit -m "Update availability data"
-          git push
+          git push --set-upstream origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        id: pr
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN || github.token }}
+        run: |
+          pr_url="$(
+            gh pr create \
+              --base main \
+              --head "${{ steps.commit.outputs.branch }}" \
+              --title "Update availability data" \
+              --body "Automated availability data refresh."
+          )"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Enable auto-merge
+        if: steps.pr.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN || github.token }}
+        run: gh pr merge --auto --squash --delete-branch "${{ steps.pr.outputs.url }}"
 
       - name: (Fail-only) Upload generated data
         if: failure()
