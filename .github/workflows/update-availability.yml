@@ -2,8 +2,8 @@ name: Update availability
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 8 * * *'
+#  schedule:
+#    - cron: '17 8 * * *'
 
 permissions:
   contents: write
