@@ -191,8 +191,7 @@ private fun AvailabilityAreaFeed?.preserveRows(
   sourceIds: Set<String>,
   label: String,
 ): List<AvailabilityFeedRow> {
-  return this
-    ?.rows
+  return this?.rows
     .orEmpty()
     .filter { row -> row.sourceId in sourceIds }
     .also { preservedRows ->
