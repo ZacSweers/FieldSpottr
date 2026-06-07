@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
 
       - name: Install JDK
         uses: actions/setup-java@v5
@@ -106,24 +108,11 @@ jobs:
           git diff --binary -- areas.json availability > build/availability-diff/availability.patch
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Check bot token
-        if: steps.diff.outputs.changed == 'true'
-        env:
-          FIELDSPOTTR_BOT_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
-        run: |
-          if [ -z "$FIELDSPOTTR_BOT_TOKEN" ]; then
-            echo "::error::FIELDSPOTTR_BOT_TOKEN is required to create availability update PRs. GITHUB_TOKEN is blocked by repository settings from creating pull requests."
-            exit 1
-          fi
-
       - name: Commit generated data
         id: commit
         if: steps.diff.outputs.changed == 'true'
-        env:
-          FIELDSPOTTR_BOT_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
         run: |
           branch="automation/update-availability-${GITHUB_RUN_ID}"
-          git remote set-url origin "https://x-access-token:${FIELDSPOTTR_BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
