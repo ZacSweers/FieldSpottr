@@ -14,6 +14,7 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import java.nio.file.Files
 import java.nio.file.Path
@@ -30,7 +31,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 private const val NYC_LIVE_URL = "https://www.nycgovparks.org/api/athletic-fields"
@@ -101,6 +102,7 @@ private data class Options(
   val liveDays: Long,
   val hrpSourceFile: Path?,
   val bbpSourceFile: Path,
+  val nycLiveSourceDir: Path?,
 )
 
 private fun Array<String>.options(): Options {
@@ -109,6 +111,7 @@ private fun Array<String>.options(): Options {
     liveDays = longOption("live-days") ?: defaultLiveDays,
     hrpSourceFile = stringOption("hrp-source-file")?.let(Path::of),
     bbpSourceFile = stringOption("bbp-source-file")?.let(Path::of) ?: defaultBbpSourceFile,
+    nycLiveSourceDir = stringOption("nyc-live-source-dir")?.let(Path::of),
   )
 }
 
@@ -143,6 +146,7 @@ private suspend fun generateFeed(
   existingFeed: AvailabilityAreaFeed?,
 ): AvailabilityAreaFeed {
   val hrpRows = client.fetchHrpRows(area, options.hrpSourceFile)
+
   val preservedHrpRows =
     if (area.areaName == "West Side Highway" && hrpRows == null) {
       existingFeed?.rows.orEmpty().also {
@@ -153,13 +157,33 @@ private suspend fun generateFeed(
     } else {
       emptyList()
     }
-  val rows =
-    (area.csvUrl?.let { csvUrl -> client.fetchNycCsv(csvUrl).toAvailabilityRows(area) }.orEmpty() +
-        client.fetchBbpRows(area, options.bbpSourceFile) +
-        (hrpRows ?: preservedHrpRows) +
-        client.fetchNycLiveRows(area, today, liveDays))
-      .mergeAdjacentRows()
-      .sortedWith(feedRowComparator)
+
+  val liveResult = client.fetchNycLiveRows(area, today, liveDays, options.nycLiveSourceDir)
+  val preservedLiveRows =
+    if (liveResult.failedSourceIds.isNotEmpty()) {
+      existingFeed
+        ?.rows
+        .orEmpty()
+        .filter { row -> row.sourceId in liveResult.failedSourceIds }
+        .also { preservedRows ->
+          if (preservedRows.isNotEmpty()) {
+            System.err.println(
+              "Preserving previous NYC live rows for ${liveResult.failedSourceIds.sorted()}"
+            )
+          }
+        }
+    } else {
+      emptyList()
+    }
+
+  val sourceRows = buildList {
+    area.csvUrl?.let { csvUrl -> addAll(client.fetchNycCsv(csvUrl).toAvailabilityRows(area)) }
+    addAll(client.fetchBbpRows(area, options.bbpSourceFile))
+    addAll(hrpRows ?: preservedHrpRows)
+    addAll(liveResult.rows)
+    addAll(preservedLiveRows)
+  }
+  val rows = sourceRows.mergeAdjacentRows().sortedWith(feedRowComparator)
   return AvailabilityAreaFeed(areaName = area.areaName, generatedAt = generatedAt, rows = rows)
 }
 
@@ -208,35 +232,111 @@ private suspend fun HttpClient.fetchNycLiveRows(
   area: Area,
   today: LocalDate,
   liveDays: Long,
-): List<AvailabilityFeedRow> {
-  if (liveDays <= 0) return emptyList()
+  sourceDir: Path?,
+): NycLiveFetchResult {
+  if (liveDays <= 0) return NycLiveFetchResult()
 
   val windowEndExclusive = today.plusDays(liveDays)
   val rows = mutableListOf<AvailabilityFeedRow>()
+  val failedSourceIds = mutableSetOf<String>()
   for (group in area.fieldGroups) {
     for (field in group.fields) {
       val apiLocationId = field.apiLocationId ?: continue
+      val sourceId = "nyc-parks-live:$apiLocationId"
+      val fieldRows = mutableListOf<AvailabilityFeedRow>()
+      var fieldFailed = false
       var date = today
       while (date < windowEndExclusive) {
         val response =
           try {
-            get("$NYC_LIVE_URL?location=$apiLocationId&date=$date") {
-                header(HttpHeaders.UserAgent, NYC_PARKS_USER_AGENT)
-                header(HttpHeaders.Accept, "application/json")
-              }
-              .body<String>()
+            getNycLiveResponse(sourceDir, apiLocationId, date)
           } catch (e: Exception) {
             System.err.println("Failed to fetch NYC live data for $apiLocationId on $date: $e")
+            fieldFailed = true
             date = date.plusDays(7)
             continue
           }
-        rows += response.toNycLiveRows(area, group.name, field, today, windowEndExclusive)
+
+        val liveRows =
+          response.body.toNycLiveRowsOrNull(
+            area = area,
+            groupName = group.name,
+            field = field,
+            startDateInclusive = today,
+            endDateExclusive = windowEndExclusive,
+            source = response.source,
+          )
+
         date = date.plusDays(7)
+
+        if (liveRows == null) {
+          fieldFailed = true
+          continue
+        }
+
+        fieldRows += liveRows
       }
+
+      if (fieldFailed) {
+        failedSourceIds += sourceId
+        continue
+      }
+
+      rows += fieldRows
     }
   }
-  return rows
+  return NycLiveFetchResult(rows, failedSourceIds)
 }
+
+private suspend fun HttpClient.getNycLiveResponse(
+  sourceDir: Path?,
+  apiLocationId: String,
+  date: LocalDate,
+): NycLiveResponseBody {
+  return tryGetNycLiveSourceFile(sourceDir, apiLocationId, date)
+    ?: fetchNycLiveResponse(apiLocationId, date)
+}
+
+private suspend fun HttpClient.fetchNycLiveResponse(
+  apiLocationId: String,
+  date: LocalDate,
+): NycLiveResponseBody {
+  val url = "$NYC_LIVE_URL?location=$apiLocationId&date=$date"
+  val response =
+    get(url) {
+      header(HttpHeaders.UserAgent, NYC_PARKS_USER_AGENT)
+      header(HttpHeaders.Accept, "application/json")
+    }
+  val contentType = response.headers[HttpHeaders.ContentType] ?: "unknown content type"
+  return NycLiveResponseBody(
+    body = response.bodyAsText(),
+    source = "$url (${response.status.value} ${response.status.description}, $contentType)",
+  )
+}
+
+private fun tryGetNycLiveSourceFile(
+  sourceDir: Path?,
+  apiLocationId: String,
+  date: LocalDate,
+): NycLiveResponseBody? {
+  if (sourceDir == null) return null
+
+  val path = sourceDir.resolve(apiLocationId).resolve("$date.json")
+  if (!Files.exists(path)) return null
+
+  val body = Files.readString(path)
+  return NycLiveResponseBody(body = body, source = "$path (${body.length} chars)")
+}
+
+private data class NycLiveResponseBody(
+  val body: String,
+  val source: String,
+)
+
+private data class NycLiveFetchResult(
+  val rows: List<AvailabilityFeedRow> = emptyList(),
+  val failedSourceIds: Set<String> = emptySet(),
+)
 
 internal fun String.toNycLiveRows(
   area: Area,
@@ -245,7 +345,45 @@ internal fun String.toNycLiveRows(
   startDateInclusive: LocalDate,
   endDateExclusive: LocalDate,
 ): List<AvailabilityFeedRow> {
-  val response = json.decodeFromString<LivePermitResponse>(this)
+  return toNycLiveRowsOrNull(
+    area = area,
+    groupName = groupName,
+    field = field,
+    startDateInclusive = startDateInclusive,
+    endDateExclusive = endDateExclusive,
+    source = "inline response",
+  )
+    ?: emptyList()
+}
+
+private fun String.toNycLiveRowsOrNull(
+  area: Area,
+  groupName: String,
+  field: Field,
+  startDateInclusive: LocalDate,
+  endDateExclusive: LocalDate,
+  source: String,
+): List<AvailabilityFeedRow>? {
+  val jsonPayload =
+    jsonPayloadOrNull()
+      ?: run {
+        System.err.println(
+          "Skipping NYC live data for ${field.apiLocationId} from $source because no JSON object " +
+            "was found in ${length} chars. Preview: ${preview()}"
+        )
+        return null
+      }
+
+  val response =
+    try {
+      json.decodeFromString<LivePermitResponse>(jsonPayload)
+    } catch (e: SerializationException) {
+      System.err.println(
+        "Skipping NYC live data for ${field.apiLocationId} from $source because JSON decoding " +
+          "failed in ${length} chars: ${e.message}. Preview: ${preview()}"
+      )
+      return null
+    }
   return response.availability.mapNotNull { (epochSecondsString, slot) ->
     val epochSeconds = epochSecondsString.toLongOrNull() ?: return@mapNotNull null
     val start = Instant.ofEpochSecond(epochSeconds).atZone(nyZone)
@@ -285,6 +423,43 @@ internal fun String.toNycLiveRows(
       }
     }
   }
+}
+
+private fun String.jsonPayloadOrNull(): String? {
+  val trimmed = trimStart('\uFEFF').trim()
+  if (trimmed.startsWith("{")) return trimmed
+
+  val preText =
+    Regex("""(?is)<pre[^>]*>(.*?)</pre>""")
+      .find(this)
+      ?.groupValues
+      ?.get(1)
+      ?.decodeBasicHtmlEntities()
+      ?.trim()
+  if (preText?.startsWith("{") == true) return preText
+
+  val firstBrace = indexOf('{')
+  val lastBrace = lastIndexOf('}')
+  if (firstBrace != -1 && lastBrace > firstBrace) {
+    return substring(firstBrace, lastBrace + 1).decodeBasicHtmlEntities()
+  }
+
+  return null
+}
+
+private fun String.decodeBasicHtmlEntities(): String {
+  return replace("&quot;", "\"")
+    .replace("&#34;", "\"")
+    .replace("&#x22;", "\"")
+    .replace("&#39;", "'")
+    .replace("&apos;", "'")
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+    .replace("&amp;", "&")
+}
+
+private fun String.preview(): String {
+  return lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(120).orEmpty()
 }
 
 private fun LivePermitSlot.toLiveBlock(): LiveBlock? {

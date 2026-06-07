@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.generator
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
@@ -78,6 +79,69 @@ class GeneratorTest {
     assertThat(rows[1].advisoryText).isEqualTo("2 pending permits")
     assertThat(rows[2].title).isEqualTo("Overlapping field permit")
     assertThat(rows[2].isOverlap).isEqualTo(true)
+  }
+
+  @Test
+  fun `nyc live parser ignores html block pages`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
+    val response =
+      """
+      <!doctype html>
+      <html>
+        <title>Attention Required</title>
+      </html>
+      """
+        .trimIndent()
+
+    val rows =
+      response.toNycLiveRows(
+        area = area,
+        groupName = "Baruch",
+        field = field,
+        startDateInclusive = java.time.LocalDate.of(2026, 6, 5),
+        endDateExclusive = java.time.LocalDate.of(2026, 6, 6),
+      )
+
+    assertThat(rows).isEmpty()
+  }
+
+  @Test
+  fun `nyc live parser reads chrome dumped json pages`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
+    val response =
+      """
+      <html>
+        <head><meta name="color-scheme" content="light dark"></head>
+        <body>
+          <pre style="word-wrap: break-word; white-space: pre-wrap;">
+          {
+            "availability": {
+              "${nyEpochSecond("2026-06-05T18:00")}": {
+                "is_issued": false,
+                "permit_holder": "Pending Org",
+                "num_pending_permits": 0
+              }
+            }
+          }
+          </pre>
+        </body>
+      </html>
+      """
+        .trimIndent()
+
+    val rows =
+      response.toNycLiveRows(
+        area = area,
+        groupName = "Baruch",
+        field = field,
+        startDateInclusive = java.time.LocalDate.of(2026, 6, 5),
+        endDateExclusive = java.time.LocalDate.of(2026, 6, 6),
+      )
+
+    assertThat(rows).hasSize(1)
+    assertThat(rows.single().title).isEqualTo("Pending final approval")
   }
 
   @Test
