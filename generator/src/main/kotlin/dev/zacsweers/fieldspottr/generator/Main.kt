@@ -352,8 +352,7 @@ internal fun String.toNycLiveRows(
     startDateInclusive = startDateInclusive,
     endDateExclusive = endDateExclusive,
     source = "inline response",
-  )
-    ?: emptyList()
+  ) ?: emptyList()
 }
 
 private fun String.toNycLiveRowsOrNull(
