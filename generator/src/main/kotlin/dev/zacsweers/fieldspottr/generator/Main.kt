@@ -28,9 +28,9 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlinx.coroutines.runBlocking
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableSet
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -186,7 +186,11 @@ private suspend fun generateFeed(
     addAll(liveResult.rows)
     addAll(preservedLiveRows)
   }
-  return AvailabilityAreaFeed(areaName = area.areaName, generatedAt = generatedAt, rows = sourceRows)
+  return AvailabilityAreaFeed(
+      areaName = area.areaName,
+      generatedAt = generatedAt,
+      rows = sourceRows,
+    )
     .canonical()
 }
 
