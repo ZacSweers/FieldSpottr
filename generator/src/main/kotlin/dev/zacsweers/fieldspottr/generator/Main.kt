@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.AvailabilityManifest
 import dev.zacsweers.fieldspottr.data.AvailabilityManifestArea
 import dev.zacsweers.fieldspottr.data.Field
+import dev.zacsweers.fieldspottr.data.FieldGroup
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -28,6 +29,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.runBlocking
+import kotlinx.collections.immutable.toImmutableList
+import kotlinx.collections.immutable.toImmutableSet
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -58,7 +61,7 @@ fun main(args: Array<String>) = runBlocking {
   val options = args.options()
   Files.createDirectories(options.outputRoot)
 
-  val areas = Areas.default
+  val areas = Areas.default.canonical()
   options.outputRoot.resolve("areas.json").writeJson(areas)
 
   val generatedAt: Long? = null
@@ -183,8 +186,8 @@ private suspend fun generateFeed(
     addAll(liveResult.rows)
     addAll(preservedLiveRows)
   }
-  val rows = sourceRows.mergeAdjacentRows().sortedWith(feedRowComparator)
-  return AvailabilityAreaFeed(areaName = area.areaName, generatedAt = generatedAt, rows = rows)
+  return AvailabilityAreaFeed(areaName = area.areaName, generatedAt = generatedAt, rows = sourceRows)
+    .canonical()
 }
 
 private fun AvailabilityAreaFeed?.preserveRows(
@@ -992,15 +995,35 @@ private val feedRowComparator =
     .thenBy { it.start }
     .thenBy { it.end }
     .thenBy { it.kind }
+    .thenBy { it.sourceId.orEmpty() }
     .thenBy { it.title }
     .thenBy { it.org }
     .thenBy { it.status }
-    .thenBy { it.sourceId.orEmpty() }
     .thenBy { it.isOverlap }
     .thenBy { it.advisoryText.orEmpty() }
 
 internal fun AvailabilityAreaFeed.contentHash(): String {
-  return json.encodeToString(copy(generatedAt = null)).sha256()
+  return json.encodeToString(canonical().copy(generatedAt = null)).sha256()
+}
+
+private fun Areas.canonical(): Areas {
+  return copy(entries = entries.map(Area::canonical).toImmutableList())
+}
+
+private fun Area.canonical(): Area {
+  return copy(fieldGroups = fieldGroups.map(FieldGroup::canonical).toImmutableList())
+}
+
+private fun FieldGroup.canonical(): FieldGroup {
+  return copy(fields = fields.map(Field::canonical).toImmutableList())
+}
+
+private fun Field.canonical(): Field {
+  return copy(sharedFields = sharedFields.sorted().toImmutableSet())
+}
+
+private fun AvailabilityAreaFeed.canonical(): AvailabilityAreaFeed {
+  return copy(rows = rows.mergeAdjacentRows().sortedWith(feedRowComparator))
 }
 
 private fun Path.decodeFeedOrNull(): AvailabilityAreaFeed? {

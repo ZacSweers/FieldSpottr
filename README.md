@@ -17,12 +17,20 @@ and scraping belongs in the generator, not in app runtime code.
   `availability/areas/<area-id>.json`.
 - `:shared` downloads those repo-hosted files and imports each parsed area feed into SQLDelight.
 
-Run the generator with:
+For normal local updates, run:
+
+    scripts/update-availability.sh
+
+This dumps the Hudson River Park page and NYC Parks live API responses through local headless
+Chrome, then runs the generator with those dumped sources. The scheduled GitHub Actions refresh is
+disabled for now because NYC Parks/Cloudflare frequently blocks GitHub-hosted runner traffic, which
+can otherwise produce misleading generated diffs.
+
+Run the generator directly with:
 
     ./gradlew :generator:run --args=--output=.
 
-Use `--live-days=<days>` to adjust the NYC Parks live availability window. GitHub Actions runs the
-same Gradle task daily and commits changed generated JSON.
+Use `--live-days=<days>` to adjust the NYC Parks live availability window.
 
 Hudson River Park / West Side Highway schedules can be supplied from a browser-dumped page source:
 
