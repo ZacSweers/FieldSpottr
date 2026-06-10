@@ -205,8 +205,7 @@ fun PermitGrid(
                 "$adjustedTime $amPm",
                 textAlign = TextAlign.Center,
                 fontWeight = FontWeight.Bold,
-                color =
-                  if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
+                color = if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
               )

@@ -306,7 +306,10 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
               )
             },
             label = {
-              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = spacedBy(4.dp)) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = spacedBy(4.dp),
+              ) {
                 Text(window.label(state.isToday))
                 if (isRainy) {
                   WeatherGlyph(
@@ -579,11 +582,9 @@ internal fun computeAvailability(
               )
             if ((startHour until endHour).all { it in blockedHours }) {
               val reason =
-                blockedPermits
-                  .firstOrNull()
-                  ?.name
-                  ?.removePrefix("Closure: ")
-                  ?.takeIf { it.isNotBlank() } ?: "Closed"
+                blockedPermits.firstOrNull()?.name?.removePrefix("Closure: ")?.takeIf {
+                  it.isNotBlank()
+                } ?: "Closed"
               closed.add(
                 FieldAvailability(
                   group = group,

@@ -262,8 +262,7 @@ internal data class OpenMeteoDaily(
   @SerialName("weather_code") val weatherCode: List<Int?> = emptyList(),
   @SerialName("temperature_2m_max") val temperatureMax: List<Double?> = emptyList(),
   @SerialName("temperature_2m_min") val temperatureMin: List<Double?> = emptyList(),
-  @SerialName("precipitation_probability_max")
-  val precipProbabilityMax: List<Int?> = emptyList(),
+  @SerialName("precipitation_probability_max") val precipProbabilityMax: List<Int?> = emptyList(),
 )
 
 @Serializable
@@ -274,12 +273,11 @@ internal data class OpenMeteoHourly(
 )
 
 internal fun OpenMeteoResponse.toWeatherForecast(): WeatherForecast {
-  val currentWeather =
-    current?.let { c ->
-      val temp = c.temperature ?: return@let null
-      val code = c.weatherCode ?: return@let null
-      CurrentWeather(tempF = temp.roundToInt(), condition = WeatherCondition.fromWmoCode(code))
-    }
+  val currentWeather = current?.let { c ->
+    val temp = c.temperature ?: return@let null
+    val code = c.weatherCode ?: return@let null
+    CurrentWeather(tempF = temp.roundToInt(), condition = WeatherCondition.fromWmoCode(code))
+  }
 
   val dailyForecasts =
     daily?.time.orEmpty().mapIndexedNotNull { i, dateString ->

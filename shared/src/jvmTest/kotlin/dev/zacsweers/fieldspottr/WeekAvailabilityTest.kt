@@ -58,10 +58,34 @@ class WeekAvailabilityTest {
   fun `all fields booked marks hours as booked`() {
     val permits =
       listOf(
-        permit(recordId = 1, date = startDate, fieldId = "Softball-01", startHour = 18, endHour = 20),
-        permit(recordId = 2, date = startDate, fieldId = "Football-01", startHour = 18, endHour = 20),
-        permit(recordId = 3, date = startDate, fieldId = "Football-02", startHour = 18, endHour = 20),
-        permit(recordId = 4, date = startDate, fieldId = "Softball-02", startHour = 18, endHour = 20),
+        permit(
+          recordId = 1,
+          date = startDate,
+          fieldId = "Softball-01",
+          startHour = 18,
+          endHour = 20,
+        ),
+        permit(
+          recordId = 2,
+          date = startDate,
+          fieldId = "Football-01",
+          startHour = 18,
+          endHour = 20,
+        ),
+        permit(
+          recordId = 3,
+          date = startDate,
+          fieldId = "Football-02",
+          startHour = 18,
+          endHour = 20,
+        ),
+        permit(
+          recordId = 4,
+          date = startDate,
+          fieldId = "Softball-02",
+          startHour = 18,
+          endHour = 20,
+        ),
       )
 
     val week = computeWeekAvailability(permits, Areas.default, "Baruch", startDate)

@@ -677,15 +677,15 @@ internal fun String.toParkClosures(): List<ParkClosure> {
   val records =
     when (element) {
       is JsonArray -> element
-      is JsonObject -> element.values.filterIsInstance<JsonArray>().firstOrNull() ?: return emptyList()
+      is JsonObject ->
+        element.values.filterIsInstance<JsonArray>().firstOrNull() ?: return emptyList()
       else -> return emptyList()
     }
   return records.mapNotNull { record -> (record as? JsonObject)?.toParkClosureOrNull() }
 }
 
 private fun JsonObject.toParkClosureOrNull(): ParkClosure? {
-  val parkId =
-    closureString("propid", "prop_id", "parkid", "park_id", "propertyid") ?: return null
+  val parkId = closureString("propid", "prop_id", "parkid", "park_id", "propertyid") ?: return null
   val reason =
     closureString(
       "closure_desc",

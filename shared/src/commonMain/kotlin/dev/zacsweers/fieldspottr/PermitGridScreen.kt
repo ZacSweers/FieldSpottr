@@ -304,8 +304,7 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
         // Rain callout for the selected date, when relevant
         val rainCallout =
           remember(state.weather, state.date) {
-            val today =
-              System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
+            val today = System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
             val fromHour = if (state.date == today) currentNyHour() else 6
             state.weather?.nextRainyHour(state.date, fromHour)?.let { hourly ->
               "Rain ~${formatHour12(hourly.hour)}"
@@ -409,7 +408,7 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
         targetState = state.viewMode,
         transitionSpec = {
           (fadeIn(tween(220, delayMillis = 60)) +
-            scaleIn(initialScale = 0.97f, animationSpec = tween(220, delayMillis = 60)))
+              scaleIn(initialScale = 0.97f, animationSpec = tween(220, delayMillis = 60)))
             .togetherWith(fadeOut(tween(90)))
         },
         modifier = Modifier.weight(1f),
@@ -427,8 +426,8 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
                 if (from != null && to != null && from != to) {
                   val forward = to > from
                   (slideInHorizontally(tween(250)) { full ->
-                    if (forward) full / 6 else -full / 6
-                  } + fadeIn(tween(250)))
+                      if (forward) full / 6 else -full / 6
+                    } + fadeIn(tween(250)))
                     .togetherWith(
                       slideOutHorizontally(tween(200)) { full ->
                         if (forward) -full / 6 else full / 6

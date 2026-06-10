@@ -74,9 +74,7 @@ fun DateSelector(
     scope.launch {
       // Lightweight 7-day picker first; "More" escapes to the full system picker.
       val quick =
-        overlayHost.show(
-          QuickDatePickerOverlay(currentlySelectedDate, today, weather, sharedKey)
-        )
+        overlayHost.show(QuickDatePickerOverlay(currentlySelectedDate, today, weather, sharedKey))
       when {
         quick.showFullPicker -> {
           val result =
