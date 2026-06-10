@@ -36,8 +36,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 private const val NYC_LIVE_URL = "https://www.nycgovparks.org/api/athletic-fields"
+private const val NYC_CLOSURES_URL = "https://www.nycgovparks.org/bigapps/DPR_ParksClosure_001.json"
 private const val HRP_FIELDS_URL = "https://hudsonriverpark.org/visit/events/permits/fields/"
 private const val NYC_PARKS_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
@@ -47,7 +52,9 @@ private val defaultBbpSourceFile = Path.of("data/bbp/pier5-summer-2026.json")
 
 private val nyZone = ZoneId.of("America/New_York")
 private val csvFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm a", Locale.US)
+private val usDateFormatter = DateTimeFormatter.ofPattern("M/d/yyyy", Locale.US)
 private val defaultLiveDays = 7L
+private val defaultClosuresDays = 30L
 
 @OptIn(ExperimentalSerializationApi::class)
 private val json = Json {
@@ -72,13 +79,24 @@ fun main(args: Array<String>) = runBlocking {
     val feedsRoot = options.outputRoot.resolve("availability").resolve("areas")
     Files.createDirectories(feedsRoot)
 
+    val closures = client.fetchParkClosures(options)
+
     areas.entries.sortedBy(Area::areaName).forEach { area ->
       val areaId = area.areaName.slug()
       val relativePath = "availability/areas/$areaId.json"
       val feedPath = options.outputRoot.resolve(relativePath)
       val existingFeed = feedPath.decodeFeedOrNull()
       val feed =
-        generateFeed(client, area, today, options.liveDays, generatedAt, options, existingFeed)
+        generateFeed(
+          client,
+          area,
+          today,
+          options.liveDays,
+          generatedAt,
+          options,
+          existingFeed,
+          closures,
+        )
       val feedJson = json.encodeToString(feed)
       Files.writeString(feedPath, feedJson)
       manifestAreas +=
@@ -106,6 +124,8 @@ private data class Options(
   val hrpSourceFile: Path?,
   val bbpSourceFile: Path,
   val nycLiveSourceDir: Path?,
+  val closuresSourceFile: Path?,
+  val closuresDays: Long,
 )
 
 private fun Array<String>.options(): Options {
@@ -115,6 +135,8 @@ private fun Array<String>.options(): Options {
     hrpSourceFile = stringOption("hrp-source-file")?.let(Path::of),
     bbpSourceFile = stringOption("bbp-source-file")?.let(Path::of) ?: defaultBbpSourceFile,
     nycLiveSourceDir = stringOption("nyc-live-source-dir")?.let(Path::of),
+    closuresSourceFile = stringOption("closures-source-file")?.let(Path::of),
+    closuresDays = longOption("closures-days") ?: defaultClosuresDays,
   )
 }
 
@@ -147,6 +169,7 @@ private suspend fun generateFeed(
   generatedAt: Long?,
   options: Options,
   existingFeed: AvailabilityAreaFeed?,
+  closures: List<ParkClosure> = emptyList(),
 ): AvailabilityAreaFeed {
   val hrpRows = client.fetchHrpRows(area, options.hrpSourceFile)
 
@@ -185,6 +208,7 @@ private suspend fun generateFeed(
     addAll(hrpRows ?: preservedHrpRows)
     addAll(liveResult.rows)
     addAll(preservedLiveRows)
+    addAll(generateClosureRows(area, closures, today, options.closuresDays))
   }
   return AvailabilityAreaFeed(
       areaName = area.areaName,
@@ -603,6 +627,207 @@ private data class LivePermitSlot(
   @SerialName("permit_number") val permitNumber: Long? = null,
   @SerialName("permit_type") val permitType: String? = null,
 )
+
+// region NYC Parks closures
+//
+// Source: the NYC Parks "Parks Closure" open dataset. The schema is parsed defensively (key
+// aliases, tolerant date parsing) and fails open to an empty list, so a schema change can never
+// break feed generation - it just drops closure rows.
+
+internal data class ParkClosure(
+  val parkId: String,
+  val reason: String,
+  /** Full searchable text (reason + location) for field matching. */
+  val matchText: String,
+  val startDate: LocalDate?,
+  val endDate: LocalDate?,
+)
+
+private suspend fun HttpClient.fetchParkClosures(options: Options): List<ParkClosure> {
+  if (options.closuresDays <= 0) return emptyList()
+  val sourceFile = options.closuresSourceFile
+  val body =
+    if (sourceFile != null && Files.exists(sourceFile)) {
+      Files.readString(sourceFile)
+    } else {
+      try {
+        get(NYC_CLOSURES_URL) {
+            header(HttpHeaders.UserAgent, BROWSER_LIKE_USER_AGENT)
+            header(HttpHeaders.Accept, "application/json")
+          }
+          .bodyAsText()
+      } catch (e: Exception) {
+        System.err.println("Failed to fetch NYC Parks closures: $e")
+        return emptyList()
+      }
+    }
+  return body.toParkClosures().also {
+    System.err.println("Parsed ${it.size} field-related park closures")
+  }
+}
+
+internal fun String.toParkClosures(): List<ParkClosure> {
+  val element =
+    try {
+      json.parseToJsonElement(this)
+    } catch (e: Exception) {
+      System.err.println("Failed to parse NYC Parks closures JSON: ${e.message}")
+      return emptyList()
+    }
+  val records =
+    when (element) {
+      is JsonArray -> element
+      is JsonObject -> element.values.filterIsInstance<JsonArray>().firstOrNull() ?: return emptyList()
+      else -> return emptyList()
+    }
+  return records.mapNotNull { record -> (record as? JsonObject)?.toParkClosureOrNull() }
+}
+
+private fun JsonObject.toParkClosureOrNull(): ParkClosure? {
+  val parkId =
+    closureString("propid", "prop_id", "parkid", "park_id", "propertyid") ?: return null
+  val reason =
+    closureString(
+      "closure_desc",
+      "closuredesc",
+      "description",
+      "details",
+      "reason",
+      "closure_reason",
+      "closure_notes",
+      "name_of_closure",
+    )
+  val location = closureString("location", "facility", "site", "specific_location")
+  if (reason == null && location == null) return null
+  val matchText = listOfNotNull(reason, location).joinToString(" - ")
+  if (!matchText.isFieldRelated()) return null
+  return ParkClosure(
+    parkId = parkId.trim().uppercase(Locale.US),
+    reason = (reason ?: location ?: "Closed").trim(),
+    matchText = matchText,
+    startDate = closureDate("date_closed", "start_date", "startdate", "closure_start_date"),
+    endDate =
+      closureDate(
+        "expected_completion",
+        "expected_completion_date",
+        "end_date",
+        "enddate",
+        "anticipated_end_date",
+      ),
+  )
+}
+
+private fun JsonObject.closureString(vararg keys: String): String? {
+  for (key in keys) {
+    val value = entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value ?: continue
+    val content = (value as? JsonPrimitive)?.contentOrNull?.trim()
+    if (!content.isNullOrEmpty()) return content
+  }
+  return null
+}
+
+private fun JsonObject.closureDate(vararg keys: String): LocalDate? {
+  val raw = closureString(*keys) ?: return null
+  return raw.toClosureDateOrNull()
+}
+
+internal fun String.toClosureDateOrNull(): LocalDate? {
+  val token = trim().substringBefore(' ').substringBefore('T')
+  return try {
+    LocalDate.parse(token.take(10))
+  } catch (_: Exception) {
+    try {
+      LocalDate.parse(token, usDateFormatter)
+    } catch (_: Exception) {
+      null
+    }
+  }
+}
+
+private val FIELD_CLOSURE_KEYWORDS =
+  listOf(
+    "soccer",
+    "softball",
+    "baseball",
+    "ballfield",
+    "ball field",
+    "athletic field",
+    "turf field",
+    "futsal",
+    "playing field",
+    "sports field",
+    "football field",
+  )
+
+private fun String.isFieldRelated(): Boolean {
+  val lower = lowercase(Locale.US)
+  return FIELD_CLOSURE_KEYWORDS.any { it in lower }
+}
+
+private fun Area.parkId(): String? {
+  return csvUrl?.let { Regex("/issued/([A-Z]\\d+)/csv").find(it)?.groupValues?.get(1) }
+}
+
+/**
+ * Returns true if [field] is plausibly affected by a closure described by [matchText]. If the text
+ * names a specific sport, only fields of that shape are blocked; otherwise the whole park's fields
+ * are.
+ */
+internal fun closureAppliesTo(field: Field, matchText: String): Boolean {
+  val lower = matchText.lowercase(Locale.US)
+  val diamondHit = "softball" in lower || "baseball" in lower
+  val rectangleHit = "soccer" in lower || "football" in lower || "futsal" in lower
+  if (!diamondHit && !rectangleHit) return true
+  if (diamondHit && rectangleHit) return true
+  val fieldText = "${field.name} ${field.displayName}".lowercase(Locale.US)
+  val fieldIsDiamond = "softball" in fieldText || "baseball" in fieldText
+  return if (diamondHit) fieldIsDiamond else !fieldIsDiamond
+}
+
+internal fun generateClosureRows(
+  area: Area,
+  closures: List<ParkClosure>,
+  today: LocalDate,
+  horizonDays: Long,
+): List<AvailabilityFeedRow> {
+  if (closures.isEmpty() || horizonDays <= 0) return emptyList()
+  val parkId = area.parkId() ?: return emptyList()
+  val matching = closures.filter { it.parkId == parkId }
+  if (matching.isEmpty()) return emptyList()
+
+  val horizonEnd = today.plusDays(horizonDays)
+  val rows = mutableListOf<AvailabilityFeedRow>()
+  for (closure in matching) {
+    val start = maxOf(closure.startDate ?: today, today)
+    val end = minOf(closure.endDate ?: horizonEnd, horizonEnd)
+    if (end < start) continue
+    for (group in area.fieldGroups) {
+      for (field in group.fields) {
+        if (!closureAppliesTo(field, closure.matchText)) continue
+        var date = start
+        while (!date.isAfter(end)) {
+          rows +=
+            AvailabilityFeedRow(
+              areaName = area.areaName,
+              groupName = group.name,
+              fieldId = field.name,
+              start = date.atStartOfDay(nyZone).toInstant().toEpochMilli(),
+              end = date.plusDays(1).atStartOfDay(nyZone).toInstant().toEpochMilli(),
+              title = "Closure: ${closure.reason}".take(120),
+              org = "",
+              status = "Closed",
+              kind = "closure",
+              sourceId = "nyc-parks-closures:$parkId",
+            )
+          date = date.plusDays(1)
+        }
+      }
+    }
+  }
+  return rows
+}
+
+// endregion
 
 private suspend fun HttpClient.fetchBbpRows(
   area: Area,

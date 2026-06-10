@@ -270,6 +270,101 @@ class GeneratorTest {
     assertThat(rows[0].title).isEqualTo("Busy (Active permits)")
     assertThat(rows[0].kind).isEqualTo("HRP active permits")
   }
+
+  @Test
+  fun `closures parser tolerates key aliases and skips non-field closures`() {
+    val payload =
+      """
+      [
+        {"propid": "M017", "closure_desc": "Soccer field closed for resodding", "date_closed": "2026-06-01", "expected_completion": "2026-06-20"},
+        {"PropID": "m165", "description": "Ballfield renovation", "start_date": "06/01/2026"},
+        {"propid": "M015", "closure_desc": "Comfort station repairs"},
+        {"unrelated": "value"}
+      ]
+      """
+        .trimIndent()
+
+    val closures = payload.toParkClosures()
+
+    assertThat(closures).hasSize(2)
+    val corlears = closures.single { it.parkId == "M017" }
+    assertThat(corlears.startDate).isEqualTo(java.time.LocalDate.of(2026, 6, 1))
+    assertThat(corlears.endDate).isEqualTo(java.time.LocalDate.of(2026, 6, 20))
+    val baruch = closures.single { it.parkId == "M165" }
+    assertThat(baruch.startDate).isEqualTo(java.time.LocalDate.of(2026, 6, 1))
+    assertThat(baruch.endDate).isEqualTo(null)
+  }
+
+  @Test
+  fun `closures parser fails open on malformed payloads`() {
+    assertThat("not json".toParkClosures()).isEmpty()
+    assertThat("{}".toParkClosures()).isEmpty()
+    assertThat("[]".toParkClosures()).isEmpty()
+  }
+
+  @Test
+  fun `closure rows are emitted per day and clamped to the horizon`() {
+    val area = Areas.default.entries.single { it.areaName == "Corlears Hook" }
+    val today = java.time.LocalDate.of(2026, 6, 10)
+    val closures =
+      listOf(
+        ParkClosure(
+          parkId = "M017",
+          reason = "Athletic field closed for resodding",
+          matchText = "Athletic field closed for resodding",
+          startDate = java.time.LocalDate.of(2026, 6, 1),
+          endDate = null,
+        )
+      )
+
+    val rows = generateClosureRows(area, closures, today, horizonDays = 3)
+
+    // 2 fields x 4 days (today through today+3)
+    assertThat(rows).hasSize(8)
+    assertThat(rows.all { it.kind == "closure" && it.status == "Closed" }).isEqualTo(true)
+    assertThat(rows.all { it.title == "Closure: Athletic field closed for resodding" })
+      .isEqualTo(true)
+    assertThat(rows.minOf { it.start }).isEqualTo(nyMillis("2026-06-10T00:00"))
+    assertThat(rows.maxOf { it.end }).isEqualTo(nyMillis("2026-06-14T00:00"))
+  }
+
+  @Test
+  fun `sport-specific closures only block matching fields`() {
+    val area = Areas.default.entries.single { it.areaName == "Corlears Hook" }
+    val today = java.time.LocalDate.of(2026, 6, 10)
+    val closures =
+      listOf(
+        ParkClosure(
+          parkId = "M017",
+          reason = "Softball field closed",
+          matchText = "Softball field closed",
+          startDate = null,
+          endDate = java.time.LocalDate.of(2026, 6, 10),
+        )
+      )
+
+    val rows = generateClosureRows(area, closures, today, horizonDays = 30)
+
+    assertThat(rows.map { it.fieldId }.distinct()).containsExactly("Softball-01")
+  }
+
+  @Test
+  fun `closures ignore areas without a park id`() {
+    val area = Areas.default.entries.single { it.areaName == "West Side Highway" }
+    val closures =
+      listOf(
+        ParkClosure(
+          parkId = "M017",
+          reason = "Soccer field closed",
+          matchText = "Soccer field closed",
+          startDate = null,
+          endDate = null,
+        )
+      )
+
+    assertThat(generateClosureRows(area, closures, java.time.LocalDate.of(2026, 6, 10), 30))
+      .isEmpty()
+  }
 }
 
 private val hrpFixture =
