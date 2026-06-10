@@ -33,9 +33,8 @@ import com.slack.circuit.overlay.LocalOverlayHost
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Overlay
 import com.slack.circuit.sharedelements.SharedTransitionKey
+import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
-import dev.zacsweers.fieldspottr.util.CurrentPlatform
-import dev.zacsweers.fieldspottr.util.Platform
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -56,6 +55,7 @@ fun DateSelector(
   id: String = "default",
   contentScale: Float = 1f,
   permitDateRange: Pair<LocalDate, LocalDate>? = null,
+  weather: WeatherForecast? = null,
   onDateSelected: (LocalDate) -> Unit,
 ) = SharedElementTransitionScope {
   val overlayHost = LocalOverlayHost.current
@@ -72,8 +72,17 @@ fun DateSelector(
 
   fun showPicker() {
     scope.launch {
-      val result = overlayHost.show(DatePickerOverlay(currentlySelectedDate, yearRange, sharedKey))
-      result.date?.let(onDateSelected)
+      // Lightweight 7-day picker first; "More" escapes to the full system picker.
+      val quick =
+        overlayHost.show(QuickDatePickerOverlay(currentlySelectedDate, today, weather, sharedKey))
+      when {
+        quick.showFullPicker -> {
+          val result =
+            overlayHost.show(DatePickerOverlay(currentlySelectedDate, yearRange, sharedKey))
+          result.date?.let(onDateSelected)
+        }
+        quick.date != null -> onDateSelected(quick.date)
+      }
     }
   }
 
@@ -104,17 +113,15 @@ fun DateSelector(
     }
   }
 
-  // Shared element only on platforms with Compose-rendered date picker (not iOS native)
+  // The quick picker is Compose-rendered on every platform, so the button can participate in the
+  // morphing shared-bounds transition everywhere (including iOS). The full system picker overlay
+  // still opts out on iOS internally.
+  val overlayScope = requireAnimatedScope(Overlay)
   val sharedModifier =
-    if (CurrentPlatform != Platform.Native) {
-      val overlayScope = requireAnimatedScope(Overlay)
-      Modifier.sharedBounds(
-        sharedContentState = rememberSharedContentState(sharedKey),
-        animatedVisibilityScope = overlayScope,
-      )
-    } else {
-      Modifier
-    }
+    Modifier.sharedBounds(
+      sharedContentState = rememberSharedContentState(sharedKey),
+      animatedVisibilityScope = overlayScope,
+    )
   Surface(
     enabled = true,
     onClick = ::showPicker,

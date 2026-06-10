@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
@@ -13,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Icon
@@ -30,7 +39,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -48,7 +56,13 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
 import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.data.WeatherCondition
+import dev.zacsweers.fieldspottr.data.WeatherForecast
+import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.fieldspottr.ui.WeatherGlyph
+import dev.zacsweers.fieldspottr.ui.currentNyHour
+import dev.zacsweers.fieldspottr.ui.formatHour12
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.daySwipeable
@@ -77,6 +91,9 @@ data object PermitGridScreen : Screen {
     val liveAvailability: LiveGroupAvailability?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
+    val weather: WeatherForecast?,
+    val viewMode: GridViewMode,
+    val week: WeekAvailability?,
     val isDebug: Boolean,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
@@ -85,6 +102,10 @@ data object PermitGridScreen : Screen {
     data object Refresh : Event
 
     data object UseBuiltInAreas : Event
+
+    data object ToggleViewMode : Event
+
+    data class SelectWeekDay(val date: LocalDate) : Event
 
     data class FilterDate(val date: LocalDate) : Event
 
@@ -107,6 +128,7 @@ data object PermitGridScreen : Screen {
 @Composable
 fun PermitGridPresenter(
   repository: PermitRepository,
+  weatherRepository: WeatherRepository,
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): PermitGridScreen.State {
@@ -167,6 +189,24 @@ fun PermitGridPresenter(
   val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
+  // Weather
+  val weather by weatherRepository.forecast.collectAsRetainedState()
+  LaunchedEffect(Unit) { weatherRepository.refresh() }
+
+  // Week view
+  var viewMode by rememberRetained { mutableStateOf(GridViewMode.DAY) }
+  val weekFlow =
+    rememberRetained(gridDate, selectedGroup, viewMode, areas) {
+      if (viewMode == GridViewMode.WEEK) {
+        repository.permitsFlow(gridDate, days = 7, group = selectedGroup).map { permits ->
+          computeWeekAvailability(permits, areas, selectedGroup, gridDate)
+        }
+      } else {
+        flowOf(null)
+      }
+    }
+  val week by weekFlow.collectAsRetainedState(null)
+
   val uriHandler = LocalUriHandler.current
   return PermitGridScreen.State(
     areas = areas,
@@ -178,13 +218,28 @@ fun PermitGridPresenter(
     liveAvailability = permitData?.liveAvailability,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
+    weather = weather,
+    viewMode = viewMode,
+    week = week,
     isDebug = !BuildConfig.IS_RELEASE,
   ) { event ->
     when (event) {
       PermitGridScreen.Event.Refresh -> {
         scope.launch { repository.populateDb(forceRefresh = true) }
+        scope.launch { weatherRepository.refresh(forceRefresh = true) }
       }
       PermitGridScreen.Event.UseBuiltInAreas -> repository.useBuiltInAreas()
+      PermitGridScreen.Event.ToggleViewMode -> {
+        viewMode =
+          when (viewMode) {
+            GridViewMode.DAY -> GridViewMode.WEEK
+            GridViewMode.WEEK -> GridViewMode.DAY
+          }
+      }
+      is PermitGridScreen.Event.SelectWeekDay -> {
+        gridDate = event.date
+        viewMode = GridViewMode.DAY
+      }
       is PermitGridScreen.Event.FilterDate -> {
         gridDate = event.date
       }
@@ -243,8 +298,47 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
       // Action buttons row
       Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = spacedBy(0.dp, alignment = Alignment.End),
       ) {
+        // Rain callout for the selected date, when relevant
+        val rainCallout =
+          remember(state.weather, state.date) {
+            val today = System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
+            val fromHour = if (state.date == today) currentNyHour() else 6
+            state.weather?.nextRainyHour(state.date, fromHour)?.let { hourly ->
+              "Rain ~${formatHour12(hourly.hour)}"
+            }
+          }
+        Box(Modifier.weight(1f).padding(start = 8.dp)) {
+          if (rainCallout != null) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = spacedBy(4.dp),
+            ) {
+              WeatherGlyph(
+                WeatherCondition.RAIN,
+                size = 14.dp,
+                tint = MaterialTheme.colorScheme.tertiary,
+              )
+              Text(
+                rainCallout,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+              )
+            }
+          }
+        }
+        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleViewMode) }) {
+          Icon(
+            Icons.Outlined.DateRange,
+            contentDescription =
+              if (state.viewMode == GridViewMode.WEEK) "Show day view" else "Show week view",
+            tint =
+              if (state.viewMode == GridViewMode.WEEK) MaterialTheme.colorScheme.primary
+              else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+          )
+        }
         IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleDefaultGroup) }) {
           Icon(
             Icons.Filled.Star,
@@ -295,33 +389,100 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
       }
 
       val cornerSlot =
-        remember(state.date, daySwipe.contentScale) {
+        remember(state.date, daySwipe.contentScale, state.weather) {
           movableContentOf {
             DateSelector(
               state.date,
               id = "grid",
               contentScale = daySwipe.contentScale,
               permitDateRange = state.permitDateRange,
+              weather = state.weather,
             ) { newDate ->
               state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
             }
           }
         }
 
-      PermitGrid(
-        state.selectedGroup,
-        state.permits,
-        state.areas,
-        state.date,
-        liveAvailability = state.liveAvailability,
-        cornerSlot = cornerSlot,
-        modifier =
-          Modifier.align(CenterHorizontally).weight(1f).daySwipeable(daySwipe, state.date) { newDate
-            ->
-            state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
-          },
-      ) { fieldName, index, event, orgVisible ->
-        state.eventSink(PermitGridScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible))
+      // Soft cross-fade + scale between day and week views
+      AnimatedContent(
+        targetState = state.viewMode,
+        transitionSpec = {
+          (fadeIn(tween(220, delayMillis = 60)) +
+              scaleIn(initialScale = 0.97f, animationSpec = tween(220, delayMillis = 60)))
+            .togetherWith(fadeOut(tween(90)))
+        },
+        modifier = Modifier.weight(1f),
+        label = "gridViewMode",
+      ) { mode ->
+        when (mode) {
+          GridViewMode.WEEK -> {
+            // Slide between weeks when the start date changes, fade on first load
+            AnimatedContent(
+              targetState = state.week,
+              contentKey = { it?.startDate },
+              transitionSpec = {
+                val from = initialState?.startDate
+                val to = targetState?.startDate
+                if (from != null && to != null && from != to) {
+                  val forward = to > from
+                  (slideInHorizontally(tween(250)) { full ->
+                      if (forward) full / 6 else -full / 6
+                    } + fadeIn(tween(250)))
+                    .togetherWith(
+                      slideOutHorizontally(tween(200)) { full ->
+                        if (forward) -full / 6 else full / 6
+                      } + fadeOut(tween(150))
+                    )
+                } else {
+                  fadeIn(tween(250)).togetherWith(fadeOut(tween(150)))
+                }
+              },
+              label = "weekDate",
+            ) { week ->
+              if (week != null) {
+                WeekGrid(
+                  week = week,
+                  selectedDate = state.date,
+                  weather = state.weather,
+                  cornerSlot = {
+                    DateSelector(
+                      state.date,
+                      id = "grid-week",
+                      permitDateRange = state.permitDateRange,
+                      weather = state.weather,
+                    ) { newDate ->
+                      state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
+                    }
+                  },
+                  modifier = Modifier.fillMaxSize(),
+                ) { date ->
+                  state.eventSink(PermitGridScreen.Event.SelectWeekDay(date))
+                }
+              } else {
+                Box(Modifier.fillMaxSize())
+              }
+            }
+          }
+          GridViewMode.DAY -> {
+            PermitGrid(
+              state.selectedGroup,
+              state.permits,
+              state.areas,
+              state.date,
+              liveAvailability = state.liveAvailability,
+              weather = state.weather,
+              cornerSlot = cornerSlot,
+              modifier =
+                Modifier.fillMaxSize().daySwipeable(daySwipe, state.date) { newDate ->
+                  state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
+                },
+            ) { fieldName, index, event, orgVisible ->
+              state.eventSink(
+                PermitGridScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible)
+              )
+            }
+          }
+        }
       }
     }
   }

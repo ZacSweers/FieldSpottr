@@ -263,6 +263,17 @@ class PermitRepository(
     }
   }
 
+  /** Like [permitsFlow] but spanning [days] days starting at [date]. */
+  fun permitsFlow(date: LocalDate, days: Int, group: String): Flow<List<DbPermit>> {
+    val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
+    val endTime = date.plus(days, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
+    return flow {
+      emitAll(
+        db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
+      )
+    }
+  }
+
   private fun readValidAreas(path: Path): Areas? {
     val parsed =
       try {

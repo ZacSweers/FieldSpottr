@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.Location
 import dev.zacsweers.fieldspottr.data.TimeWindow
@@ -102,6 +103,81 @@ class FindFieldScreenTest {
       .isEqualTo(listOf(("Area B" to "Shared") to "8–11pm"))
   }
 
+  @Test
+  fun `statically closed groups are bucketed as closed`() {
+    val buckets = computeAvailability(emptyList(), Areas.default, 18, 23)
+
+    val track = buckets.closed.single { it.group.name == "Track" }
+    assertThat(track.closedReason).isEqualTo("Closed for reconstruction")
+    assertThat(buckets.fullyOpen.none { it.group.name == "Track" }).isTrue()
+  }
+
+  @Test
+  fun `fields fully covered by closure blocks are bucketed as closed with reason`() {
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Corlears Hook",
+          group = "Corlears Hook",
+          fieldId = "Soccer-01",
+          startHour = 0,
+          endHour = 23,
+          type = "closure",
+          name = "Closure: Wet field",
+          org = "",
+          status = "Closed",
+        ),
+        permit(
+          recordId = 2,
+          area = "Corlears Hook",
+          group = "Corlears Hook",
+          fieldId = "Softball-01",
+          startHour = 0,
+          endHour = 23,
+          type = "closure",
+          name = "Closure: Wet field",
+          org = "",
+          status = "Closed",
+        ),
+      )
+
+    val buckets = computeAvailability(permits, Areas.default, 18, 23)
+
+    val corlears = buckets.closed.single { it.group.name == "Corlears Hook" }
+    assertThat(corlears.closedReason).isEqualTo("Wet field")
+    assertThat(buckets.partiallyOpen.none { it.group.name == "Corlears Hook" }).isTrue()
+  }
+
+  @Test
+  fun `fields fully booked by regular permits are not bucketed as closed`() {
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Corlears Hook",
+          group = "Corlears Hook",
+          fieldId = "Soccer-01",
+          startHour = 18,
+          endHour = 23,
+        ),
+        permit(
+          recordId = 2,
+          area = "Corlears Hook",
+          group = "Corlears Hook",
+          fieldId = "Softball-01",
+          startHour = 18,
+          endHour = 23,
+        ),
+      )
+
+    val buckets = computeAvailability(permits, Areas.default, 18, 23)
+
+    assertThat(buckets.closed.none { it.group.name == "Corlears Hook" }).isTrue()
+    assertThat(buckets.fullyOpen.none { it.group.name == "Corlears Hook" }).isTrue()
+    assertThat(buckets.partiallyOpen.none { it.group.name == "Corlears Hook" }).isTrue()
+  }
+
   private fun permit(
     recordId: Long,
     area: String,
@@ -111,6 +187,10 @@ class FindFieldScreenTest {
     endHour: Int,
     startMinute: Int = 0,
     endMinute: Int = 0,
+    type: String = "Athletic League",
+    name: String = "Test Permit",
+    org: String = "Test Org",
+    status: String = "Approved",
   ): DbPermit {
     return DbPermit(
       recordId = recordId,
@@ -120,10 +200,10 @@ class FindFieldScreenTest {
         LocalDateTime(date, LocalTime(startHour, startMinute)).toNyInstant().toEpochMilliseconds(),
       end = LocalDateTime(date, LocalTime(endHour, endMinute)).toNyInstant().toEpochMilliseconds(),
       fieldId = fieldId,
-      type = "Athletic League",
-      name = "Test Permit",
-      org = "Test Org",
-      status = "Approved",
+      type = type,
+      name = name,
+      org = org,
+      status = status,
       isOverlap = 0L,
       advisory = null,
     )

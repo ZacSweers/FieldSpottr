@@ -67,6 +67,8 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
 import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.data.WeatherForecast
+import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
@@ -107,6 +109,7 @@ data class AreaScreen(
     val liveAvailability: LiveGroupAvailability?,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
+    val weather: WeatherForecast?,
     val isDebug: Boolean,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
@@ -140,6 +143,7 @@ data class AreaScreen(
 fun AreaPresenter(
   screen: AreaScreen,
   repository: PermitRepository,
+  weatherRepository: WeatherRepository,
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): AreaScreen.State {
@@ -206,6 +210,10 @@ fun AreaPresenter(
   val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
+  // Weather
+  val weather by weatherRepository.forecast.collectAsRetainedState()
+  LaunchedEffect(Unit) { weatherRepository.refresh() }
+
   val uriHandler = LocalUriHandler.current
   return AreaScreen.State(
     areas = areas,
@@ -219,11 +227,13 @@ fun AreaPresenter(
     liveAvailability = permitData?.liveAvailability,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
+    weather = weather,
     isDebug = !BuildConfig.IS_RELEASE,
   ) { event ->
     when (event) {
       is AreaScreen.Event.Refresh -> {
         scope.launch { repository.populateDb(forceRefresh = true) }
+        scope.launch { weatherRepository.refresh(forceRefresh = true) }
       }
       AreaScreen.Event.UseBuiltInAreas -> {
         repository.useBuiltInAreas()
@@ -416,13 +426,14 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
         val haptics = LocalHapticFeedback.current
 
         val cornerSlot =
-          remember(state.date) {
+          remember(state.date, state.weather) {
             movableContentOf {
               DateSelector(
                 state.date,
                 id = "area",
                 contentScale = datePulse.value,
                 permitDateRange = state.permitDateRange,
+                weather = state.weather,
               ) { newDate ->
                 state.eventSink(AreaScreen.Event.FilterDate(newDate))
               }
@@ -438,6 +449,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           state.areas,
           state.date,
           liveAvailability = state.liveAvailability,
+          weather = state.weather,
           cornerSlot = cornerSlot,
           modifier =
             Modifier.align(CenterHorizontally)

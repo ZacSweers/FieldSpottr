@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,12 +57,18 @@ import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
+import dev.zacsweers.fieldspottr.PermitState.Companion.isBlocked
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FieldGroup
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.TimeWindow
+import dev.zacsweers.fieldspottr.data.WeatherCondition
+import dev.zacsweers.fieldspottr.data.WeatherForecast
+import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import dev.zacsweers.fieldspottr.ui.WeatherGlyph
+import dev.zacsweers.fieldspottr.ui.WeatherStrip
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.daySwipeable
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
@@ -89,7 +96,19 @@ data class FieldAvailability(
   val areaDisplayName: String,
   val openTimeRange: String,
   val isFullyOpen: Boolean,
+  /** If non-null, this field is closed for the window and this is the (short) reason. */
+  val closedReason: String? = null,
 )
+
+@Immutable
+data class AvailabilityBuckets(
+  val fullyOpen: ImmutableList<FieldAvailability>,
+  val partiallyOpen: ImmutableList<FieldAvailability>,
+  val closed: ImmutableList<FieldAvailability>,
+) {
+  val totalOpen: Int
+    get() = fullyOpen.size + partiallyOpen.size
+}
 
 @CommonParcelize
 data object FindFieldScreen : Screen {
@@ -98,7 +117,8 @@ data object FindFieldScreen : Screen {
     val selectedWindow: TimeWindow?,
     val isToday: Boolean,
     val lastUpdated: String?,
-    val availability: Pair<ImmutableList<FieldAvailability>, ImmutableList<FieldAvailability>>?,
+    val availability: AvailabilityBuckets?,
+    val weather: WeatherForecast?,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
 
@@ -115,7 +135,11 @@ data object FindFieldScreen : Screen {
 
 @CircuitInject(FindFieldScreen::class, AppScope::class)
 @Composable
-fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): FindFieldScreen.State {
+fun FindFieldPresenter(
+  repository: PermitRepository,
+  weatherRepository: WeatherRepository,
+  navigator: Navigator,
+): FindFieldScreen.State {
   val areasFlow = rememberRetained { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()
   val currentLocalDateTime = remember {
@@ -160,12 +184,17 @@ fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): Find
     }
   val availability by availabilityFlow.collectAsRetainedState(null)
 
+  // Weather
+  val weather by weatherRepository.forecast.collectAsRetainedState()
+  LaunchedEffect(Unit) { weatherRepository.refresh() }
+
   return FindFieldScreen.State(
     selectedDate = selectedDate,
     selectedWindow = selectedWindow,
     isToday = selectedDate == today,
     lastUpdated = lastUpdatedText,
     availability = availability,
+    weather = weather,
   ) { event ->
     when (event) {
       is FindFieldScreen.Event.SelectWindow -> selectedWindow = event.window
@@ -187,6 +216,7 @@ fun FindFieldPresenter(repository: PermitRepository, navigator: Navigator): Find
       }
       FindFieldScreen.Event.Refresh -> {
         scope.launch { repository.populateDb(forceRefresh = true) }
+        scope.launch { weatherRepository.refresh(forceRefresh = true) }
       }
     }
   }
@@ -218,13 +248,32 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
       }
     }
-    state.lastUpdated?.let {
-      Text(
-        it,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    // Updated-at + weather on one quiet line
+    val hasWeather = state.weather?.daily(state.selectedDate) != null
+    if (state.lastUpdated != null || hasWeather) {
+      Row(
         modifier = Modifier.padding(horizontal = 16.dp),
-      )
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = spacedBy(6.dp),
+      ) {
+        state.lastUpdated?.let {
+          Text(
+            it,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        if (state.lastUpdated != null && hasWeather) {
+          Text(
+            "·",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        state.weather?.let { weather ->
+          WeatherStrip(forecast = weather, date = state.selectedDate, isToday = state.isToday)
+        }
+      }
     }
     Spacer(Modifier.height(8.dp))
 
@@ -234,12 +283,19 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = spacedBy(8.dp),
     ) {
-      DateSelector(state.selectedDate, id = "faf", contentScale = daySwipe.contentScale) { newDate
-        ->
+      DateSelector(
+        state.selectedDate,
+        id = "faf",
+        contentScale = daySwipe.contentScale,
+        weather = state.weather,
+      ) { newDate ->
         state.eventSink(FindFieldScreen.Event.SelectDate(newDate))
       }
       LazyRow(horizontalArrangement = spacedBy(8.dp)) {
         items(TimeWindow.entries.toList()) { window ->
+          val isRainy =
+            state.weather?.isRainyWindow(state.selectedDate, window.startHour, window.endHour) ==
+              true
           FilterChip(
             selected = state.selectedWindow == window,
             onClick = {
@@ -249,7 +305,21 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
                 )
               )
             },
-            label = { Text(window.label(state.isToday)) },
+            label = {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = spacedBy(4.dp),
+              ) {
+                Text(window.label(state.isToday))
+                if (isRainy) {
+                  WeatherGlyph(
+                    WeatherCondition.RAIN,
+                    size = 12.dp,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                  )
+                }
+              }
+            },
           )
         }
       }
@@ -261,8 +331,8 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         AdaptiveCircularProgressIndicator()
       }
     } else {
-      val (fullyOpen, partiallyOpen) = state.availability
-      val totalOpen = fullyOpen.size + partiallyOpen.size
+      val (fullyOpen, partiallyOpen, closed) = state.availability
+      val totalOpen = state.availability.totalOpen
       Text(
         "$totalOpen fields open",
         style = MaterialTheme.typography.bodyMedium,
@@ -271,7 +341,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       )
       Spacer(Modifier.height(8.dp))
 
-      if (totalOpen == 0) {
+      if (totalOpen == 0 && closed.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
           Text(
             "No open fields in this window",
@@ -300,6 +370,19 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
               FieldAvailabilityRow(
                 field = field,
                 dotColor = MaterialTheme.colorScheme.tertiary,
+                onClick = {
+                  state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
+                },
+                modifier = Modifier.animateItem(),
+              )
+            }
+          }
+          if (closed.isNotEmpty()) {
+            item(key = "header-closed") { SectionHeader("CLOSED") }
+            items(closed, key = { "closed-${it.group.name}" }) { field ->
+              FieldAvailabilityRow(
+                field = field,
+                dotColor = MaterialTheme.colorScheme.error,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -387,16 +470,37 @@ private fun FieldAvailabilityRow(
         }
       }
 
-      // Time chip
-      Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-      ) {
-        Text(
-          text = field.openTimeRange,
-          style = MaterialTheme.typography.labelMedium,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
+      // Time chip (or closed badge)
+      if (field.closedReason != null) {
+        Surface(
+          shape = MaterialTheme.shapes.small,
+          color = MaterialTheme.colorScheme.errorContainer,
+        ) {
+          Text(
+            text =
+              if (field.closedReason.length <= 24 && field.closedReason != "Closed") {
+                "Closed · ${field.closedReason}"
+              } else {
+                "Closed"
+              },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+          )
+        }
+      } else {
+        Surface(
+          shape = MaterialTheme.shapes.small,
+          color = MaterialTheme.colorScheme.secondaryContainer,
+        ) {
+          Text(
+            text = field.openTimeRange,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+          )
+        }
       }
 
       // Chevron
@@ -414,19 +518,32 @@ internal fun computeAvailability(
   areas: Areas,
   startHour: Int,
   endHour: Int,
-): Pair<ImmutableList<FieldAvailability>, ImmutableList<FieldAvailability>> {
+): AvailabilityBuckets {
   val permitsByAreaAndGroup = permits.groupBy { it.area to it.groupName }
 
   val fullyOpen = mutableListOf<FieldAvailability>()
   val partiallyOpen = mutableListOf<FieldAvailability>()
+  val closed = mutableListOf<FieldAvailability>()
 
   for (area in areas.entries) {
     for (group in area.fieldGroups) {
-      if (group.closed != null) continue
+      if (group.closed != null) {
+        closed.add(
+          FieldAvailability(
+            group = group,
+            areaDisplayName = area.displayName,
+            openTimeRange = "",
+            isFullyOpen = false,
+            closedReason = group.closed,
+          )
+        )
+        continue
+      }
 
+      val groupPermits = permitsByAreaAndGroup[area.areaName to group.name].orEmpty()
       val bookedHours =
         bookedHoursForGroup(
-          permits = permitsByAreaAndGroup[area.areaName to group.name].orEmpty(),
+          permits = groupPermits,
           area = area,
           startHour = startHour,
           endHour = endHour,
@@ -451,12 +568,44 @@ internal fun computeAvailability(
               isFullyOpen = false,
             )
           )
+        } else {
+          // Fully booked. If city block/closure rows alone cover the whole window, surface the
+          // group as closed (with a reason) instead of silently dropping it.
+          val blockedPermits = groupPermits.filter { it.isBlocked }
+          if (blockedPermits.isNotEmpty()) {
+            val blockedHours =
+              bookedHoursForGroup(
+                permits = blockedPermits,
+                area = area,
+                startHour = startHour,
+                endHour = endHour,
+              )
+            if ((startHour until endHour).all { it in blockedHours }) {
+              val reason =
+                blockedPermits.firstOrNull()?.name?.removePrefix("Closure: ")?.takeIf {
+                  it.isNotBlank()
+                } ?: "Closed"
+              closed.add(
+                FieldAvailability(
+                  group = group,
+                  areaDisplayName = area.displayName,
+                  openTimeRange = "",
+                  isFullyOpen = false,
+                  closedReason = reason,
+                )
+              )
+            }
+          }
         }
       }
     }
   }
 
-  return fullyOpen.toImmutableList() to partiallyOpen.toImmutableList()
+  return AvailabilityBuckets(
+    fullyOpen = fullyOpen.toImmutableList(),
+    partiallyOpen = partiallyOpen.toImmutableList(),
+    closed = closed.toImmutableList(),
+  )
 }
 
 private fun bookedHoursForGroup(
