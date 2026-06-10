@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import kotlin.test.Test
@@ -14,6 +15,7 @@ import kotlinx.datetime.LocalTime
 class WeekAvailabilityTest {
 
   private val startDate = LocalDate(2026, 6, 8)
+  private val hoursShown = WEEK_VIEW_END_HOUR - WEEK_VIEW_START_HOUR
 
   @Test
   fun `empty week is all free`() {
@@ -21,11 +23,8 @@ class WeekAvailabilityTest {
 
     assertThat(week.days.size).isEqualTo(7)
     for (day in week.days) {
-      assertThat(day.segments.size).isEqualTo(1)
-      val segment = day.segments.single()
-      assertThat(segment.startHour).isEqualTo(WEEK_VIEW_START_HOUR)
-      assertThat(segment.endHour).isEqualTo(WEEK_VIEW_END_HOUR)
-      assertThat(segment.state).isEqualTo(WeekSlotState.ALL_FREE)
+      assertThat(day.hourStates.size).isEqualTo(hoursShown)
+      assertThat(day.hourStates.all { it == WeekSlotState.ALL_FREE }).isTrue()
     }
   }
 
@@ -47,16 +46,12 @@ class WeekAvailabilityTest {
     val week = computeWeekAvailability(permits, Areas.default, "Baruch", startDate)
 
     val monday = week.days.first()
-    assertThat(monday.segments.map { Triple(it.startHour, it.endHour, it.state) })
-      .isEqualTo(
-        listOf(
-          Triple(WEEK_VIEW_START_HOUR, 18, WeekSlotState.ALL_FREE),
-          Triple(18, 20, WeekSlotState.SOME_FREE),
-          Triple(20, WEEK_VIEW_END_HOUR, WeekSlotState.ALL_FREE),
-        )
-      )
+    assertThat(monday.stateAt(17)).isEqualTo(WeekSlotState.ALL_FREE)
+    assertThat(monday.stateAt(18)).isEqualTo(WeekSlotState.SOME_FREE)
+    assertThat(monday.stateAt(19)).isEqualTo(WeekSlotState.SOME_FREE)
+    assertThat(monday.stateAt(20)).isEqualTo(WeekSlotState.ALL_FREE)
     // Other days untouched
-    assertThat(week.days[1].segments.single().state).isEqualTo(WeekSlotState.ALL_FREE)
+    assertThat(week.days[1].hourStates.all { it == WeekSlotState.ALL_FREE }).isTrue()
   }
 
   @Test
@@ -71,17 +66,53 @@ class WeekAvailabilityTest {
 
     val week = computeWeekAvailability(permits, Areas.default, "Baruch", startDate)
 
-    val monday = week.days.first()
-    assertThat(monday.segments.first { it.startHour == 18 }.state).isEqualTo(WeekSlotState.BOOKED)
+    assertThat(week.days.first().stateAt(18)).isEqualTo(WeekSlotState.BOOKED)
+    assertThat(week.days.first().stateAt(20)).isEqualTo(WeekSlotState.ALL_FREE)
   }
 
   @Test
-  fun `closed groups are fully booked`() {
+  fun `statically closed groups show as closed all week`() {
     val week = computeWeekAvailability(emptyList(), Areas.default, "Track", startDate)
 
     for (day in week.days) {
-      assertThat(day.segments.single().state).isEqualTo(WeekSlotState.BOOKED)
+      assertThat(day.hourStates.all { it == WeekSlotState.CLOSED }).isTrue()
     }
+  }
+
+  @Test
+  fun `closure-blocked hours show as closed, not booked`() {
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          date = startDate,
+          fieldId = "Soccer-01",
+          area = "Corlears Hook",
+          group = "Corlears Hook",
+          startHour = 0,
+          endHour = 23,
+          name = "Closure: Wet field",
+          org = "",
+          status = "Closed",
+        ),
+        permit(
+          recordId = 2,
+          date = startDate,
+          fieldId = "Softball-01",
+          area = "Corlears Hook",
+          group = "Corlears Hook",
+          startHour = 0,
+          endHour = 23,
+          name = "Closure: Wet field",
+          org = "",
+          status = "Closed",
+        ),
+      )
+
+    val week = computeWeekAvailability(permits, Areas.default, "Corlears Hook", startDate)
+
+    assertThat(week.days.first().stateAt(12)).isEqualTo(WeekSlotState.CLOSED)
+    assertThat(week.days[1].stateAt(12)).isEqualTo(WeekSlotState.ALL_FREE)
   }
 
   private fun permit(
@@ -90,18 +121,23 @@ class WeekAvailabilityTest {
     fieldId: String,
     startHour: Int,
     endHour: Int,
+    area: String = "Baruch",
+    group: String = "Baruch",
+    name: String = "Test Permit",
+    org: String = "Test Org",
+    status: String = "Approved",
   ): DbPermit {
     return DbPermit(
       recordId = recordId,
-      area = "Baruch",
-      groupName = "Baruch",
+      area = area,
+      groupName = group,
       start = LocalDateTime(date, LocalTime(startHour, 0)).toNyInstant().toEpochMilliseconds(),
       end = LocalDateTime(date, LocalTime(endHour, 0)).toNyInstant().toEpochMilliseconds(),
       fieldId = fieldId,
       type = "Athletic League",
-      name = "Test Permit",
-      org = "Test Org",
-      status = "Approved",
+      name = name,
+      org = org,
+      status = status,
       isOverlap = 0L,
       advisory = null,
     )

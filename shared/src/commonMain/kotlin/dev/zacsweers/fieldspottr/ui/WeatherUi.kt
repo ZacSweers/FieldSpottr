@@ -5,13 +5,9 @@ package dev.zacsweers.fieldspottr.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -24,7 +20,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.zacsweers.fieldspottr.data.WeatherCondition
@@ -198,8 +193,8 @@ fun DropletGlyph(
 private const val PI_F = 3.1415927f
 
 /**
- * One unobtrusive line of weather: current (or daily) temp + condition on the left, a rain callout
- * on the right when relevant.
+ * One unobtrusive line of weather: temp + condition, then a rain callout when relevant. Plain text
+ * in the same register as the "Updated Nm ago" line - deliberately quiet.
  */
 @Composable
 fun WeatherStrip(
@@ -222,36 +217,33 @@ fun WeatherStrip(
       val fromHour = if (isToday) currentNyHour() else 6
       forecast.nextRainyHour(date, fromHour)?.let { hourly ->
         val timing = if (hourly.hour <= fromHour) "now" else "after ${formatHour12(hourly.hour)}"
-        "${hourly.precipProbability}% $timing"
+        "${hourly.precipProbability}% rain $timing"
       }
     }
 
-  Surface(
+  Row(
     modifier = modifier,
-    shape = MaterialTheme.shapes.medium,
-    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = spacedBy(6.dp),
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = spacedBy(8.dp),
-    ) {
-      WeatherGlyph(condition, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    WeatherGlyph(condition, size = 13.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(
+      text = "$temp° ${condition.label}",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (rainCallout != null) {
       Text(
-        text = "$temp° ${condition.label}",
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Medium,
+        text = "·",
+        style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-      Spacer(Modifier.weight(1f))
-      if (rainCallout != null) {
-        DropletGlyph(tint = MaterialTheme.colorScheme.tertiary)
-        Text(
-          text = rainCallout,
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.tertiary,
-        )
-      }
+      DropletGlyph(size = 10.dp, tint = MaterialTheme.colorScheme.tertiary)
+      Text(
+        text = rainCallout,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.tertiary,
+      )
     }
   }
 }

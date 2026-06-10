@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,9 +37,9 @@ enum class GridViewMode {
 }
 
 /**
- * A 7-day availability overview for a field group. Subfields are collapsed into a 3-state strip per
- * day (all free / some free / booked); tapping a day opens the regular day grid for per-field
- * detail.
+ * A 7-day availability overview for a field group. Subfields are collapsed into a per-hour 4-state
+ * strip per day (all free / some free / booked / closed); tapping a day opens the regular day grid
+ * for per-field detail. Cell colors animate so feed refreshes shift softly instead of popping.
  */
 @Composable
 fun WeekGrid(
@@ -78,12 +81,13 @@ fun WeekGrid(
 
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = spacedBy(16.dp, alignment = Alignment.CenterHorizontally),
+      horizontalArrangement = spacedBy(12.dp, alignment = Alignment.CenterHorizontally),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       LegendItem(WeekSlotState.ALL_FREE.color(), "All free")
       LegendItem(WeekSlotState.SOME_FREE.color(), "Some free")
       LegendItem(WeekSlotState.BOOKED.color(), "Booked")
+      LegendItem(WeekSlotState.CLOSED.color(), "Closed")
     }
   }
 }
@@ -99,7 +103,9 @@ private fun DayColumn(
   Surface(
     onClick = onClick,
     shape = MaterialTheme.shapes.medium,
-    color = if (isSelected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else Color.Transparent,
+    color =
+      if (isSelected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+      else Color.Transparent,
     modifier = modifier,
   ) {
     Column(
@@ -117,17 +123,15 @@ private fun DayColumn(
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
       )
-      Column(
-        modifier =
-          Modifier.fillMaxWidth().height(220.dp).clip(MaterialTheme.shapes.small),
-        verticalArrangement = spacedBy(1.dp),
-      ) {
-        for (segment in day.segments) {
-          Box(
-            Modifier.fillMaxWidth()
-              .weight(segment.durationHours.toFloat())
-              .background(segment.state.color())
-          )
+      Column(Modifier.fillMaxWidth().height(220.dp).clip(MaterialTheme.shapes.small)) {
+        for (hourState in day.hourStates) {
+          val cellColor by
+            animateColorAsState(
+              targetValue = hourState.color(),
+              animationSpec = tween(300),
+              label = "weekCellColor",
+            )
+          Box(Modifier.fillMaxWidth().weight(1f).background(cellColor))
         }
       }
       val daily = weather?.daily(day.date)
@@ -147,11 +151,12 @@ private fun DayColumn(
 }
 
 @Composable
-private fun WeekSlotState.color(): Color {
+internal fun WeekSlotState.color(): Color {
   return when (this) {
     WeekSlotState.ALL_FREE -> MaterialTheme.colorScheme.secondaryContainer
     WeekSlotState.SOME_FREE -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
     WeekSlotState.BOOKED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+    WeekSlotState.CLOSED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
   }
 }
 
