@@ -33,24 +33,22 @@ fun FieldSpottrApp(
       SharedElementTransitionLayout {
         Surface(modifier = modifier, color = MaterialTheme.colorScheme.background) {
           val backStack = rememberSaveableBackStack(HomeScreen)
-          val navigator = rememberCircuitNavigator(backStack) { onRootPop() }
           val overlayHost = rememberOverlayHost()
+          val navigator =
+            rememberCircuitNavigator(backStack) {
+              // Dismiss active overlay on back press instead of popping the navigator
+              val overlay = overlayHost.currentOverlayData
+              if (overlay != null) {
+                overlay.finish(DatePickerResult(null))
+              } else {
+                onRootPop()
+              }
+            }
           ContentWithOverlays(overlayHost = overlayHost) {
             NavigableCircuitContent(
               navigator = navigator,
               backStack = backStack,
-              decoratorFactory =
-                GestureNavigationDecorationFactory(
-                  onBackInvoked = {
-                    // Dismiss active overlay on back press instead of popping the navigator
-                    val overlay = overlayHost.currentOverlayData
-                    if (overlay != null) {
-                      overlay.finish(DatePickerResult(null))
-                    } else {
-                      navigator.pop()
-                    }
-                  }
-                ),
+              decoratorFactory = GestureNavigationDecorationFactory(),
             )
           }
         }
