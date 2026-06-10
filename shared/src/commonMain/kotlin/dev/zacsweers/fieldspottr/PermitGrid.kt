@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onPlaced
@@ -58,8 +60,10 @@ import dev.zacsweers.fieldspottr.data.LiveFieldAvailability
 import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.LivePermitAdvisory
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
+import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.withOverlapsFrom
 import dev.zacsweers.fieldspottr.theme.fsColorScheme
+import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.ReflowText
 import kotlin.time.Clock
@@ -80,6 +84,7 @@ fun PermitGrid(
   selectedDate: LocalDate,
   modifier: Modifier = Modifier,
   liveAvailability: LiveGroupAvailability? = null,
+  weather: WeatherForecast? = null,
   cornerSlot: (@Composable () -> Unit)? = null,
   onEventClick: (fieldName: String, index: Int, Reserved, orgVisible: Boolean) -> Unit =
     { _, _, _, _ ->
@@ -170,20 +175,42 @@ fun PermitGrid(
           .nowIndicator(selectedDate, itemHeight)
     ) {
       // Time column
+      val hourlyWeather =
+        remember(weather, selectedDate) {
+          weather?.hourly(selectedDate)?.associateBy { it.hour }
+        }
       Column(Modifier.weight(TIME_COLUMN_WEIGHT)) {
         for (rowNumber in 0..<24) {
           Box(Modifier.height(itemHeight)) {
             // Time marker
             val adjustedTime = ((rowNumber) % 12).let { if (it == 0) 12 else it }
             val amPm = if (rowNumber < 12) "AM" else "PM"
-            Text(
-              "$adjustedTime $amPm",
-              textAlign = TextAlign.Center,
-              fontWeight = FontWeight.Bold,
+            val hourForecast = hourlyWeather?.get(rowNumber)
+            val isRainyHour = hourForecast?.isRainy == true
+            Row(
               modifier = Modifier.align(TopEnd).padding(4.dp),
-              style = MaterialTheme.typography.labelSmall,
-              maxLines = 1,
-            )
+              verticalAlignment = CenterVertically,
+              horizontalArrangement = spacedBy(2.dp),
+            ) {
+              if (hourForecast != null && hourForecast.condition.isPrecipitation) {
+                WeatherGlyph(
+                  hourForecast.condition,
+                  size = 11.dp,
+                  tint =
+                    if (isRainyHour) MaterialTheme.colorScheme.tertiary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              Text(
+                "$adjustedTime $amPm",
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.Bold,
+                color =
+                  if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+              )
+            }
           }
         }
       }
