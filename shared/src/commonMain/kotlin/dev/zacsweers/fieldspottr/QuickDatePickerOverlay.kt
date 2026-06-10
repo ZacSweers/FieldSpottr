@@ -40,8 +40,6 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Overlay
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
-import dev.zacsweers.fieldspottr.util.CurrentPlatform
-import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.PlatformBackHandler
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
@@ -84,16 +82,13 @@ class QuickDatePickerOverlay(
             navigator.finish(QuickDatePickerResult())
           }
       )
+      // Pure Compose content - morphs from the DateSelector button on all platforms
+      val overlayScope = requireAnimatedScope(Overlay)
       val sharedModifier =
-        if (CurrentPlatform != Platform.Native) {
-          val overlayScope = requireAnimatedScope(Overlay)
-          Modifier.sharedBounds(
-            sharedContentState = rememberSharedContentState(sharedKey),
-            animatedVisibilityScope = overlayScope,
-          )
-        } else {
-          Modifier
-        }
+        Modifier.sharedBounds(
+          sharedContentState = rememberSharedContentState(sharedKey),
+          animatedVisibilityScope = overlayScope,
+        )
       Surface(
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surface,

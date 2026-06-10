@@ -35,8 +35,6 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
 import com.slack.circuit.sharedelements.SharedTransitionKey
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
-import dev.zacsweers.fieldspottr.util.CurrentPlatform
-import dev.zacsweers.fieldspottr.util.Platform
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -117,17 +115,15 @@ fun DateSelector(
     }
   }
 
-  // Shared element only on platforms with Compose-rendered date picker (not iOS native)
+  // The quick picker is Compose-rendered on every platform, so the button can participate in the
+  // morphing shared-bounds transition everywhere (including iOS). The full system picker overlay
+  // still opts out on iOS internally.
+  val overlayScope = requireAnimatedScope(Overlay)
   val sharedModifier =
-    if (CurrentPlatform != Platform.Native) {
-      val overlayScope = requireAnimatedScope(Overlay)
-      Modifier.sharedBounds(
-        sharedContentState = rememberSharedContentState(sharedKey),
-        animatedVisibilityScope = overlayScope,
-      )
-    } else {
-      Modifier
-    }
+    Modifier.sharedBounds(
+      sharedContentState = rememberSharedContentState(sharedKey),
+      animatedVisibilityScope = overlayScope,
+    )
   Surface(
     enabled = true,
     onClick = ::showPicker,

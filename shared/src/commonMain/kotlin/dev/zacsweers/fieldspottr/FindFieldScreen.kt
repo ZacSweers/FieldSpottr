@@ -248,25 +248,34 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
       }
     }
-    state.lastUpdated?.let {
-      Text(
-        it,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    // Updated-at + weather on one quiet line
+    val hasWeather = state.weather?.daily(state.selectedDate) != null
+    if (state.lastUpdated != null || hasWeather) {
+      Row(
         modifier = Modifier.padding(horizontal = 16.dp),
-      )
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = spacedBy(6.dp),
+      ) {
+        state.lastUpdated?.let {
+          Text(
+            it,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        if (state.lastUpdated != null && hasWeather) {
+          Text(
+            "·",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        state.weather?.let { weather ->
+          WeatherStrip(forecast = weather, date = state.selectedDate, isToday = state.isToday)
+        }
+      }
     }
     Spacer(Modifier.height(8.dp))
-
-    // Weather strip (only when we have a forecast for the selected date)
-    state.weather?.let { weather ->
-      WeatherStrip(
-        forecast = weather,
-        date = state.selectedDate,
-        isToday = state.isToday,
-        modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
-      )
-    }
 
     // Date selector + filter chips row
     Row(
