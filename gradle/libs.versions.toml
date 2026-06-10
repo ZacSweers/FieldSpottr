@@ -6,19 +6,19 @@ agp = "9.2.1"
 androidx-datastore = "1.2.1"
 assertk = "0.28.1"
 calf = "0.12.0"
-circuit = "0.33.1"
+circuit = "0.34.0"
 compose-jb = "1.11.1"
 androidCompileSdk = "36"
 jdk = "25"
 jvmTarget = "11"
 kermit = "2.1.0"
-kotlin = "2.3.21"
+kotlin = "2.4.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 ktfmt = "0.63"
 ktor = "3.5.0"
 mapsCompose = "8.3.0"
-metro = "1.1.1"
+metro = "1.2.0"
 okio = "3.17.0"
 spotless = "8.6.0"
 sqldelight = "2.3.2"
@@ -28,7 +28,7 @@ aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "abou
 agp-application = { id = "com.android.application", version.ref = "agp" }
 agp-kotlin-multiplatform = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 bugsnag = { id = "com.bugsnag.gradle", version = "1.1.0" }
-buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.9" }
+buildConfig = { id = "com.github.gmazzo.buildconfig", version = "6.0.10" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
