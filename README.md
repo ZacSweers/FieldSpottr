@@ -17,39 +17,8 @@ and scraping belongs in the generator, not in app runtime code.
   `availability/areas/<area-id>.json`.
 - `:shared` downloads those repo-hosted files and imports each parsed area feed into SQLDelight.
 
-For normal local updates, run:
-
-    scripts/update-availability.sh
-
-This dumps the Hudson River Park page and NYC Parks live API responses through local headless
-Chrome, then runs the generator with those dumped sources. The scheduled GitHub Actions refresh is
-disabled for now because NYC Parks/Cloudflare frequently blocks GitHub-hosted runner traffic, which
-can otherwise produce misleading generated diffs.
-
-Run the generator directly with:
-
-    ./gradlew :generator:run --args=--output=.
-
-Use `--live-days=<days>` to adjust the NYC Parks live availability window.
-
-Hudson River Park / West Side Highway schedules can be supplied from a browser-dumped page source:
-
-    ./gradlew :generator:run --args="--output=. --hrp-source-file=build/hrp/fields.html"
-
-If that source is blocked or cannot be parsed, the generator preserves the previous West Side
-Highway feed instead of replacing it with empty data.
-
-Brooklyn Bridge Park Pier 5 is generated from the checked-in schedule transcription in
-`data/bbp/pier5-summer-2026.json`, read from the checked-in source image in `data/bbp/`. The
-generator scans the official Pier 5 page and prints a warning if it appears to link a newer turf
-schedule image.
-
-The generated manifest lists one hash per area feed. App refreshes download only stale/missing area
-feeds, and each feed replaces that area's DB rows transactionally after it parses successfully.
-Failed manifest or feed downloads keep the existing cached DB data in place.
-
-`Area.csvUrl` is optional catalog metadata for generator/debug use. The app should not fetch NYC
-Parks CSVs or live provider APIs directly; generated feeds are the runtime availability contract.
+See `UPDATING.md` for the local refresh command, provider-specific notes, and manual fallback
+instructions.
 
 License
 --------
