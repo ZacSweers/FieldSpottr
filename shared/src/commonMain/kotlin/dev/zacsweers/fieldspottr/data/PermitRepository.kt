@@ -102,7 +102,7 @@ class PermitRepositoryImpl(
   private val logger: Logger,
   private val db: suspend () -> FSDatabase,
   private val client: Lazy<HttpClient>,
-): PermitRepository {
+) : PermitRepository {
 
   @Inject
   constructor(
@@ -253,7 +253,11 @@ class PermitRepositoryImpl(
       .flowOn(Dispatchers.IO)
   }
 
-  override fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
+  override fun allPermitsInWindow(
+    date: LocalDate,
+    startHour: Int,
+    endHour: Int,
+  ): Flow<List<DbPermit>> {
     val windowStart = windowBoundaryMillis(date, startHour)
     val windowEnd = windowBoundaryMillis(date, endHour)
     return flow {
