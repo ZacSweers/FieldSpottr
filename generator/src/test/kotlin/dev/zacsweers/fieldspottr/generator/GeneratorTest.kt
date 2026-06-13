@@ -371,7 +371,8 @@ private val hrpFixture =
   """
   #### June 7–14, 2026
 
-  Image: Pier 25 Turf Field
+  Pier 25 Turf Field Schedule
+  | ![Image 1: Pier 25 Turf Field](https://example.com/pier25.png) |
 
   Time | Sun
   6/7 | Mon
@@ -384,7 +385,8 @@ private val hrpFixture =
   10:00 AM | 12:00 PM |
   11:00 AM | |
 
-  Image: Pier 40 Courtyard East
+  Pier 40 Courtyard East Schedule
+  | ![Image 3: Pier 40 Courtyard East](https://example.com/pier40-east.png) |
 
   Time | Sun
   6/7 | Mon
@@ -395,6 +397,8 @@ private val hrpFixture =
   6:00 PM | | 5:30 PM–
   7:00 PM | |
   8:00 PM | | 11:30 PM
+
+  For non-emergencies, call 212-242-6427.
   """
     .trimIndent()
 

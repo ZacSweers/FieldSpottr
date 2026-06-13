@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
@@ -73,7 +75,8 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
-const val TIME_COLUMN_WEIGHT = 0.15f
+private val TimeColumnWidth = 64.dp
+private val FieldColumnWidth = 112.dp
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -95,7 +98,6 @@ fun PermitGrid(
     remember(group, liveAvailability) { liveAvailabilityForGrid(group, liveAvailability) }
   val numColumns = group.fields.size
 
-  val columnWeight = (1f - TIME_COLUMN_WEIGHT) / numColumns
   val itemHeight = 50.dp
 
   // Start at the earliest available permit or 8am
@@ -114,16 +116,17 @@ fun PermitGrid(
       density.run { (initialEarliestPermit * itemHeight).roundToPx() }
     }
 
-  val scrollState = rememberScrollState(initial = initialScrollPx)
+  val verticalScrollState = rememberScrollState(initial = initialScrollPx)
+  val horizontalScrollState = rememberScrollState()
   LaunchedEffect(permits) {
     if (permits == null) return@LaunchedEffect
     val earliestPermit =
       permits.fields.values
         .flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
         .minOrNull() ?: 8
-    scrollState.animateScrollTo(density.run { (earliestPermit * itemHeight).roundToPx() })
+    verticalScrollState.animateScrollTo(density.run { (earliestPermit * itemHeight).roundToPx() })
   }
-  val isScrolled by remember { derivedStateOf { scrollState.value > 0 } }
+  val isScrolled by remember { derivedStateOf { verticalScrollState.value > 0 } }
 
   Column(modifier) {
     // Names of the fields as a header
@@ -134,28 +137,30 @@ fun PermitGrid(
           verticalAlignment = CenterVertically,
         ) {
           if (cornerSlot == null) {
-            Spacer(Modifier.weight(TIME_COLUMN_WEIGHT))
+            Spacer(Modifier.width(TimeColumnWidth))
           } else {
-            Box(Modifier.weight(TIME_COLUMN_WEIGHT)) { cornerSlot() }
+            Box(Modifier.width(TimeColumnWidth)) { cornerSlot() }
           }
-          for (columnNumber in 0..<numColumns) {
-            val defaultTextStyle = MaterialTheme.typography.titleMedium
-            val textAlign = TextAlign.Center
-            AutoMeasureText(
-              modifier = Modifier.weight(columnWeight).fillMaxWidth(),
-              minSize = 12.sp,
-              maxSize = defaultTextStyle.fontSize,
-              textAlign = textAlign,
-            ) { fontSize ->
-              Text(
-                group.fields[columnNumber].displayName,
+          Row(Modifier.horizontalScroll(horizontalScrollState)) {
+            for (columnNumber in 0..<numColumns) {
+              val defaultTextStyle = MaterialTheme.typography.titleMedium
+              val textAlign = TextAlign.Center
+              AutoMeasureText(
+                modifier = Modifier.width(FieldColumnWidth),
+                minSize = 12.sp,
+                maxSize = defaultTextStyle.fontSize,
                 textAlign = textAlign,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                softWrap = false,
-                style = defaultTextStyle,
-                fontSize = fontSize,
-              )
+              ) { fontSize ->
+                Text(
+                  group.fields[columnNumber].displayName,
+                  textAlign = textAlign,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  softWrap = false,
+                  style = defaultTextStyle,
+                  fontSize = fontSize,
+                )
+              }
             }
           }
         }
@@ -171,7 +176,7 @@ fun PermitGrid(
     Row(
       modifier =
         Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-          .verticalScroll(scrollState)
+          .verticalScroll(verticalScrollState)
           .nowIndicator(selectedDate, itemHeight)
     ) {
       // Time column
@@ -179,7 +184,7 @@ fun PermitGrid(
         remember(weather, selectedDate) {
           weather?.hourly(selectedDate)?.associateBy { it.hour }
         }
-      Column(Modifier.weight(TIME_COLUMN_WEIGHT)) {
+      Column(Modifier.width(TimeColumnWidth)) {
         for (rowNumber in 0..<24) {
           Box(Modifier.height(itemHeight)) {
             // Time marker
@@ -215,17 +220,19 @@ fun PermitGrid(
       }
 
       val fields = permits?.fields ?: PermitState.EMPTY.fields
-      for (field in group.fields) {
-        val fieldStates = fields[field] ?: FieldState.EMPTY
-        PermitGridColumn(
-          fieldName = field.displayName,
-          fieldStates = fieldStates,
-          liveField = resolvedLiveAvailability?.fields?.get(field),
-          itemHeight = itemHeight,
-          modifier = Modifier.weight(columnWeight),
-          permits = permits,
-          onEventClick = onEventClick,
-        )
+      Row(Modifier.horizontalScroll(horizontalScrollState)) {
+        for (field in group.fields) {
+          val fieldStates = fields[field] ?: FieldState.EMPTY
+          PermitGridColumn(
+            fieldName = field.displayName,
+            fieldStates = fieldStates,
+            liveField = resolvedLiveAvailability?.fields?.get(field),
+            itemHeight = itemHeight,
+            modifier = Modifier.width(FieldColumnWidth),
+            permits = permits,
+            onEventClick = onEventClick,
+          )
+        }
       }
     }
   }

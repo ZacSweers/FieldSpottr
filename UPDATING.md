@@ -7,6 +7,37 @@ a Gradle JVM app:
 ./gradlew :generator:run --args=--output=.
 ```
 
+## Normal Availability Refresh
+
+For normal local updates, run:
+
+```bash
+scripts/update-availability.sh
+```
+
+This dumps the Hudson River Park page and NYC Parks live API responses through local headless
+Chrome, then runs the generator with those dumped sources. The scheduled GitHub Actions refresh is
+disabled for now because NYC Parks/Cloudflare frequently blocks GitHub-hosted runner traffic, which
+can otherwise produce misleading generated diffs.
+
+Useful environment overrides:
+
+```bash
+LIVE_DAYS=14 scripts/update-availability.sh
+CHROME=/path/to/chrome scripts/update-availability.sh
+OUTPUT_ROOT=/tmp/fieldspottr-output scripts/update-availability.sh
+```
+
+`LIVE_DAYS` controls how many NYC Parks live dates are dumped, `CHROME` selects a specific
+Chrome/Chromium binary, and `OUTPUT_ROOT` writes generated files somewhere other than the repo root.
+
+The generated manifest lists one hash per area feed. App refreshes download only stale/missing area
+feeds, and each feed replaces that area's DB rows transactionally after it parses successfully.
+Failed manifest or feed downloads keep the existing cached DB data in place.
+
+`Area.csvUrl` is optional catalog metadata for generator/debug use. The app should not fetch NYC
+Parks CSVs or live provider APIs directly; generated feeds are the runtime availability contract.
+
 ## NYC Parks
 
 NYC Parks areas can be added from their issued-permits page. The helper script fetches the page and
@@ -39,7 +70,7 @@ scripts/add_nyc_park.py <url> --no-live-ids
 After adding or adjusting a park, regenerate repo data and run generator tests:
 
 ```bash
-./gradlew :generator:run --args=--output=.
+scripts/update-availability.sh
 ./gradlew :generator:test
 ```
 
@@ -86,8 +117,17 @@ Hudson River Park schedules are parsed from the official fields page:
 
 https://hudsonriverpark.org/visit/events/permits/fields/
 
-Automated fetches may be blocked by the site, so update the checked-in source snapshot manually when
-the weekly schedule changes.
+For normal updates, use the local update script described above:
+
+```bash
+scripts/update-availability.sh
+```
+
+The script first tries a local Chrome dump of the official HRP page. If that is blocked by
+Cloudflare, it falls back to a reader-format copy of the same page and feeds that source to the
+generator.
+
+If both automated sources fail, update the checked-in source snapshot manually.
 
 1. Open the HRP fields page in a normal browser.
 2. Open DevTools Console and copy the full page HTML:

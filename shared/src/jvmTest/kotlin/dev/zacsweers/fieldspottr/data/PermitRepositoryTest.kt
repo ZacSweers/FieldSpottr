@@ -48,7 +48,7 @@ class PermitRepositoryTest {
     )
 
   private val repository =
-    PermitRepository(
+    PermitRepositoryImpl(
       appDirs,
       json,
       Logger.Companion,
@@ -166,7 +166,7 @@ class PermitRepositoryTest {
           } ?: respond("", HttpStatusCode.NotFound)
         }
       )
-    return PermitRepository(
+    return PermitRepositoryImpl(
       appDirs,
       json,
       Logger.Companion,
