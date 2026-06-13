@@ -1013,18 +1013,39 @@ internal fun String.toHrpRows(area: Area): List<AvailabilityFeedRow> {
   val fieldIdsByTitle =
     area.fieldGroups.flatMap { group -> group.fields.map { it.name to it } }.toMap()
   val text = toScheduleText()
-  val year = Regex("""\b(\d{4})\b""").findAll(text).lastOrNull()?.value?.toIntOrNull()
+  val year = text.hrpScheduleYear()
   val rows = mutableListOf<AvailabilityFeedRow>()
   val lines = text.lines().map(String::trim).filter(String::isNotEmpty)
   for ((index, line) in lines.withIndex()) {
-    val field = hrpFields[line.removePrefix("Image:").trim()] ?: continue
+    val field = hrpFields[line.toHrpFieldTitle()] ?: continue
     val scheduleLines =
-      lines.drop(index + 1).takeWhile { !it.startsWith("Image:") && it !in hrpFields.keys }
+      lines.drop(index + 1).takeWhile { nextLine ->
+        val title = nextLine.toHrpFieldTitle()
+        !nextLine.startsWith("Image:") && title !in hrpFields
+      }
     val dates = scheduleLines.dateColumns(year ?: continue)
     if (dates.isEmpty()) continue
     rows += scheduleLines.toHrpScheduleRows(field, fieldIdsByTitle, dates)
   }
   return rows
+}
+
+private fun String.hrpScheduleYear(): Int? {
+  val scheduleHeading =
+    Regex(
+        """(?i)\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\s*[–-]\s*\d{1,2},\s*(\d{4})\b"""
+      )
+      .find(this)
+  return scheduleHeading?.groupValues?.get(1)?.toIntOrNull()
+    ?: Regex("""\b(\d{4})\b""").findAll(this).firstOrNull()?.value?.toIntOrNull()
+}
+
+private fun String.toHrpFieldTitle(): String {
+  val trimmed = removePrefix("Image:").trim()
+  Regex("""!\[[^:]+:\s*([^]]+)]""").find(trimmed)?.let { match ->
+    return match.groupValues[1].trim()
+  }
+  return trimmed.removeSuffix(" Schedule").trim()
 }
 
 private fun String.toScheduleText(): String {
@@ -1108,7 +1129,7 @@ private fun List<String>.toHrpScheduleRows(
   val pendingStarts = Array<LocalTime?>(dates.size) { null }
   for (line in this) {
     if (!line.contains("|")) continue
-    val cells = line.split("|").map { it.trim() }
+    val cells = line.toHrpTableCells()
     if (cells.firstOrNull()?.toLocalTimeOrNull() == null) continue
     cells.drop(1).take(dates.size).forEachIndexed { column, cell ->
       val normalized = cell.removeSuffix(" |").trim()
@@ -1135,6 +1156,10 @@ private fun List<String>.toHrpScheduleRows(
     }
   }
   return rows
+}
+
+private fun String.toHrpTableCells(): List<String> {
+  return split("|").map(String::trim).dropWhile(String::isEmpty).dropLastWhile(String::isEmpty)
 }
 
 private fun HrpField.toRow(

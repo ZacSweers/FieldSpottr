@@ -21,6 +21,7 @@ import dev.zacsweers.fieldspottr.util.lazySuspend
 import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesBinding
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
@@ -70,14 +71,38 @@ internal fun SqlDriver.createFSDatabase(): FSDatabase {
   return FSDatabase(this)
 }
 
+// Really abstracted just for Metro testing
+interface PermitRepository {
+  val loadingMessage: StateFlow<String?>
+
+  fun areasFlow(): StateFlow<Areas>
+
+  fun useBuiltInAreas()
+
+  suspend fun populateDb(forceRefresh: Boolean): Boolean
+
+  fun permitsByGroup(group: String, org: String, start: LocalDate): Flow<List<DbPermit>>
+
+  fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?>
+
+  fun lastUpdateFlow(areaName: String): Flow<Instant?>
+
+  fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>>
+
+  fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>>
+
+  fun permitsFlow(date: LocalDate, days: Int, group: String): Flow<List<DbPermit>>
+}
+
 @SingleIn(AppScope::class)
-class PermitRepository(
+@ContributesBinding(AppScope::class)
+class PermitRepositoryImpl(
   private val appDirs: FSAppDirs,
   private val json: Json,
   private val logger: Logger,
   private val db: suspend () -> FSDatabase,
   private val client: Lazy<HttpClient>,
-) {
+): PermitRepository {
 
   @Inject
   constructor(
@@ -106,7 +131,7 @@ class PermitRepository(
   private val _loadingMessage = MutableStateFlow<String?>(null)
 
   /** Observable loading/error message for UI to display. */
-  val loadingMessage: StateFlow<String?> = _loadingMessage
+  override val loadingMessage: StateFlow<String?> = _loadingMessage
 
   // Semaphore channel — only one populateDb runs at a time, concurrent calls are dropped
   private val populateSemaphore = Channel<Unit>(1)
@@ -119,14 +144,14 @@ class PermitRepository(
     return readValidAreas(areasJson) ?: areasStateFlow.value
   }
 
-  fun areasFlow(): StateFlow<Areas> = areasStateFlow
+  override fun areasFlow(): StateFlow<Areas> = areasStateFlow
 
-  fun useBuiltInAreas() {
+  override fun useBuiltInAreas() {
     log("Forcing built-in areas")
     areasStateFlow.value = Areas.default
   }
 
-  suspend fun populateDb(forceRefresh: Boolean): Boolean {
+  override suspend fun populateDb(forceRefresh: Boolean): Boolean {
     // Only one populateDb at a time — concurrent calls are dropped
     if (!populateSemaphore.trySend(Unit).isSuccess) return true
     return try {
@@ -203,7 +228,7 @@ class PermitRepository(
     }
   }
 
-  fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {
+  override fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {
     return flow {
         val result = db().fsdbQueries.permitDateRange().executeAsOne()
         val minMillis = result.minDate
@@ -220,7 +245,7 @@ class PermitRepository(
       .flowOn(Dispatchers.IO)
   }
 
-  fun lastUpdateFlow(areaName: String): Flow<Instant?> {
+  override fun lastUpdateFlow(areaName: String): Flow<Instant?> {
     return flow {
         val millis = db().fsdbQueries.lastAreaUpdate(areaName).executeAsOneOrNull()
         emit(millis?.let { Instant.fromEpochMilliseconds(it) })
@@ -228,7 +253,7 @@ class PermitRepository(
       .flowOn(Dispatchers.IO)
   }
 
-  fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
+  override fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>> {
     val windowStart = windowBoundaryMillis(date, startHour)
     val windowEnd = windowBoundaryMillis(date, endHour)
     return flow {
@@ -252,7 +277,7 @@ class PermitRepository(
       .toEpochMilliseconds()
   }
 
-  fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
+  override fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = startTime + 1.days.inWholeMilliseconds
     log("permitsFlow query: date=$date, group=$group, startTime=$startTime, endTime=$endTime")
@@ -264,7 +289,7 @@ class PermitRepository(
   }
 
   /** Like [permitsFlow] but spanning [days] days starting at [date]. */
-  fun permitsFlow(date: LocalDate, days: Int, group: String): Flow<List<DbPermit>> {
+  override fun permitsFlow(date: LocalDate, days: Int, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = date.plus(days, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
     return flow {
@@ -507,7 +532,7 @@ class PermitRepository(
     }
   }
 
-  fun permitsByGroup(group: String, org: String, start: LocalDate): Flow<List<DbPermit>> {
+  override fun permitsByGroup(group: String, org: String, start: LocalDate): Flow<List<DbPermit>> {
     return flow {
         emitAll(
           db()

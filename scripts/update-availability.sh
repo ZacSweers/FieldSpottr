@@ -10,6 +10,8 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-.}"
 HRP_DIR="build/hrp"
 NYC_LIVE_DIR="build/nyc-live"
 USER_AGENT="${USER_AGENT:-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36}"
+HRP_URL="https://hudsonriverpark.org/visit/events/permits/fields/"
+HRP_READER_URL="https://r.jina.ai/http://r.jina.ai/http://$HRP_URL"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required. Install it with: brew install jq" >&2
@@ -55,8 +57,17 @@ echo "Dumping Hudson River Park field schedule"
   --disable-software-rasterizer \
   --log-level=3 \
   --dump-dom \
-  https://hudsonriverpark.org/visit/events/permits/fields/ \
+  "$HRP_URL" \
   > "$HRP_DIR/fields.html" || rm -f "$HRP_DIR/fields.html"
+
+if [[ -s "$HRP_DIR/fields.html" ]] && grep -qi "Cloudflare" "$HRP_DIR/fields.html"; then
+  rm -f "$HRP_DIR/fields.html"
+fi
+
+if [[ ! -s "$HRP_DIR/fields.html" ]]; then
+  echo "Dumping Hudson River Park field schedule via reader fallback"
+  curl -fsSL "$HRP_READER_URL" > "$HRP_DIR/fields.md" || rm -f "$HRP_DIR/fields.md"
+fi
 
 TODAY="$(TZ=America/New_York date +%F)"
 
@@ -94,6 +105,8 @@ jq -r '.. | objects | .apiLocationId? // empty' areas.json | sort -u |
 ARGS="--output=$OUTPUT_ROOT --live-days=$LIVE_DAYS --nyc-live-source-dir=$NYC_LIVE_DIR"
 if [[ -s "$HRP_DIR/fields.html" ]]; then
   ARGS="$ARGS --hrp-source-file=$HRP_DIR/fields.html"
+elif [[ -s "$HRP_DIR/fields.md" ]]; then
+  ARGS="$ARGS --hrp-source-file=$HRP_DIR/fields.md"
 fi
 
 ./gradlew :generator:run --args="$ARGS"
