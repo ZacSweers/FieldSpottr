@@ -17,7 +17,7 @@ kotlin {
   sourceSets {
     commonMain {
       dependencies {
-        api(compose.runtime)
+        api(libs.compose.runtime)
         api(libs.kotlinx.immutable)
         api(libs.kotlinx.serialization.core)
       }
