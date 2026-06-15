@@ -3,23 +3,19 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -40,17 +36,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Alignment.Companion.CenterHorizontally
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,11 +74,8 @@ import kotlin.time.Instant
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
-import kotlinx.datetime.minus
-import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
 @CommonParcelize
@@ -421,17 +410,12 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           }
         }
 
-        val datePulse = remember { Animatable(1f) }
-        val scope = rememberCoroutineScope()
-        val haptics = LocalHapticFeedback.current
-
         val cornerSlot =
           remember(state.date, state.weather) {
             movableContentOf {
               DateSelector(
                 state.date,
                 id = "area",
-                contentScale = datePulse.value,
                 permitDateRange = state.permitDateRange,
                 weather = state.weather,
               ) { newDate ->
@@ -440,8 +424,14 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
             }
           }
 
-        var dragOffset by remember { mutableFloatStateOf(0f) }
-        val draggableState = rememberDraggableState { delta -> dragOffset += delta }
+        // Retain scroll separately per group/date. The first load can jump to the first permit, but
+        // returning from details should restore the user's vertical and horizontal grid position.
+        val gridVerticalScrollState =
+          rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
+        val gridHorizontalScrollState =
+          rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
+        var autoScrollToFirstPermit by
+          rememberRetained(state.selectedGroup, state.date) { mutableStateOf(true) }
 
         PermitGrid(
           state.selectedGroup,
@@ -451,35 +441,11 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           liveAvailability = state.liveAvailability,
           weather = state.weather,
           cornerSlot = cornerSlot,
-          modifier =
-            Modifier.align(CenterHorizontally)
-              .weight(1f)
-              .draggable(
-                state = draggableState,
-                orientation = Orientation.Horizontal,
-                onDragStarted = {
-                  dragOffset = 0f
-                  haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  scope.launch { datePulse.animateTo(0.8f, tween(150)) }
-                },
-                onDragStopped = {
-                  if (dragOffset > 100f) {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    state.eventSink(
-                      AreaScreen.Event.FilterDate(state.date.minus(1, DateTimeUnit.DAY))
-                    )
-                  } else if (dragOffset < -100f) {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    state.eventSink(
-                      AreaScreen.Event.FilterDate(state.date.plus(1, DateTimeUnit.DAY))
-                    )
-                  }
-                  dragOffset = 0f
-                  scope.launch {
-                    datePulse.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                  }
-                },
-              ),
+          modifier = Modifier.fillMaxWidth().weight(1f),
+          verticalScrollState = gridVerticalScrollState,
+          horizontalScrollState = gridHorizontalScrollState,
+          autoScrollToFirstPermit = autoScrollToFirstPermit,
+          onAutoScrolledToFirstPermit = { autoScrollToFirstPermit = false },
         ) { fieldName, index, event, orgVisible ->
           state.eventSink(AreaScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible))
         }

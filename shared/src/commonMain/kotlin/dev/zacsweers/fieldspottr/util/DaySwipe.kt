@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -34,6 +35,7 @@ class DaySwipeState internal constructor(internal val pulse: Animatable<Float, *
     get() = pulse.value
 
   internal var dragOffset by mutableFloatStateOf(0f)
+  internal var thresholdDirection by mutableIntStateOf(0)
 }
 
 @Composable
@@ -55,22 +57,37 @@ fun Modifier.daySwipeable(
   val haptics = LocalHapticFeedback.current
 
   return this.draggable(
-    state = rememberDraggableState { delta -> state.dragOffset += delta },
+    state =
+      rememberDraggableState { delta ->
+        state.dragOffset += delta
+        // Fire threshold haptics once per crossing direction, not continuously while dragging past
+        // the threshold. Resetting on drag start/stop lets a future drag pulse again.
+        val direction =
+          when {
+            state.dragOffset > DRAG_THRESHOLD -> -1
+            state.dragOffset < -DRAG_THRESHOLD -> 1
+            else -> 0
+          }
+        if (direction != 0 && direction != state.thresholdDirection) {
+          state.thresholdDirection = direction
+          haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+      },
     orientation = Orientation.Horizontal,
     onDragStarted = {
       state.dragOffset = 0f
+      state.thresholdDirection = 0
       haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
       scope.launch { state.pulse.animateTo(0.8f, tween(150)) }
     },
     onDragStopped = {
       if (state.dragOffset > DRAG_THRESHOLD) {
-        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onDateChanged(currentDate.minus(1, DateTimeUnit.DAY))
       } else if (state.dragOffset < -DRAG_THRESHOLD) {
-        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onDateChanged(currentDate.plus(1, DateTimeUnit.DAY))
       }
       state.dragOffset = 0f
+      state.thresholdDirection = 0
       scope.launch {
         state.pulse.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
       }
