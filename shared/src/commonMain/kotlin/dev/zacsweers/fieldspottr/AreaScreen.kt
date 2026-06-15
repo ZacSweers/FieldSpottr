@@ -424,6 +424,8 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
             }
           }
 
+        // Retain scroll separately per group/date. The first load can jump to the first permit, but
+        // returning from details should restore the user's vertical and horizontal grid position.
         val gridVerticalScrollState =
           rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
         val gridHorizontalScrollState =

@@ -134,10 +134,14 @@ fun PermitGrid(
   BoxWithConstraints(modifier) {
     val availableFieldWidth =
       (maxWidth - GridHorizontalPadding * 2 - TimeColumnWidth).coerceAtLeast(0.dp)
+    // Wide screens should stretch columns to fill the viewport; narrow screens keep a useful
+    // minimum column width and let the field area scroll horizontally.
     val fieldAreaWidth = maxOf(FieldColumnMinWidth * numColumns, availableFieldWidth)
     val fieldColumnWidth = fieldAreaWidth / numColumns.toFloat()
     val contentHeight = itemHeight * 24
 
+    // The grid owns retained scroll states, so only auto-jump to the first permit once for a
+    // fresh group/date. Returning to a screen should preserve the user's scroll position.
     LaunchedEffect(
       permits,
       autoScrollToFirstPermit,
@@ -180,6 +184,7 @@ fun PermitGrid(
               Modifier.weight(1f)
                 .clipToBounds()
                 .horizontalOverflowCue(showPreviousFields, showMoreFields)
+                // Share horizontal scroll with the body so field titles stay aligned.
                 .horizontalScroll(horizontalScrollState)
             ) {
               Row(Modifier.width(fieldAreaWidth)) {
@@ -230,6 +235,7 @@ fun PermitGrid(
           Modifier.width(TimeColumnWidth)
             .fillMaxHeight()
             .clipToBounds()
+            // Share vertical scroll with the field body so time labels stay aligned.
             .verticalScroll(verticalScrollState)
         ) {
           Column(Modifier.height(contentHeight)) {
@@ -274,6 +280,7 @@ fun PermitGrid(
           Modifier.weight(1f)
             .fillMaxHeight()
             .clipToBounds()
+            // Vertical and horizontal scrolling live on the body viewport, not the whole screen.
             .verticalScroll(verticalScrollState)
             .horizontalScroll(horizontalScrollState)
         ) {
@@ -306,6 +313,8 @@ private fun Modifier.horizontalOverflowCue(
   showPrevious: Boolean,
   showMore: Boolean,
 ): Modifier {
+  // Fade the cue itself in/out as scrollability changes. The gradient still fades spatially below;
+  // this alpha handles temporal entry/exit.
   val previousAlpha by
     animateFloatAsState(
       targetValue = if (showPrevious) 1f else 0f,
@@ -327,6 +336,8 @@ private fun Modifier.horizontalOverflowCue(
     drawContent()
     val cueWidth = 112.dp.toPx().coerceAtMost(size.width)
     val transparentTint = surface.copy(alpha = 0f)
+    // Brush coordinates are in the draw scope, not relative to topLeft. Pin start/end to each cue
+    // rect so the most-inside edge is truly transparent instead of starting mid-gradient.
     if (previousAlpha > 0f) {
       drawRect(
         brush =
@@ -444,6 +455,7 @@ internal fun permitGridColumnItems(
 private fun FreeGridSegments(startSlot: Int, endSlot: Int, itemHeight: Dp) {
   var currentSlot = startSlot
   while (currentSlot < endSlot) {
+    // Split free space at hour boundaries so hour separators remain visible even between events.
     val nextHourSlot = if (currentSlot % 2 == 0) currentSlot + 2 else currentSlot + 1
     val nextSlot = minOf(endSlot, nextHourSlot)
     val modifier =
@@ -532,6 +544,8 @@ private fun Modifier.gridBottomDivider(): Modifier {
   val color = MaterialTheme.colorScheme.outlineVariant
   return drawWithContent {
     drawContent()
+    // Draw a physical-pixel separator instead of a dp-sized composable divider. Adjacent grid
+    // segments can otherwise land on fractional pixels and make some hour lines look doubled.
     drawLine(
       color = color,
       start = Offset(0f, size.height - 0.5f),

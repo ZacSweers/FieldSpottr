@@ -386,6 +386,8 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
         )
       }
 
+      // Retain scroll separately per group/date. The first load can jump to the first permit, but
+      // navigating away and back should restore wherever the user left the grid.
       val gridVerticalScrollState =
         rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
       val gridHorizontalScrollState =

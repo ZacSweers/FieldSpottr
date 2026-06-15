@@ -60,6 +60,8 @@ fun Modifier.daySwipeable(
     state =
       rememberDraggableState { delta ->
         state.dragOffset += delta
+        // Fire threshold haptics once per crossing direction, not continuously while dragging past
+        // the threshold. Resetting on drag start/stop lets a future drag pulse again.
         val direction =
           when {
             state.dragOffset > DRAG_THRESHOLD -> -1
