@@ -10,6 +10,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
@@ -65,8 +66,6 @@ import dev.zacsweers.fieldspottr.ui.currentNyHour
 import dev.zacsweers.fieldspottr.ui.formatHour12
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
-import dev.zacsweers.fieldspottr.util.daySwipeable
-import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.days
@@ -285,7 +284,6 @@ fun PermitGridPresenter(
 @CircuitInject(PermitGridScreen::class, AppScope::class)
 @Composable
 fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
-  val daySwipe = rememberDaySwipeState()
   Scaffold(
     modifier = modifier,
     containerColor = Color.Transparent,
@@ -388,13 +386,19 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
         )
       }
 
+      val gridVerticalScrollState =
+        rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
+      val gridHorizontalScrollState =
+        rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
+      var autoScrollToFirstPermit by
+        rememberRetained(state.selectedGroup, state.date) { mutableStateOf(true) }
+
       val cornerSlot =
-        remember(state.date, daySwipe.contentScale, state.weather) {
+        remember(state.date, state.weather) {
           movableContentOf {
             DateSelector(
               state.date,
               id = "grid",
-              contentScale = daySwipe.contentScale,
               permitDateRange = state.permitDateRange,
               weather = state.weather,
             ) { newDate ->
@@ -472,10 +476,11 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
               liveAvailability = state.liveAvailability,
               weather = state.weather,
               cornerSlot = cornerSlot,
-              modifier =
-                Modifier.fillMaxSize().daySwipeable(daySwipe, state.date) { newDate ->
-                  state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
-                },
+              modifier = Modifier.fillMaxSize(),
+              verticalScrollState = gridVerticalScrollState,
+              horizontalScrollState = gridHorizontalScrollState,
+              autoScrollToFirstPermit = autoScrollToFirstPermit,
+              onAutoScrolledToFirstPermit = { autoScrollToFirstPermit = false },
             ) { fieldName, index, event, orgVisible ->
               state.eventSink(
                 PermitGridScreen.Event.ShowEventDetail(fieldName, index, event, orgVisible)

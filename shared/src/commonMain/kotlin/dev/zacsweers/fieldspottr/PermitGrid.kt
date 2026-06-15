@@ -4,16 +4,21 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,8 +42,11 @@ import androidx.compose.ui.Alignment.Companion.BottomCenter
 import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.graphicsLayer
@@ -75,8 +83,10 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
+private val GridHorizontalPadding = 16.dp
 private val TimeColumnWidth = 64.dp
-private val FieldColumnWidth = 112.dp
+private val FieldColumnMinWidth = 112.dp
+private const val OverflowCueFadeDurationMillis = 280
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -86,6 +96,10 @@ fun PermitGrid(
   areas: Areas,
   selectedDate: LocalDate,
   modifier: Modifier = Modifier,
+  verticalScrollState: ScrollState = rememberScrollState(),
+  horizontalScrollState: ScrollState = rememberScrollState(),
+  autoScrollToFirstPermit: Boolean = true,
+  onAutoScrolledToFirstPermit: () -> Unit = {},
   liveAvailability: LiveGroupAvailability? = null,
   weather: WeatherForecast? = null,
   cornerSlot: (@Composable () -> Unit)? = null,
@@ -97,6 +111,7 @@ fun PermitGrid(
   val resolvedLiveAvailability =
     remember(group, liveAvailability) { liveAvailabilityForGrid(group, liveAvailability) }
   val numColumns = group.fields.size
+  if (numColumns == 0) return
 
   val itemHeight = 50.dp
 
@@ -116,124 +131,241 @@ fun PermitGrid(
       density.run { (initialEarliestPermit * itemHeight).roundToPx() }
     }
 
-  val verticalScrollState = rememberScrollState(initial = initialScrollPx)
-  val horizontalScrollState = rememberScrollState()
-  LaunchedEffect(permits) {
-    if (permits == null) return@LaunchedEffect
-    val earliestPermit =
-      permits.fields.values
-        .flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
-        .minOrNull() ?: 8
-    verticalScrollState.animateScrollTo(density.run { (earliestPermit * itemHeight).roundToPx() })
-  }
-  val isScrolled by remember { derivedStateOf { verticalScrollState.value > 0 } }
+  BoxWithConstraints(modifier) {
+    val availableFieldWidth =
+      (maxWidth - GridHorizontalPadding * 2 - TimeColumnWidth).coerceAtLeast(0.dp)
+    val fieldAreaWidth = maxOf(FieldColumnMinWidth * numColumns, availableFieldWidth)
+    val fieldColumnWidth = fieldAreaWidth / numColumns.toFloat()
+    val contentHeight = itemHeight * 24
 
-  Column(modifier) {
-    // Names of the fields as a header
-    Surface {
-      Box {
-        Row(
-          modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
-          verticalAlignment = CenterVertically,
-        ) {
-          if (cornerSlot == null) {
-            Spacer(Modifier.width(TimeColumnWidth))
-          } else {
-            Box(Modifier.width(TimeColumnWidth)) { cornerSlot() }
+    LaunchedEffect(
+      permits,
+      autoScrollToFirstPermit,
+      initialScrollPx,
+      verticalScrollState.maxValue,
+    ) {
+      if (permits == null) return@LaunchedEffect
+      if (!autoScrollToFirstPermit) return@LaunchedEffect
+      val earliestPermit =
+        permits.fields.values
+          .flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
+          .minOrNull() ?: 8
+      val target = density.run { (earliestPermit * itemHeight).roundToPx() }
+      verticalScrollState.scrollTo(target.coerceAtMost(verticalScrollState.maxValue))
+      onAutoScrolledToFirstPermit()
+    }
+    val isScrolled by remember { derivedStateOf { verticalScrollState.value > 0 } }
+    val showPreviousFields by remember { derivedStateOf { horizontalScrollState.value > 0 } }
+    val showMoreFields by remember {
+      derivedStateOf { horizontalScrollState.value < horizontalScrollState.maxValue }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+      // Names of the fields as a header
+      Surface {
+        Box {
+          Row(
+            modifier =
+              Modifier.fillMaxWidth()
+                .padding(horizontal = GridHorizontalPadding)
+                .padding(bottom = 8.dp),
+            verticalAlignment = CenterVertically,
+          ) {
+            if (cornerSlot == null) {
+              Spacer(Modifier.width(TimeColumnWidth))
+            } else {
+              Box(Modifier.width(TimeColumnWidth)) { cornerSlot() }
+            }
+            Box(
+              Modifier.weight(1f)
+                .clipToBounds()
+                .horizontalOverflowCue(showPreviousFields, showMoreFields)
+                .horizontalScroll(horizontalScrollState)
+            ) {
+              Row(Modifier.width(fieldAreaWidth)) {
+                for (columnNumber in 0..<numColumns) {
+                  val defaultTextStyle = MaterialTheme.typography.titleMedium
+                  val textAlign = TextAlign.Center
+                  AutoMeasureText(
+                    modifier = Modifier.width(fieldColumnWidth),
+                    minSize = 12.sp,
+                    maxSize = defaultTextStyle.fontSize,
+                    textAlign = textAlign,
+                  ) { fontSize ->
+                    Text(
+                      group.fields[columnNumber].displayName,
+                      textAlign = textAlign,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      softWrap = false,
+                      style = defaultTextStyle,
+                      fontSize = fontSize,
+                    )
+                  }
+                }
+              }
+            }
           }
-          Row(Modifier.horizontalScroll(horizontalScrollState)) {
-            for (columnNumber in 0..<numColumns) {
-              val defaultTextStyle = MaterialTheme.typography.titleMedium
-              val textAlign = TextAlign.Center
-              AutoMeasureText(
-                modifier = Modifier.width(FieldColumnWidth),
-                minSize = 12.sp,
-                maxSize = defaultTextStyle.fontSize,
-                textAlign = textAlign,
-              ) { fontSize ->
-                Text(
-                  group.fields[columnNumber].displayName,
-                  textAlign = textAlign,
-                  fontWeight = FontWeight.Bold,
-                  maxLines = 1,
-                  softWrap = false,
-                  style = defaultTextStyle,
-                  fontSize = fontSize,
-                )
+          androidx.compose.animation.AnimatedVisibility(
+            visible = isScrolled,
+            modifier = Modifier.align(BottomCenter),
+          ) {
+            HorizontalDivider()
+          }
+        }
+      }
+
+      Row(
+        modifier =
+          Modifier.weight(1f)
+            .fillMaxWidth()
+            .padding(start = GridHorizontalPadding, end = GridHorizontalPadding, bottom = 16.dp)
+      ) {
+        // Time column
+        val hourlyWeather =
+          remember(weather, selectedDate) {
+            weather?.hourly(selectedDate)?.associateBy { it.hour }
+          }
+        Box(
+          Modifier.width(TimeColumnWidth)
+            .fillMaxHeight()
+            .clipToBounds()
+            .verticalScroll(verticalScrollState)
+        ) {
+          Column(Modifier.height(contentHeight)) {
+            for (rowNumber in 0..<24) {
+              Box(Modifier.height(itemHeight)) {
+                // Time marker
+                val adjustedTime = ((rowNumber) % 12).let { if (it == 0) 12 else it }
+                val amPm = if (rowNumber < 12) "AM" else "PM"
+                val hourForecast = hourlyWeather?.get(rowNumber)
+                val isRainyHour = hourForecast?.isRainy == true
+                Row(
+                  modifier = Modifier.align(TopEnd).padding(4.dp),
+                  verticalAlignment = CenterVertically,
+                  horizontalArrangement = spacedBy(2.dp),
+                ) {
+                  if (hourForecast != null && hourForecast.condition.isPrecipitation) {
+                    WeatherGlyph(
+                      hourForecast.condition,
+                      size = 11.dp,
+                      tint =
+                        if (isRainyHour) MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                  Text(
+                    "$adjustedTime $amPm",
+                    textAlign = TextAlign.Center,
+                    fontWeight = FontWeight.Bold,
+                    color =
+                      if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                  )
+                }
               }
             }
           }
         }
-        androidx.compose.animation.AnimatedVisibility(
-          visible = isScrolled,
-          modifier = Modifier.align(BottomCenter),
-        ) {
-          HorizontalDivider()
-        }
-      }
-    }
 
-    Row(
-      modifier =
-        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-          .verticalScroll(verticalScrollState)
-          .nowIndicator(selectedDate, itemHeight)
-    ) {
-      // Time column
-      val hourlyWeather =
-        remember(weather, selectedDate) {
-          weather?.hourly(selectedDate)?.associateBy { it.hour }
-        }
-      Column(Modifier.width(TimeColumnWidth)) {
-        for (rowNumber in 0..<24) {
-          Box(Modifier.height(itemHeight)) {
-            // Time marker
-            val adjustedTime = ((rowNumber) % 12).let { if (it == 0) 12 else it }
-            val amPm = if (rowNumber < 12) "AM" else "PM"
-            val hourForecast = hourlyWeather?.get(rowNumber)
-            val isRainyHour = hourForecast?.isRainy == true
-            Row(
-              modifier = Modifier.align(TopEnd).padding(4.dp),
-              verticalAlignment = CenterVertically,
-              horizontalArrangement = spacedBy(2.dp),
-            ) {
-              if (hourForecast != null && hourForecast.condition.isPrecipitation) {
-                WeatherGlyph(
-                  hourForecast.condition,
-                  size = 11.dp,
-                  tint =
-                    if (isRainyHour) MaterialTheme.colorScheme.tertiary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              Text(
-                "$adjustedTime $amPm",
-                textAlign = TextAlign.Center,
-                fontWeight = FontWeight.Bold,
-                color = if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
+        val fields = permits?.fields ?: PermitState.EMPTY.fields
+        Box(
+          Modifier.weight(1f)
+            .fillMaxHeight()
+            .clipToBounds()
+            .verticalScroll(verticalScrollState)
+            .horizontalScroll(horizontalScrollState)
+        ) {
+          Row(
+            Modifier.width(fieldAreaWidth)
+              .height(contentHeight)
+              .nowIndicator(selectedDate, itemHeight)
+          ) {
+            for (field in group.fields) {
+              val fieldStates = fields[field] ?: FieldState.EMPTY
+              PermitGridColumn(
+                fieldName = field.displayName,
+                fieldStates = fieldStates,
+                liveField = resolvedLiveAvailability?.fields?.get(field),
+                itemHeight = itemHeight,
+                modifier = Modifier.width(fieldColumnWidth),
+                permits = permits,
+                onEventClick = onEventClick,
               )
             }
           }
         }
       }
+    }
+  }
+}
 
-      val fields = permits?.fields ?: PermitState.EMPTY.fields
-      Row(Modifier.horizontalScroll(horizontalScrollState)) {
-        for (field in group.fields) {
-          val fieldStates = fields[field] ?: FieldState.EMPTY
-          PermitGridColumn(
-            fieldName = field.displayName,
-            fieldStates = fieldStates,
-            liveField = resolvedLiveAvailability?.fields?.get(field),
-            itemHeight = itemHeight,
-            modifier = Modifier.width(FieldColumnWidth),
-            permits = permits,
-            onEventClick = onEventClick,
-          )
-        }
-      }
+@Composable
+private fun Modifier.horizontalOverflowCue(
+  showPrevious: Boolean,
+  showMore: Boolean,
+): Modifier {
+  val previousAlpha by
+    animateFloatAsState(
+      targetValue = if (showPrevious) 1f else 0f,
+      animationSpec =
+        tween(durationMillis = OverflowCueFadeDurationMillis, easing = FastOutSlowInEasing),
+      visibilityThreshold = 0.01f,
+      label = "previousFieldsCue",
+    )
+  val moreAlpha by
+    animateFloatAsState(
+      targetValue = if (showMore) 1f else 0f,
+      animationSpec =
+        tween(durationMillis = OverflowCueFadeDurationMillis, easing = FastOutSlowInEasing),
+      visibilityThreshold = 0.01f,
+      label = "moreFieldsCue",
+    )
+  val surface = MaterialTheme.colorScheme.surface
+  return drawWithContent {
+    drawContent()
+    val cueWidth = 112.dp.toPx().coerceAtMost(size.width)
+    val transparentTint = surface.copy(alpha = 0f)
+    if (previousAlpha > 0f) {
+      drawRect(
+        brush =
+          Brush.horizontalGradient(
+            colorStops =
+              arrayOf(
+                0f to surface.copy(alpha = 0.75f * previousAlpha),
+                0.2f to surface.copy(alpha = 0.38f * previousAlpha),
+                0.4f to surface.copy(alpha = 0.16f * previousAlpha),
+                0.6f to surface.copy(alpha = 0.05f * previousAlpha),
+                0.8f to surface.copy(alpha = 0.01f * previousAlpha),
+                1f to transparentTint,
+              ),
+            startX = 0f,
+            endX = cueWidth,
+          ),
+        size = Size(cueWidth, size.height),
+      )
+    }
+    if (moreAlpha > 0f) {
+      val cueStart = size.width - cueWidth
+      drawRect(
+        brush =
+          Brush.horizontalGradient(
+            colorStops =
+              arrayOf(
+                0f to transparentTint,
+                0.2f to surface.copy(alpha = 0.01f * moreAlpha),
+                0.4f to surface.copy(alpha = 0.05f * moreAlpha),
+                0.6f to surface.copy(alpha = 0.16f * moreAlpha),
+                0.8f to surface.copy(alpha = 0.38f * moreAlpha),
+                1f to surface.copy(alpha = 0.75f * moreAlpha),
+              ),
+            startX = cueStart,
+            endX = size.width,
+          ),
+        topLeft = Offset(cueStart, 0f),
+        size = Size(cueWidth, size.height),
+      )
     }
   }
 }
@@ -314,11 +446,11 @@ private fun FreeGridSegments(startSlot: Int, endSlot: Int, itemHeight: Dp) {
   while (currentSlot < endSlot) {
     val nextHourSlot = if (currentSlot % 2 == 0) currentSlot + 2 else currentSlot + 1
     val nextSlot = minOf(endSlot, nextHourSlot)
-    Box(Modifier.height(itemHeight * ((nextSlot - currentSlot) / 2f)).fillMaxWidth()) {
-      if (nextSlot % 2 == 0) {
-        HorizontalDivider(modifier = Modifier.align(BottomCenter))
-      }
-    }
+    val modifier =
+      Modifier.height(itemHeight * ((nextSlot - currentSlot) / 2f))
+        .fillMaxWidth()
+        .then(if (nextSlot % 2 == 0) Modifier.gridBottomDivider() else Modifier)
+    Box(modifier)
     currentSlot = nextSlot
   }
 }
@@ -333,7 +465,7 @@ private fun PermitGridEvent(
   permits: PermitState?,
   onEventClick: (fieldName: String, index: Int, Reserved, orgVisible: Boolean) -> Unit,
 ) {
-  Box(Modifier.height(itemHeight * event.duration).fillMaxWidth()) {
+  Box(Modifier.height(itemHeight * event.duration).fillMaxWidth().gridBottomDivider()) {
     key(permits) {
       SharedElementTransitionScope {
         val skipEntryAnimation = isTransitionActive
@@ -357,7 +489,6 @@ private fun PermitGridEvent(
         )
       }
     }
-    HorizontalDivider(modifier = Modifier.align(BottomCenter))
   }
 }
 
@@ -384,7 +515,7 @@ private fun LivePermitOverlayContainer(
     animProgress.animateTo(1f, tween(durationMillis = 250))
   }
 
-  Box(Modifier.height(itemHeight * (durationSlots / 2f)).fillMaxWidth()) {
+  Box(Modifier.height(itemHeight * (durationSlots / 2f)).fillMaxWidth().gridBottomDivider()) {
     Box(
       Modifier.fillMaxSize().graphicsLayer {
         alpha = animProgress.value
@@ -393,7 +524,20 @@ private fun LivePermitOverlayContainer(
     ) {
       content()
     }
-    HorizontalDivider(modifier = Modifier.align(BottomCenter))
+  }
+}
+
+@Composable
+private fun Modifier.gridBottomDivider(): Modifier {
+  val color = MaterialTheme.colorScheme.outlineVariant
+  return drawWithContent {
+    drawContent()
+    drawLine(
+      color = color,
+      start = Offset(0f, size.height - 0.5f),
+      end = Offset(size.width, size.height - 0.5f),
+      strokeWidth = 1f,
+    )
   }
 }
 
