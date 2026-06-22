@@ -42,7 +42,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 private const val NYC_LIVE_URL = "https://www.nycgovparks.org/api/athletic-fields"
-private const val NYC_CLOSURES_URL = "https://www.nycgovparks.org/bigapps/DPR_ParksClosure_001.json"
 private const val HRP_FIELDS_URL = "https://hudsonriverpark.org/visit/events/permits/fields/"
 private const val NYC_PARKS_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
@@ -79,7 +78,7 @@ fun main(args: Array<String>) = runBlocking {
     val feedsRoot = options.outputRoot.resolve("availability").resolve("areas")
     Files.createDirectories(feedsRoot)
 
-    val closures = client.fetchParkClosures(options)
+    val closureResult = client.fetchParkClosures(options)
 
     areas.entries.sortedBy(Area::areaName).forEach { area ->
       val areaId = area.areaName.slug()
@@ -95,7 +94,7 @@ fun main(args: Array<String>) = runBlocking {
           generatedAt,
           options,
           existingFeed,
-          closures,
+          closureResult,
         )
       val feedJson = json.encodeToString(feed)
       Files.writeString(feedPath, feedJson)
@@ -123,6 +122,7 @@ private data class Options(
   val liveDays: Long,
   val hrpSourceFile: Path?,
   val bbpSourceFile: Path,
+  val nycCsvSourceDir: Path?,
   val nycLiveSourceDir: Path?,
   val closuresSourceFile: Path?,
   val closuresDays: Long,
@@ -134,6 +134,7 @@ private fun Array<String>.options(): Options {
     liveDays = longOption("live-days") ?: defaultLiveDays,
     hrpSourceFile = stringOption("hrp-source-file")?.let(Path::of),
     bbpSourceFile = stringOption("bbp-source-file")?.let(Path::of) ?: defaultBbpSourceFile,
+    nycCsvSourceDir = stringOption("nyc-csv-source-dir")?.let(Path::of),
     nycLiveSourceDir = stringOption("nyc-live-source-dir")?.let(Path::of),
     closuresSourceFile = stringOption("closures-source-file")?.let(Path::of),
     closuresDays = longOption("closures-days") ?: defaultClosuresDays,
@@ -169,7 +170,7 @@ private suspend fun generateFeed(
   generatedAt: Long?,
   options: Options,
   existingFeed: AvailabilityAreaFeed?,
-  closures: List<ParkClosure> = emptyList(),
+  closureResult: ParkClosureFetchResult = ParkClosureFetchResult(),
 ): AvailabilityAreaFeed {
   val hrpRows = client.fetchHrpRows(area, options.hrpSourceFile)
 
@@ -185,7 +186,8 @@ private suspend fun generateFeed(
     }
 
   val csvResult =
-    area.csvUrl?.let { csvUrl -> client.fetchNycCsvRows(area, csvUrl) } ?: SourceFetchResult()
+    area.csvUrl?.let { csvUrl -> client.fetchNycCsvRows(area, csvUrl, options.nycCsvSourceDir) }
+      ?: SourceFetchResult()
   val preservedCsvRows =
     if (csvResult.failedSourceIds.isNotEmpty()) {
       existingFeed.preserveRows(csvResult.failedSourceIds, "NYC Parks CSV")
@@ -200,6 +202,12 @@ private suspend fun generateFeed(
     } else {
       emptyList()
     }
+  val closureRows =
+    if (closureResult.failed) {
+      existingFeed.preserveClosureRows(area)
+    } else {
+      generateClosureRows(area, closureResult.closures, today, options.closuresDays)
+    }
 
   val sourceRows = buildList {
     addAll(csvResult.rows)
@@ -208,7 +216,7 @@ private suspend fun generateFeed(
     addAll(hrpRows ?: preservedHrpRows)
     addAll(liveResult.rows)
     addAll(preservedLiveRows)
-    addAll(generateClosureRows(area, closures, today, options.closuresDays))
+    addAll(closureRows)
   }
   return AvailabilityAreaFeed(
       areaName = area.areaName,
@@ -232,21 +240,53 @@ private fun AvailabilityAreaFeed?.preserveRows(
     }
 }
 
-private suspend fun HttpClient.fetchNycCsvRows(area: Area, url: String): SourceFetchResult {
+internal fun AvailabilityAreaFeed?.preserveClosureRows(area: Area): List<AvailabilityFeedRow> {
+  val sourceId = area.closureSourceId() ?: return emptyList()
+  return preserveRows(setOf(sourceId), "NYC Parks closure")
+}
+
+private suspend fun HttpClient.fetchNycCsvRows(
+  area: Area,
+  url: String,
+  sourceDir: Path?,
+): SourceFetchResult {
   val sourceId = nycCsvSourceId(area)
   val response =
     try {
-      fetchNycCsvResponse(url)
+      tryGetNycCsvSourceFile(sourceDir, area) ?: fetchNycCsvResponse(url)
     } catch (e: Exception) {
       System.err.println("Failed to fetch NYC Parks CSV data for ${area.areaName}: $e")
+      printManualCsvDumpAction(area, url, sourceDir)
       return SourceFetchResult(failedSourceIds = setOf(sourceId))
     }
 
   val rows =
     response.body.toAvailabilityRowsOrNull(area, response.source)
-      ?: return SourceFetchResult(failedSourceIds = setOf(sourceId))
+      ?: run {
+        printManualCsvDumpAction(area, url, sourceDir)
+        return SourceFetchResult(failedSourceIds = setOf(sourceId))
+      }
 
   return SourceFetchResult(rows)
+}
+
+private fun tryGetNycCsvSourceFile(sourceDir: Path?, area: Area): SourceResponseBody? {
+  if (sourceDir == null) return null
+
+  val path = sourceDir.resolve("${area.areaName.slug()}.csv")
+  if (!Files.exists(path)) return null
+
+  val body = Files.readString(path)
+  return SourceResponseBody(body = body, source = "$path (${body.length} chars)")
+}
+
+private fun printManualCsvDumpAction(area: Area, url: String, sourceDir: Path?) {
+  val targetDir = sourceDir ?: Path.of("build/nyc-csv")
+  val target = targetDir.resolve("${area.areaName.slug()}.csv")
+  System.err.println(
+    "Manual refresh action for ${area.areaName} CSV: open $url in normal Chrome, save the CSV " +
+      "to $target, then rerun with NYC_CSV_SOURCE_DIR=$targetDir scripts/update-availability.sh"
+  )
 }
 
 private suspend fun HttpClient.fetchNycCsvResponse(url: String): SourceResponseBody {
@@ -536,7 +576,7 @@ private fun String.toNycLiveRowsOrNull(
 
 private fun String.jsonPayloadOrNull(): String? {
   val trimmed = trimStart('\uFEFF').trim()
-  if (trimmed.startsWith("{")) return trimmed
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return trimmed
 
   val preText =
     Regex("""(?is)<pre[^>]*>(.*?)</pre>""")
@@ -545,15 +585,25 @@ private fun String.jsonPayloadOrNull(): String? {
       ?.get(1)
       ?.decodeBasicHtmlEntities()
       ?.trim()
-  if (preText?.startsWith("{") == true) return preText
+  if (preText?.startsWith("{") == true || preText?.startsWith("[") == true) return preText
 
-  val firstBrace = indexOf('{')
-  val lastBrace = lastIndexOf('}')
-  if (firstBrace != -1 && lastBrace > firstBrace) {
-    return substring(firstBrace, lastBrace + 1).decodeBasicHtmlEntities()
+  val objectPayload = jsonPayloadBetween('{', '}')
+  val arrayPayload = jsonPayloadBetween('[', ']')
+  val payload =
+    listOfNotNull(objectPayload, arrayPayload).minByOrNull { candidate ->
+      indexOf(candidate.first())
+    }
+  if (payload != null) {
+    return payload.decodeBasicHtmlEntities()
   }
 
   return null
+}
+
+private fun String.jsonPayloadBetween(open: Char, close: Char): String? {
+  val first = indexOf(open)
+  val last = lastIndexOf(close)
+  return if (first != -1 && last > first) substring(first, last + 1) else null
 }
 
 private fun String.decodeBasicHtmlEntities(): String {
@@ -630,9 +680,9 @@ private data class LivePermitSlot(
 
 // region NYC Parks closures
 //
-// Source: the NYC Parks "Parks Closure" open dataset. The schema is parsed defensively (key
-// aliases, tolerant date parsing) and fails open to an empty list, so a schema change can never
-// break feed generation - it just drops closure rows.
+// Optional source for field-related NYC Parks closures. A missing, blocked, or unparseable source
+// preserves previous closure rows, while valid JSON with no field closures still produces an empty
+// list.
 
 internal data class ParkClosure(
   val parkId: String,
@@ -643,36 +693,48 @@ internal data class ParkClosure(
   val endDate: LocalDate?,
 )
 
-private suspend fun HttpClient.fetchParkClosures(options: Options): List<ParkClosure> {
-  if (options.closuresDays <= 0) return emptyList()
+private data class ParkClosureFetchResult(
+  val closures: List<ParkClosure> = emptyList(),
+  val failed: Boolean = false,
+)
+
+private suspend fun HttpClient.fetchParkClosures(options: Options): ParkClosureFetchResult {
+  if (options.closuresDays <= 0) return ParkClosureFetchResult()
   val sourceFile = options.closuresSourceFile
-  val body =
-    if (sourceFile != null && Files.exists(sourceFile)) {
-      Files.readString(sourceFile)
-    } else {
-      try {
-        get(NYC_CLOSURES_URL) {
-            header(HttpHeaders.UserAgent, BROWSER_LIKE_USER_AGENT)
-            header(HttpHeaders.Accept, "application/json")
-          }
-          .bodyAsText()
-      } catch (e: Exception) {
-        System.err.println("Failed to fetch NYC Parks closures: $e")
-        return emptyList()
-      }
-    }
-  return body.toParkClosures().also {
-    System.err.println("Parsed ${it.size} field-related park closures")
+  if (sourceFile == null) {
+    System.err.println("No NYC Parks closures source configured; preserving previous closure rows")
+    return ParkClosureFetchResult(failed = true)
+  }
+  if (!Files.exists(sourceFile)) {
+    System.err.println("NYC Parks closures source does not exist: $sourceFile")
+    return ParkClosureFetchResult(failed = true)
+  }
+  val body = Files.readString(sourceFile)
+  val closures = body.toParkClosuresOrNull() ?: return ParkClosureFetchResult(failed = true)
+  return ParkClosureFetchResult(closures = closures).also {
+    System.err.println("Parsed ${it.closures.size} field-related park closures")
   }
 }
 
 internal fun String.toParkClosures(): List<ParkClosure> {
+  return toParkClosuresOrNull().orEmpty()
+}
+
+internal fun String.toParkClosuresOrNull(): List<ParkClosure>? {
+  val jsonPayload =
+    jsonPayloadOrNull()
+      ?: run {
+        System.err.println(
+          "Failed to parse NYC Parks closures JSON: no JSON payload was found in ${length} chars. Preview: ${preview()}"
+        )
+        return null
+      }
   val element =
     try {
-      json.parseToJsonElement(this)
+      json.parseToJsonElement(jsonPayload)
     } catch (e: Exception) {
       System.err.println("Failed to parse NYC Parks closures JSON: ${e.message}")
-      return emptyList()
+      return null
     }
   val records =
     when (element) {
@@ -767,6 +829,8 @@ private fun String.isFieldRelated(): Boolean {
 private fun Area.parkId(): String? {
   return csvUrl?.let { Regex("/issued/([A-Z]\\d+)/csv").find(it)?.groupValues?.get(1) }
 }
+
+private fun Area.closureSourceId(): String? = parkId()?.let { "nyc-parks-closures:$it" }
 
 /**
  * Returns true if [field] is plausibly affected by a closure described by [matchText]. If the text

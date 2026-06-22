@@ -296,10 +296,66 @@ class GeneratorTest {
   }
 
   @Test
+  fun `closures parser reads chrome dumped json pages`() {
+    val payload =
+      """
+      <html>
+        <head><meta name="color-scheme" content="light dark"></head>
+        <body>
+          <pre>
+          [
+            {"propid": "M017", "closure_desc": "Soccer field closed for resodding"}
+          ]
+          </pre>
+        </body>
+      </html>
+      """
+        .trimIndent()
+
+    val closures = payload.toParkClosures()
+
+    assertThat(closures).hasSize(1)
+    assertThat(closures.single().parkId).isEqualTo("M017")
+  }
+
+  @Test
   fun `closures parser fails open on malformed payloads`() {
     assertThat("not json".toParkClosures()).isEmpty()
     assertThat("{}".toParkClosures()).isEmpty()
     assertThat("[]".toParkClosures()).isEmpty()
+  }
+
+  @Test
+  fun `closures parser reports malformed payloads as source failures`() {
+    assertThat("not json".toParkClosuresOrNull()).isEqualTo(null)
+    assertThat("{}".toParkClosuresOrNull()).isEqualTo(emptyList<ParkClosure>())
+    assertThat("[]".toParkClosuresOrNull()).isEqualTo(emptyList<ParkClosure>())
+  }
+
+  @Test
+  fun `closure source failure preserves previous closure rows for the same park`() {
+    val area = Areas.default.entries.single { it.areaName == "Corlears Hook" }
+    val closureRow =
+      AvailabilityFeedRow(
+        areaName = "Corlears Hook",
+        groupName = "Corlears Hook",
+        fieldId = "Soccer-01",
+        start = nyMillis("2026-06-10T00:00"),
+        end = nyMillis("2026-06-11T00:00"),
+        title = "Closure: Field repairs",
+        status = "Closed",
+        kind = "closure",
+        sourceId = "nyc-parks-closures:M017",
+      )
+    val otherRow =
+      closureRow.copy(
+        kind = "NYC live",
+        sourceId = "nyc-parks-live:M017-SOCCER-1",
+      )
+    val feed =
+      AvailabilityAreaFeed(area.areaName, generatedAt = null, rows = listOf(closureRow, otherRow))
+
+    assertThat(feed.preserveClosureRows(area)).containsExactly(closureRow)
   }
 
   @Test

@@ -26,10 +26,17 @@ Useful environment overrides:
 LIVE_DAYS=14 scripts/update-availability.sh
 CHROME=/path/to/chrome scripts/update-availability.sh
 OUTPUT_ROOT=/tmp/fieldspottr-output scripts/update-availability.sh
+HRP_SOURCE_FILE=/path/to/hrp.html scripts/update-availability.sh
+NYC_CSV_SOURCE_DIR=/path/to/csv-dir scripts/update-availability.sh
+NYC_CLOSURES_SOURCE_FILE=/path/to/closures.json scripts/update-availability.sh
 ```
 
 `LIVE_DAYS` controls how many NYC Parks live dates are dumped, `CHROME` selects a specific
 Chrome/Chromium binary, and `OUTPUT_ROOT` writes generated files somewhere other than the repo root.
+`HRP_SOURCE_FILE`, `NYC_CSV_SOURCE_DIR`, and `NYC_CLOSURES_SOURCE_FILE` let you rerun with manually
+saved upstream dumps when the script reports that local headless Chrome or the generator's direct
+fetch was blocked. There is no known current automatic NYC Parks closures feed; without
+`NYC_CLOSURES_SOURCE_FILE`, existing closure rows are preserved.
 
 The generated manifest lists one hash per area feed. App refreshes download only stale/missing area
 feeds, and each feed replaces that area's DB rows transactionally after it parses successfully.
