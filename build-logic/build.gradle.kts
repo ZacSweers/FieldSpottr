@@ -7,5 +7,4 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(libs.versions.jdk.
 dependencies {
   compileOnly(libs.agp.gradlePlugin)
   compileOnly(libs.kotlin.gradlePlugin)
-  implementation(libs.spotless.gradlePlugin)
 }

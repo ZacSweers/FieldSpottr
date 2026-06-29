@@ -26,43 +26,42 @@ internal fun List<DbPermit>.availabilityOverlays(
 ): LiveGroupAvailability? {
   val group = areas.groups[selectedGroup] ?: return null
   val areasByName = areas.entries.associateBy { it.areaName }
-  val fields =
-    mapNotNull { permit ->
-        if (!permit.isAvailabilityOverlay) return@mapNotNull null
-        val field = areasByName[permit.area]?.fieldMappings?.get(permit.fieldId)
-        if (field == null || field.group != group.name) return@mapNotNull null
-        field to permit
-      }
-      .groupBy({ it.first }, { it.second })
-      .mapValues { (field, permits) ->
-        val blocks = mutableListOf<LivePermitBlock>()
-        val advisories = mutableListOf<LivePermitAdvisory>()
-        for (permit in permits) {
-          val startSlot = permit.start.halfHourSlot()
-          val endSlot = permit.end.halfHourSlot()
-          if (endSlot <= startSlot) continue
-          val advisory = permit.advisory
-          if (advisory != null) {
-            advisories += LivePermitAdvisory(startSlot, endSlot, advisory)
-          } else {
-            blocks +=
-              LivePermitBlock(
-                startSlot = startSlot,
-                endSlot = endSlot,
-                title = permit.name,
-                org = permit.org,
-                status = permit.status,
-                isOverlap = permit.isOverlap != 0L,
-              )
-          }
+  val fields = mapNotNull { permit ->
+    if (!permit.isAvailabilityOverlay) return@mapNotNull null
+    val field = areasByName[permit.area]?.fieldMappings?.get(permit.fieldId)
+    if (field == null || field.group != group.name) return@mapNotNull null
+    field to permit
+  }
+    .groupBy({ it.first }, { it.second })
+    .mapValues { (field, permits) ->
+      val blocks = mutableListOf<LivePermitBlock>()
+      val advisories = mutableListOf<LivePermitAdvisory>()
+      for (permit in permits) {
+        val startSlot = permit.start.halfHourSlot()
+        val endSlot = permit.end.halfHourSlot()
+        if (endSlot <= startSlot) continue
+        val advisory = permit.advisory
+        if (advisory != null) {
+          advisories += LivePermitAdvisory(startSlot, endSlot, advisory)
+        } else {
+          blocks +=
+            LivePermitBlock(
+              startSlot = startSlot,
+              endSlot = endSlot,
+              title = permit.name,
+              org = permit.org,
+              status = permit.status,
+              isOverlap = permit.isOverlap != 0L,
+            )
         }
-        LiveFieldAvailability(
-          field = field,
-          blocks = blocks.sortedBy { it.startSlot }.toImmutableList(),
-          advisories = advisories.sortedBy { it.startSlot }.toImmutableList(),
-        )
       }
-      .filterValues { it.blocks.isNotEmpty() || it.advisories.isNotEmpty() }
+      LiveFieldAvailability(
+        field = field,
+        blocks = blocks.sortedBy { it.startSlot }.toImmutableList(),
+        advisories = advisories.sortedBy { it.startSlot }.toImmutableList(),
+      )
+    }
+    .filterValues { it.blocks.isNotEmpty() || it.advisories.isNotEmpty() }
 
   if (fields.isEmpty()) return null
   return LiveGroupAvailability(Clock.System.now(), fields.toImmutableMap())

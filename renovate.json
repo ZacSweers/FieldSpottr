@@ -2,5 +2,19 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "(^|/)\\.kempt\\.toml$"
+      ],
+      "matchStrings": [
+        "\\[ktfmt\\][^\\[]*?version\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "maven",
+      "registryUrlTemplate": "https://repo1.maven.org/maven2",
+      "depNameTemplate": "com.facebook:ktfmt"
+    }
   ]
 }

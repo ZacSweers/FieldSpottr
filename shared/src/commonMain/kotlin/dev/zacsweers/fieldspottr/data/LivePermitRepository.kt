@@ -173,10 +173,11 @@ private fun List<LivePermitBlock>.mergeVisualBlocks(): List<LivePermitBlock> {
   if (isEmpty()) return emptyList()
 
   val directBlocks = filterNot { it.isOverlap }
-  val overlapBlocks =
-    filter { it.isOverlap }
-      .filterNot { overlap -> directBlocks.any { direct -> overlap.overlaps(direct) } }
-      .mergeVisualOverlapBlocks()
+  val overlapBlocks = filter {
+    it.isOverlap
+  }
+    .filterNot { overlap -> directBlocks.any { direct -> overlap.overlaps(direct) } }
+    .mergeVisualOverlapBlocks()
 
   return (directBlocks + overlapBlocks).sortedWith(
     compareBy<LivePermitBlock> { it.startSlot }.thenBy { it.endSlot }

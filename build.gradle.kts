@@ -16,7 +16,4 @@ plugins {
   alias(libs.plugins.bugsnag) apply false
   alias(libs.plugins.kotlin.plugin.serialization) apply false
   alias(libs.plugins.metro) apply false
-  id("fs.spotless") apply false
 }
-
-allprojects { apply(plugin = "fs.spotless") }
