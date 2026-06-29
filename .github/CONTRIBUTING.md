@@ -1,5 +1,9 @@
 # Contributing
 
+## Code Formatting
+
+Code formatting is handled by [kempt](https://github.com/ZacSweers/kempt). Run `kempt format --all` before sending changes, or `kempt check` to verify formatting.
+
 ## Maps Configuration
 
 ### Google Maps API Key (Android)

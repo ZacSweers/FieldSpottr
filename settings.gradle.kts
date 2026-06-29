@@ -40,7 +40,6 @@ pluginManagement {
         includeGroup("com.gradle")
         includeGroup("com.bugsnag.gradle")
         includeModule("com.gradle.develocity", "com.gradle.develocity.gradle.plugin")
-        includeModule("com.diffplug.spotless", "com.diffplug.spotless.gradle.plugin")
         includeModule("org.gradle.kotlin.kotlin-dsl", "org.gradle.kotlin.kotlin-dsl.gradle.plugin")
         includeModule("org.gradle.kotlin", "gradle-kotlin-dsl-plugins")
       }

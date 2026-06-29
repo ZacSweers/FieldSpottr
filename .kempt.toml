@@ -1,0 +1,26 @@
+# kempt configuration: https://github.com/ZacSweers/kempt
+
+[ktfmt]
+version = "0.64"
+
+[license-header]
+file = "config/license-header.txt"
+
+[ktfmt.license-header]
+excludes = "config/license-header-excludes-kt.txt"
+
+[paths]
+exclude = [
+  "**/build/**",
+  "**/target/**",
+  "**/.gradle/**",
+]
+
+[ktfmt.paths]
+include = [
+  "**/*.kt",
+  "**/*.kts",
+]
+
+[hook]
+mode = "format"
