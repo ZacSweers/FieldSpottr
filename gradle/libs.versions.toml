@@ -17,7 +17,7 @@ kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 ktor = "3.5.0"
 mapsCompose = "8.3.0"
-metro = "1.4.0-SNAPSHOT"
+metro = "1.2.1"
 okio = "3.17.0"
 sqldelight = "2.3.2"
 
