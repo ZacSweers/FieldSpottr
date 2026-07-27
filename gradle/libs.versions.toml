@@ -71,7 +71,7 @@ kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", ve
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 
 kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.8.0-0.6.x-compat"
-kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0"
+kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.5.1"
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 ktor-client = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
