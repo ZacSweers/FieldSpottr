@@ -1,5 +1,7 @@
 // Copyright (C) 2024 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+@file:OptIn(ExperimentalMetroCoroutinesApi::class)
+
 package dev.zacsweers.fieldspottr.data
 
 import app.cash.sqldelight.coroutines.asFlow
@@ -12,18 +14,18 @@ import dev.zacsweers.fieldspottr.DbAreaFeed
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.fieldspottr.FSDatabase
-import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.delete
 import dev.zacsweers.fieldspottr.touch
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.hashOf
-import dev.zacsweers.fieldspottr.util.lazySuspend
 import dev.zacsweers.fieldspottr.util.parallelForEach
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesBinding
+import dev.zacsweers.metro.ExperimentalMetroCoroutinesApi
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
+import dev.zacsweers.metro.SuspendLazy
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.prepareGet
@@ -100,13 +102,13 @@ class PermitRepositoryImpl(
   private val appDirs: FSAppDirs,
   private val json: Json,
   private val logger: Logger,
-  private val db: suspend () -> FSDatabase,
+  private val db: SuspendLazy<FSDatabase>,
   private val client: Lazy<HttpClient>,
 ) : PermitRepository {
 
   @Inject
   constructor(
-    sqlDriverFactory: SqlDriverFactory,
+    database: SuspendLazy<FSDatabase>,
     appDirs: FSAppDirs,
     json: Json,
     logger: Logger,
@@ -115,10 +117,7 @@ class PermitRepositoryImpl(
     appDirs,
     json,
     logger.withTag("PermitRepository"),
-    lazySuspend {
-      val driver = sqlDriverFactory.create(FSDatabase.Schema, "fs.db")
-      driver.createFSDatabase()
-    },
+    database,
     client,
   )
 
@@ -161,7 +160,7 @@ class PermitRepositoryImpl(
         // Check if the app version has changed since last fetch
         val currentAppVersion = BuildConfig.VERSION_CODE
         val storedAppVersion =
-          db()
+          db.value()
             .fsdbQueries
             .getMetadata("last_areas_app_version")
             .executeAsOneOrNull()
@@ -191,7 +190,7 @@ class PermitRepositoryImpl(
             fetchedAt = refreshStartedAt,
           )
         if (manifest == null) {
-          val hasCachedPermits = db().hasAnyPermits()
+          val hasCachedPermits = db.value().hasAnyPermits()
           _loadingMessage.value =
             if (hasCachedPermits) null
             else "Failed to fetch areas. Please check connection and try again."
@@ -205,7 +204,7 @@ class PermitRepositoryImpl(
           } else {
             feedAreas.filter { manifestArea ->
               val cachedFeed =
-                db().fsdbQueries.getAreaFeed(manifestArea.resolvedAreaName).executeAsOneOrNull()
+                db.value().fsdbQueries.getAreaFeed(manifestArea.resolvedAreaName).executeAsOneOrNull()
               cachedFeed == null ||
                 cachedFeed.hash != manifestArea.hash ||
                 isRefreshStale(cachedFeed.feedFetchedAt, refreshStartedAt)
@@ -216,11 +215,11 @@ class PermitRepositoryImpl(
             refreshAreaFeed(manifestArea)
           }
         }
-        val hasCachedPermits = db().hasAnyPermits()
+        val hasCachedPermits = db.value().hasAnyPermits()
         _loadingMessage.value =
           if (hasCachedPermits || staleFeeds.isEmpty()) null
           else "Failed to fetch areas. Please check connection and try again."
-        db().fsdbQueries.setMetadata("last_areas_app_version", currentAppVersion.toString())
+        db.value().fsdbQueries.setMetadata("last_areas_app_version", currentAppVersion.toString())
         return@withContext hasCachedPermits || staleFeeds.isEmpty()
       }
     } finally {
@@ -230,7 +229,7 @@ class PermitRepositoryImpl(
 
   override fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {
     return flow {
-        val result = db().fsdbQueries.permitDateRange().executeAsOne()
+        val result = db.value().fsdbQueries.permitDateRange().executeAsOne()
         val minMillis = result.minDate
         val maxMillis = result.maxDate
         if (minMillis != null && maxMillis != null) {
@@ -247,7 +246,7 @@ class PermitRepositoryImpl(
 
   override fun lastUpdateFlow(areaName: String): Flow<Instant?> {
     return flow {
-        val millis = db().fsdbQueries.lastAreaUpdate(areaName).executeAsOneOrNull()
+        val millis = db.value().fsdbQueries.lastAreaUpdate(areaName).executeAsOneOrNull()
         emit(millis?.let { Instant.fromEpochMilliseconds(it) })
       }
       .flowOn(Dispatchers.IO)
@@ -262,7 +261,7 @@ class PermitRepositoryImpl(
     val windowEnd = windowBoundaryMillis(date, endHour)
     return flow {
         emitAll(
-          db()
+          db.value()
             .fsdbQueries
             .getPermitsInTimeWindow(windowEnd = windowEnd, windowStart = windowStart)
             .asFlow()
@@ -287,7 +286,7 @@ class PermitRepositoryImpl(
     log("permitsFlow query: date=$date, group=$group, startTime=$startTime, endTime=$endTime")
     return flow {
       emitAll(
-        db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
+        db.value().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
       )
     }
   }
@@ -298,7 +297,7 @@ class PermitRepositoryImpl(
     val endTime = date.plus(days, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
     return flow {
       emitAll(
-        db().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
+        db.value().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(Dispatchers.IO)
       )
     }
   }
@@ -334,7 +333,7 @@ class PermitRepositoryImpl(
       return
     }
     replaceDownloadedFile(tempPath, areasJson)
-    db().fsdbQueries.setMetadata(LAST_AREAS_FETCH_AT, fetchedAt.toString())
+    db.value().fsdbQueries.setMetadata(LAST_AREAS_FETCH_AT, fetchedAt.toString())
     areasStateFlow.value = downloaded
   }
 
@@ -353,7 +352,7 @@ class PermitRepositoryImpl(
       val downloaded = decodeAvailabilityManifest(tempPath)
       if (downloaded != null) {
         replaceDownloadedFile(tempPath, manifestJson)
-        db().fsdbQueries.setMetadata(LAST_MANIFEST_FETCH_AT, fetchedAt.toString())
+        db.value().fsdbQueries.setMetadata(LAST_MANIFEST_FETCH_AT, fetchedAt.toString())
         return downloaded
       }
       appDirs.delete(tempPath)
@@ -363,7 +362,7 @@ class PermitRepositoryImpl(
   }
 
   private suspend fun isMetadataRefreshStale(key: String, now: Long): Boolean {
-    val fetchedAt = db().fsdbQueries.getMetadata(key).executeAsOneOrNull()?.toLongOrNull()
+    val fetchedAt = db.value().fsdbQueries.getMetadata(key).executeAsOneOrNull()?.toLongOrNull()
     return fetchedAt == null || isRefreshStale(fetchedAt, now)
   }
 
@@ -409,7 +408,7 @@ class PermitRepositoryImpl(
       return false
     }
     val fetchedAt = System.now().toEpochMilliseconds()
-    db().replaceAreaFeed(feed, manifestArea, fetchedAt)
+    db.value().replaceAreaFeed(feed, manifestArea, fetchedAt)
     replaceDownloadedFile(tempPath, feedPath)
     return true
   }
@@ -485,7 +484,7 @@ class PermitRepositoryImpl(
     manifestArea: AvailabilityManifestArea,
     fetchedAt: Long,
   ) {
-    db().replaceAreaFeed(feed, manifestArea, fetchedAt)
+    db.value().replaceAreaFeed(feed, manifestArea, fetchedAt)
   }
 
   internal suspend fun FSDatabase.replaceAreaFeed(
@@ -539,7 +538,7 @@ class PermitRepositoryImpl(
   override fun permitsByGroup(group: String, org: String, start: LocalDate): Flow<List<DbPermit>> {
     return flow {
         emitAll(
-          db()
+          db.value()
             .fsdbQueries
             .getPermitsByOrg(group, org, start.atStartOfDayInNy().toEpochMilliseconds())
             .asFlow()

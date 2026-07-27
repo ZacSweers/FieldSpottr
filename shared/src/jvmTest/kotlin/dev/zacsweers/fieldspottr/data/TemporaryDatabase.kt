@@ -1,5 +1,7 @@
 // Copyright (C) 2025 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+@file:OptIn(ExperimentalMetroCoroutinesApi::class)
+
 package dev.zacsweers.fieldspottr.data
 
 import app.cash.sqldelight.db.QueryResult
@@ -8,7 +10,8 @@ import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver.Companion.IN_MEMORY
 import dev.zacsweers.fieldspottr.FSDatabase
-import dev.zacsweers.fieldspottr.util.lazySuspend
+import dev.zacsweers.metro.ExperimentalMetroCoroutinesApi
+import dev.zacsweers.metro.suspendLazy
 import java.sql.SQLException
 import org.junit.rules.ExternalResource
 
@@ -19,9 +22,9 @@ class TemporaryDatabase<T>(
   private var driver: SqlDriver? = null
   private var dbBacker: T? = null
 
-  val db = lazySuspend {
+  private val lazyDb = suspendLazy {
     dbBacker?.let {
-      return@lazySuspend it
+      return@suspendLazy it
     }
 
     val driver =
@@ -37,13 +40,14 @@ class TemporaryDatabase<T>(
     instance
   }
 
+  suspend fun db(): T = lazyDb.value()
+
   override fun after() {
     driver?.close()
     driver = null
   }
 }
 
-@Suppress("TestFunctionName") // Emulating a constructor for the default :db database.
 @JvmName("create")
 fun TemporaryDatabase(): TemporaryDatabase<FSDatabase> {
   return TemporaryDatabase({ driver -> driver.createFSDatabase() }, FSDatabase.Schema)
