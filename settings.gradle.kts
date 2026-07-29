@@ -4,6 +4,10 @@ dependencyResolutionManagement {
   repositories {
     mavenCentral()
     google()
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
+      name = "central-portal-snapshots"
+      mavenContent { snapshotsOnly() }
+    }
     maven("https://oss.sonatype.org/content/repositories/snapshots") {
       name = "snapshots-maven-central"
       mavenContent { snapshotsOnly() }
@@ -21,6 +25,10 @@ pluginManagement {
   repositories {
     mavenCentral()
     google()
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
+      name = "central-portal-snapshots"
+      mavenContent { snapshotsOnly() }
+    }
     maven("https://oss.sonatype.org/content/repositories/snapshots") {
       name = "snapshots-maven-central"
       mavenContent { snapshotsOnly() }
