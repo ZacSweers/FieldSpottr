@@ -2,23 +2,23 @@
 aboutLicenses = "14.2.1"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.7.1"
-agp = "9.2.1"
+agp = "9.3.1"
 androidx-datastore = "1.2.1"
 assertk = "0.28.1"
-calf = "0.12.0"
-circuit = "0.34.0"
+calf = "0.13.0"
+circuit = "0.35.1"
 compose-jb = "1.11.1"
-androidCompileSdk = "36"
+androidCompileSdk = "37"
 jdk = "25"
 jvmTarget = "11"
 kermit = "2.1.0"
 kotlin = "2.4.20-Beta2"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
-ktor = "3.5.0"
-mapsCompose = "8.3.0"
-metro = "1.3.2"
-okio = "3.17.0"
+ktor = "3.5.1"
+mapsCompose = "8.4.0"
+metro = "1.4.0-SNAPSHOT"
+okio = "3.18.0"
 sqldelight = "2.3.2"
 
 [plugins]
@@ -47,7 +47,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
-bugsnag-android = "com.bugsnag:bugsnag-android:6.26.0"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.26.1"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
@@ -71,7 +71,7 @@ kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", ve
 kotlin-plugins-bom = { module = "org.jetbrains.kotlin:kotlin-gradle-plugins-bom", version.ref = "kotlin" }
 
 kotlinx-datetime = "org.jetbrains.kotlinx:kotlinx-datetime:0.8.0-0.6.x-compat"
-kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0"
+kotlinx-immutable = "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.5.1"
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 ktor-client = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
@@ -82,7 +82,7 @@ ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }
 
-lints-compose = "com.slack.lint.compose:compose-lint-checks:1.5.1"
+lints-compose = "com.slack.lint.compose:compose-lint-checks:1.5.3"
 
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
