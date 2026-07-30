@@ -120,14 +120,15 @@ class GeneratorTest {
     val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
 
     val rows =
-      """{"availability":{}}""".toNycLiveRowsOrNull(
-        area = area,
-        groupName = "Baruch",
-        field = field,
-        startDateInclusive = LocalDate.of(2026, 6, 5),
-        endDateExclusive = LocalDate.of(2026, 6, 6),
-        source = "Kernel Browser Curl",
-      )
+      """{"availability":{}}"""
+        .toNycLiveRowsOrNull(
+          area = area,
+          groupName = "Baruch",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 6, 5),
+          endDateExclusive = LocalDate.of(2026, 6, 6),
+          source = "Kernel Browser Curl",
+        )
 
     assertThat(rows).isEqualTo(emptyList<AvailabilityFeedRow>())
   }
@@ -135,8 +136,7 @@ class GeneratorTest {
   @Test
   fun `nyc live parser accepts provider metadata without availability`() {
     val area = Area("ERP", "East River Park", fieldGroups = persistentListOf())
-    val field =
-      Field("Soccer-01", "Soccer 1", "ERP", apiLocationId = "M144-ZN05-SOCCER-2")
+    val field = Field("Soccer-01", "Soccer 1", "ERP", apiLocationId = "M144-ZN05-SOCCER-2")
     val response =
       """
       {
@@ -165,14 +165,15 @@ class GeneratorTest {
     val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
 
     val rows =
-      "{}".toNycLiveRowsOrNull(
-        area = area,
-        groupName = "Baruch",
-        field = field,
-        startDateInclusive = LocalDate.of(2026, 6, 5),
-        endDateExclusive = LocalDate.of(2026, 6, 6),
-        source = "Kernel Browser Curl",
-      )
+      "{}"
+        .toNycLiveRowsOrNull(
+          area = area,
+          groupName = "Baruch",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 6, 5),
+          endDateExclusive = LocalDate.of(2026, 6, 6),
+          source = "Kernel Browser Curl",
+        )
 
     assertThat(rows).isEqualTo(null)
   }
@@ -180,18 +181,18 @@ class GeneratorTest {
   @Test
   fun `nyc live parser rejects malformed provider metadata`() {
     val area = Area("ERP", "East River Park", fieldGroups = persistentListOf())
-    val field =
-      Field("Soccer-01", "Soccer 1", "ERP", apiLocationId = "M144-ZN05-SOCCER-2")
+    val field = Field("Soccer-01", "Soccer 1", "ERP", apiLocationId = "M144-ZN05-SOCCER-2")
 
     val rows =
-      """{"fieldName":{},"close":[]}""".toNycLiveRowsOrNull(
-        area = area,
-        groupName = "ERP",
-        field = field,
-        startDateInclusive = LocalDate.of(2026, 7, 29),
-        endDateExclusive = LocalDate.of(2026, 7, 30),
-        source = "Kernel Browser Curl",
-      )
+      """{"fieldName":{},"close":[]}"""
+        .toNycLiveRowsOrNull(
+          area = area,
+          groupName = "ERP",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 7, 29),
+          endDateExclusive = LocalDate.of(2026, 7, 30),
+          source = "Kernel Browser Curl",
+        )
 
     assertThat(rows).isEqualTo(null)
   }
