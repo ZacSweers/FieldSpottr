@@ -1,7 +1,5 @@
 // Copyright (C) 2025 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
-@file:OptIn(ExperimentalMetroCoroutinesApi::class)
-
 package dev.zacsweers.fieldspottr.data
 
 import app.cash.sqldelight.db.QueryResult
@@ -10,7 +8,6 @@ import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver.Companion.IN_MEMORY
 import dev.zacsweers.fieldspottr.FSDatabase
-import dev.zacsweers.metro.ExperimentalMetroCoroutinesApi
 import dev.zacsweers.metro.suspendLazy
 import java.sql.SQLException
 import org.junit.rules.ExternalResource

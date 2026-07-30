@@ -1,7 +1,5 @@
 // Copyright (C) 2026 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
-@file:OptIn(ExperimentalMetroCoroutinesApi::class)
-
 package dev.zacsweers.fieldspottr.di
 
 import assertk.assertThat
@@ -10,7 +8,6 @@ import assertk.assertions.isFalse
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.metro.DependencyGraph
-import dev.zacsweers.metro.ExperimentalMetroCoroutinesApi
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
