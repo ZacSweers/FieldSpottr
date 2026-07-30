@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib/kernel-browser.sh"
+
 LIVE_DAYS="${LIVE_DAYS:-7}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-.}"
 FETCH_BACKEND="${FETCH_BACKEND:-chrome}"
@@ -15,9 +17,6 @@ NYC_CLOSURES_SOURCE_FILE="${NYC_CLOSURES_SOURCE_FILE:-}"
 USER_AGENT="${USER_AGENT:-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36}"
 HRP_URL="https://hudsonriverpark.org/visit/events/permits/fields/"
 HRP_READER_URL="https://r.jina.ai/http://r.jina.ai/http://$HRP_URL"
-KERNEL_CLI="${KERNEL_CLI:-kernel}"
-KERNEL_MIN_VERSION="0.26.0"
-KERNEL_SESSION_ID=""
 CHROME="${CHROME:-}"
 
 find_chrome() {
@@ -49,14 +48,6 @@ json_dump_is_usable() {
   local file="$1"
 
   jq empty "$file" >/dev/null 2>&1 || grep -Eiq '<pre[^>]*>[[:space:]]*[\{\[]' "$file"
-}
-
-response_is_cloudflare_challenge() {
-  local file="$1"
-
-  grep -Eiq \
-    'Just a moment|Verify you are human|Attention Required|cf-chl-|challenge-platform|Cloudflare Ray ID|Sorry, you have been blocked' \
-    "$file"
 }
 
 discard_invalid_json_dump() {
@@ -95,44 +86,6 @@ Manual refresh action:
 EOF
 }
 
-semver_at_least() {
-  local current="$1"
-  local required="$2"
-  local current_major current_minor current_patch
-  local required_major required_minor required_patch
-
-  [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
-  current_major=$((10#${BASH_REMATCH[1]}))
-  current_minor=$((10#${BASH_REMATCH[2]}))
-  current_patch=$((10#${BASH_REMATCH[3]}))
-
-  [[ "$required" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
-  required_major=$((10#${BASH_REMATCH[1]}))
-  required_minor=$((10#${BASH_REMATCH[2]}))
-  required_patch=$((10#${BASH_REMATCH[3]}))
-
-  if ((current_major != required_major)); then
-    ((current_major > required_major))
-  elif ((current_minor != required_minor)); then
-    ((current_minor > required_minor))
-  else
-    ((current_patch >= required_patch))
-  fi
-}
-
-kernel_exit_trap() {
-  local exit_status=$?
-  trap - EXIT HUP INT TERM
-
-  if [[ -n "$KERNEL_SESSION_ID" ]]; then
-    if ! "$KERNEL_CLI" browsers delete "$KERNEL_SESSION_ID" >/dev/null 2>&1; then
-      echo "Warning: Kernel session cleanup failed; the server timeout will clean it up." >&2
-    fi
-  fi
-
-  exit "$exit_status"
-}
-
 initialize_fetch_backend() {
   case "$FETCH_BACKEND" in
     chrome)
@@ -147,98 +100,13 @@ initialize_fetch_backend() {
         echo "KERNEL_API_KEY is required when FETCH_BACKEND=kernel." >&2
         exit 1
       fi
-      if ! command -v "$KERNEL_CLI" >/dev/null 2>&1; then
-        echo "Kernel CLI $KERNEL_MIN_VERSION or newer is required." >&2
-        exit 1
-      fi
-
-      local kernel_version
-      kernel_version="$("$KERNEL_CLI" --version | awk 'NR == 1 { print $2 }')"
-      if ! semver_at_least "$kernel_version" "$KERNEL_MIN_VERSION"; then
-        echo "Kernel CLI $KERNEL_MIN_VERSION or newer is required; found ${kernel_version:-unknown}." >&2
-        exit 1
-      fi
-
-      trap kernel_exit_trap EXIT
-      trap 'exit 129' HUP
-      trap 'exit 130' INT
-      trap 'exit 143' TERM
-
-      local session_json
-      if ! session_json="$("$KERNEL_CLI" browsers create --stealth --timeout 300 --output json --no-color)"; then
-        echo "Failed to create a Kernel browser session." >&2
-        exit 1
-      fi
-      if ! KERNEL_SESSION_ID="$(printf '%s' "$session_json" | jq -er '.session_id | strings | select(length > 0)')"; then
-        echo "Kernel browser creation returned no session ID." >&2
-        exit 1
-      fi
-      session_json=""
-      echo "Using one Kernel stealth browser session for this refresh"
+      kernel_start_session
       ;;
     *)
       echo "FETCH_BACKEND must be chrome or kernel; found: $FETCH_BACKEND" >&2
       exit 1
       ;;
   esac
-}
-
-kernel_navigate_for_challenge() {
-  local url="$1"
-  local quoted_url
-  local code
-
-  quoted_url="$(jq -Rn --arg url "$url" '$url')"
-  code="const target = $quoted_url; await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForFunction(() => { const text = document.title + ' ' + (document.body?.innerText ?? ''); return !/(Just a moment|Verify you are human|Attention Required|cf-chl|Cloudflare Ray ID)/i.test(text); }, undefined, { timeout: 60000 }).catch(() => {}); await page.waitForTimeout(2000);"
-  "$KERNEL_CLI" browsers playwright execute "$KERNEL_SESSION_ID" "$code" --timeout 90 >/dev/null
-}
-
-kernel_browser_curl() {
-  local url="$1"
-  local output="$2"
-  local candidate="${output}.kernel.$$"
-  local should_retry=false
-
-  rm -f "$output" "$candidate"
-  if ! "$KERNEL_CLI" browsers curl "$KERNEL_SESSION_ID" "$url" \
-    --fail \
-    --silent \
-    --max-time 45 \
-    --output "$candidate"; then
-    should_retry=true
-  elif [[ ! -s "$candidate" ]] || response_is_cloudflare_challenge "$candidate"; then
-    should_retry=true
-  fi
-
-  if [[ "$should_retry" == "true" ]]; then
-    rm -f "$candidate"
-    echo "  Retrying through the Kernel browser after challenge handling"
-    if ! kernel_navigate_for_challenge "$url"; then
-      echo "Kernel Playwright navigation failed for $url; retrying Browser Curl anyway." >&2
-    fi
-    if ! "$KERNEL_CLI" browsers curl "$KERNEL_SESSION_ID" "$url" \
-      --fail \
-      --silent \
-      --max-time 45 \
-      --output "$candidate"; then
-      echo "Kernel Browser Curl failed after browser navigation for $url" >&2
-      rm -f "$candidate"
-      return 1
-    fi
-  fi
-
-  if [[ ! -s "$candidate" ]]; then
-    echo "Kernel Browser Curl wrote an empty response for $url" >&2
-    rm -f "$candidate"
-    return 1
-  fi
-  if response_is_cloudflare_challenge "$candidate"; then
-    echo "Kernel Browser Curl was still blocked after browser navigation for $url" >&2
-    rm -f "$candidate"
-    return 1
-  fi
-
-  mv -f "$candidate" "$output"
 }
 
 hrp_source_is_parseable() {

@@ -21,15 +21,14 @@ import kotlinx.collections.immutable.persistentListOf
 class GeneratorTest {
   @Test
   fun `bbp monday schedule expands field 1 split blocks`() {
-    val juneFirst =
-      generateBbpPier5Rows().filter { row ->
-        row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
-      }
-    val mondayField1 =
-      generateBbpPier5Rows().filter { row ->
-        row.fieldId == "pier5-field-1" &&
-          row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
-      }
+    val rows = generateBbpPier5Rows(today = LocalDate.parse("2026-06-01"))
+    val juneFirst = rows.filter { row ->
+      row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
+    }
+    val mondayField1 = rows.filter { row ->
+      row.fieldId == "pier5-field-1" &&
+        row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
+    }
 
     assertThat(juneFirst).hasSize(1)
     assertThat(juneFirst.single().groupName).isEqualTo("Pier 5")
@@ -299,12 +298,16 @@ class GeneratorTest {
     val volleyballImage =
       "https://brooklynbridgepark.org/wp-content/uploads/2023/07/" +
         "Volleyball-Court-Schedule-Summer-2026-e333.png"
+    val wrongPierImage =
+      "https://brooklynbridgepark.org/wp-content/uploads/2025/05/" +
+        "Pier-2-Turf-Summer-2027-e444.png"
     val page =
       """
       <html>
         <img src="$springImage">
         <img srcset="$summerImage 300w">
         <img src="$volleyballImage">
+        <img src="$wrongPierImage">
       </html>
       """
         .trimIndent()

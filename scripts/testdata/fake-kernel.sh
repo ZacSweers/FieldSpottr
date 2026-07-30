@@ -20,6 +20,7 @@ case "${2:-}" in
     ;;
   curl)
     : "${FAKE_KERNEL_STATE:?}"
+    url="${4:-}"
     count=0
     if [[ -f "$FAKE_KERNEL_STATE" ]]; then
       count="$(<"$FAKE_KERNEL_STATE")"
@@ -47,6 +48,46 @@ case "${2:-}" in
           printf '%s\n' '<html><title>Just a moment...</title><div class="cf-chl-test">Cloudflare Ray ID: abc</div></html>' >"$output"
         else
           printf '%s\n' '{"availability":{}}' >"$output"
+        fi
+        ;;
+      binary)
+        : "${FAKE_KERNEL_BINARY_FILE:?}"
+        cp "$FAKE_KERNEL_BINARY_FILE" "$output"
+        ;;
+      block-then-binary)
+        : "${FAKE_KERNEL_BINARY_FILE:?}"
+        if [[ "$count" -eq 1 ]]; then
+          printf '%s\n' '<html><title>Just a moment...</title><div class="cf-chl-test">Cloudflare Ray ID: abc</div></html>' >"$output"
+        else
+          cp "$FAKE_KERNEL_BINARY_FILE" "$output"
+        fi
+        ;;
+      bbp)
+        : "${FAKE_BBP_IMAGE_FILE:?}"
+        : "${FAKE_BBP_IMAGE_URL:?}"
+        if [[ "$url" == *"/places-to-see/pier-5/" ]]; then
+          printf '<html><img src="%s"></html>\n' "$FAKE_BBP_IMAGE_URL" >"$output"
+        else
+          cp "$FAKE_BBP_IMAGE_FILE" "$output"
+        fi
+        ;;
+      bbp-image-block-then-image)
+        : "${FAKE_BBP_IMAGE_FILE:?}"
+        : "${FAKE_BBP_IMAGE_URL:?}"
+        if [[ "$url" == *"/places-to-see/pier-5/" ]]; then
+          printf '<html><img src="%s"></html>\n' "$FAKE_BBP_IMAGE_URL" >"$output"
+        elif [[ "$count" -eq 2 ]]; then
+          printf '%s\n' '<html><title>Just a moment...</title><div class="cf-chl-test">Cloudflare Ray ID: abc</div></html>' >"$output"
+        else
+          cp "$FAKE_BBP_IMAGE_FILE" "$output"
+        fi
+        ;;
+      bbp-image-fail)
+        : "${FAKE_BBP_IMAGE_URL:?}"
+        if [[ "$url" == *"/places-to-see/pier-5/" ]]; then
+          printf '<html><img src="%s"></html>\n' "$FAKE_BBP_IMAGE_URL" >"$output"
+        else
+          exit 22
         fi
         ;;
       fail)

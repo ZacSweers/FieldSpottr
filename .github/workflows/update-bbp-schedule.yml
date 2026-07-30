@@ -1,0 +1,335 @@
+name: Update BBP schedule
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_current:
+        description: Re-transcribe the checked-in image and verify that it matches the checked-in source
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '43 10 * * 1'
+
+permissions: {}
+
+concurrency:
+  group: update-bbp-schedule
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.fetch.outputs.changed }}
+      candidate_sha256: ${{ steps.fetch.outputs.candidate_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Test BBP schedule updater
+        run: scripts/update-bbp-schedule-test.sh
+
+      - name: Install Kernel CLI
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_current != true }}
+        run: npm install --global @onkernel/cli@0.26.0
+
+      - name: Verify checked-in transcription
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_current == true }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5.6-sol
+        run: scripts/update-bbp-schedule.sh verify-current
+
+      - name: Fetch official schedule
+        id: fetch
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_current != true }}
+        env:
+          KERNEL_API_KEY: ${{ secrets.KERNEL_API_KEY }}
+        run: scripts/update-bbp-schedule.sh fetch
+
+      - name: Transcribe changed image
+        if: steps.fetch.outputs.content_changed == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5.6-sol
+        run: scripts/update-bbp-schedule.sh transcribe
+
+      - name: Prepare source update
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_current != true }}
+        run: scripts/update-bbp-schedule.sh prepare
+
+      - name: Package source update
+        if: steps.fetch.outputs.changed == 'true'
+        run: |
+          unexpected="$(
+            git status --porcelain=v1 --untracked-files=all |
+              grep -Ev '^.. data/bbp/' || true
+          )"
+          if [[ -n "$unexpected" ]]; then
+            echo "BBP preparation changed files outside data/bbp:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+          data_status="$(git status --porcelain=v1 --untracked-files=all -- data/bbp)"
+          if [[ -z "$data_status" ]]; then
+            echo "BBP preparation produced no source changes." >&2
+            exit 1
+          fi
+          unexpected_data="$(
+            printf '%s\n' "$data_status" |
+              grep -Ev '^( M data/bbp/pier5-current\.json|\?\? data/bbp/pier5-[0-9a-f]{64}\.(png|jpg|jpeg|webp))$' ||
+              true
+          )"
+          if [[ -n "$unexpected_data" ]]; then
+            echo "BBP preparation changed files outside the current pointer and one new immutable image:" >&2
+            echo "$unexpected_data" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$data_status" | grep -Eq '^ M data/bbp/pier5-current\.json$'; then
+            echo "BBP preparation did not update data/bbp/pier5-current.json." >&2
+            exit 1
+          fi
+          new_image_count="$(
+            printf '%s\n' "$data_status" |
+              grep -Ec '^\?\? data/bbp/pier5-[0-9a-f]{64}\.(png|jpg|jpeg|webp)$' ||
+              true
+          )"
+          if ((new_image_count > 1)); then
+            echo "BBP preparation added more than one immutable image." >&2
+            exit 1
+          fi
+
+          git add --intent-to-add data/bbp
+          git diff --binary -- data/bbp > build/bbp-refresh/source.patch
+          git reset -- data/bbp
+          if [[ ! -s build/bbp-refresh/source.patch ]]; then
+            echo "BBP preparation produced an empty source patch." >&2
+            exit 1
+          fi
+          for required in \
+            build/bbp-refresh/pr-body.md \
+            build/bbp-refresh/metadata.json \
+            build/bbp-refresh/summary.json; do
+            if [[ ! -s "$required" ]]; then
+              echo "BBP preparation did not produce required publication data: $required" >&2
+              exit 1
+            fi
+          done
+
+      - name: Record diagnostic collection
+        if: always()
+        run: |
+          mkdir -p build/bbp-workflow-diagnostics
+          printf 'BBP schedule workflow run %s reached diagnostic collection.\n' \
+            "$GITHUB_RUN_ID" \
+            > build/bbp-workflow-diagnostics/workflow.txt
+
+      - name: Upload publication candidate
+        if: steps.fetch.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bbp-publication-${{ github.run_id }}
+          path: |
+            build/bbp-refresh/source.patch
+            build/bbp-refresh/pr-body.md
+            build/bbp-refresh/metadata.json
+            build/bbp-refresh/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload sanitized diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bbp-refresh-diagnostics-${{ github.run_id }}
+          path: |
+            build/bbp-refresh/page.html
+            build/bbp-refresh/candidate-image.*
+            build/bbp-refresh/metadata.json
+            build/bbp-refresh/summary.json
+            build/bbp-refresh/candidate-source.json
+            build/bbp-refresh/validated-source.json
+            build/bbp-refresh/transcribe.log
+            build/bbp-refresh/validation.log
+            build/bbp-refresh/verify-current-*
+            build/bbp-refresh/pr-body.md
+            build/bbp-refresh/source.patch
+            build/bbp-refresh/staged/data/bbp/**
+            build/bbp-refresh/diagnostics/**
+            build/bbp-refresh/generated/**
+            build/bbp-workflow-diagnostics/workflow.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: inspect
+    if: needs.inspect.result == 'success' && needs.inspect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download publication candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: bbp-publication-${{ github.run_id }}
+          path: build/bbp-publication
+
+      - name: Apply source update
+        env:
+          CANDIDATE_SHA256: ${{ needs.inspect.outputs.candidate_sha256 }}
+        run: |
+          if [[ ! "$CANDIDATE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid candidate image hash: $CANDIDATE_SHA256" >&2
+            exit 1
+          fi
+          if [[ ! -s build/bbp-publication/source.patch ]]; then
+            echo "Publication artifact contains no source patch." >&2
+            exit 1
+          fi
+          if [[ ! -s build/bbp-publication/pr-body.md ]]; then
+            echo "Publication artifact contains no pull request body." >&2
+            exit 1
+          fi
+
+          git apply --index build/bbp-publication/source.patch
+          data_status="$(git diff --cached --name-status -- data/bbp)"
+          unexpected_data="$(
+            printf '%s\n' "$data_status" |
+              grep -Ev $'^(M\tdata/bbp/pier5-current\\.json|A\tdata/bbp/pier5-[0-9a-f]{64}\\.(png|jpg|jpeg|webp))$' ||
+              true
+          )"
+          if [[ -n "$unexpected_data" ]]; then
+            echo "Publication patch changes files outside the current pointer and one new immutable image:" >&2
+            echo "$unexpected_data" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$data_status" | grep -Eq $'^M\tdata/bbp/pier5-current\\.json$'; then
+            echo "Publication patch does not update data/bbp/pier5-current.json." >&2
+            exit 1
+          fi
+          new_image_count="$(
+            printf '%s\n' "$data_status" |
+              grep -Ec $'^A\tdata/bbp/pier5-[0-9a-f]{64}\\.(png|jpg|jpeg|webp)$' ||
+              true
+          )"
+          if ((new_image_count > 1)); then
+            echo "Publication patch adds more than one immutable image." >&2
+            exit 1
+          fi
+
+          mkdir -p build/bbp-publication/diff
+          git status --short -- data/bbp > build/bbp-publication/diff/status.txt
+          git diff --cached --stat -- data/bbp > build/bbp-publication/diff/diff.stat
+          cp build/bbp-publication/source.patch build/bbp-publication/diff/source.patch
+
+      - name: Upload source diff
+        uses: actions/upload-artifact@v7
+        with:
+          name: bbp-source-diff-${{ github.run_id }}
+          path: build/bbp-publication/diff/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Commit source and open pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
+          CANDIDATE_SHA256: ${{ needs.inspect.outputs.candidate_sha256 }}
+        run: |
+          branch="automation/update-bbp-schedule-$CANDIDATE_SHA256"
+          existing_pr="$(
+            gh api \
+              --method GET \
+              "repos/$GITHUB_REPOSITORY/pulls" \
+              -f state=open \
+              -f base=main \
+              -f head="$GITHUB_REPOSITORY_OWNER:$branch" \
+              --jq '.[0].html_url // empty'
+          )"
+          gh auth setup-git
+
+          remote_oid="$(
+            git ls-remote --heads origin "refs/heads/$branch" |
+              awk 'NR == 1 { print $1 }'
+          )"
+          if [[ -n "$remote_oid" ]]; then
+            git fetch --no-tags origin \
+              "refs/heads/$branch:refs/remotes/origin/$branch"
+          fi
+
+          desired_tree="$(git write-tree)"
+          if [[ -n "$existing_pr" && -n "$remote_oid" ]]; then
+            remote_tree="$(git rev-parse "refs/remotes/origin/$branch^{tree}")"
+            if [[ "$desired_tree" == "$remote_tree" ]]; then
+              gh pr edit "$existing_pr" --body-file build/bbp-publication/pr-body.md
+              echo "The existing pull request already contains this source update: $existing_pr"
+              echo "url=$existing_pr" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add data/bbp
+
+          unexpected="$(git diff --cached --name-only | grep -Ev '^data/bbp/' || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Refusing to commit files outside data/bbp:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+          git commit -m "Update Brooklyn Bridge Park schedule"
+          if [[ -n "$remote_oid" ]]; then
+            git push \
+              --force-with-lease="refs/heads/$branch:$remote_oid" \
+              --set-upstream \
+              origin \
+              "$branch"
+          else
+            git push --set-upstream origin "$branch"
+          fi
+
+          if [[ -n "$existing_pr" ]]; then
+            gh pr edit \
+              "$existing_pr" \
+              --title "Update Brooklyn Bridge Park schedule" \
+              --body-file build/bbp-publication/pr-body.md
+            pr_url="$existing_pr"
+          else
+            pr_url="$(
+              gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "Update Brooklyn Bridge Park schedule" \
+              --body-file build/bbp-publication/pr-body.md
+            )"
+          fi
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"

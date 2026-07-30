@@ -123,7 +123,7 @@ assert_contains "$failed_output" "Warning: Kernel session cleanup failed"
 
 normal_page="$TEST_DIR/normal.html"
 block_page="$TEST_DIR/block.html"
-printf '%s\n' '<html><script src="/cdn-cgi/scripts/cloudflare-static/email-decode.min.js"></script></html>' >"$normal_page"
+printf '%s\n' '<html><script src="/cdn-cgi/scripts/cloudflare-static/email-decode.min.js"></script><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></html>' >"$normal_page"
 printf '%s\n' '<html><title>Attention Required! | Cloudflare</title><p>Cloudflare Ray ID: abc</p></html>' >"$block_page"
 bash -c \
   'source "$1"; ! response_is_cloudflare_challenge "$2"; response_is_cloudflare_challenge "$3"' \
