@@ -59,9 +59,13 @@ The generated manifest lists one hash per area feed. App refreshes download only
 
 ## GitHub Actions
 
-Store the Kernel API key in the repository Actions secret named `KERNEL_API_KEY`. Keep the secret scoped to the updater step, and never put it in command arguments, files, logs, generated artifacts, or commits.
+Store the Kernel API key in the repository Actions secret named `KERNEL_API_KEY`. The daily availability workflow runs at `17 8 * * *`, can be dispatched manually, and also runs after a change under `data/bbp/` reaches `main`. It uses Kernel with strict live-source validation, uploads diagnostics on failure, and opens an auto-merge pull request only when generated availability changed.
 
-The update workflow is manual-only during the initial burn-in. Run it manually on three separate days and verify its generated diffs, automatic merges, diagnostic artifacts, and Kernel usage. After three consecutive successful runs, restore the existing daily schedule at `17 8 * * *`. A failed strict refresh uploads diagnostics and stops before creating a pull request.
+The Brooklyn Bridge Park schedule workflow runs every Monday at `43 10 * * 1` and can also be dispatched manually. Manual runs execute only when dispatched against the repository's default branch. Store its OpenAI API key in the repository Actions secret named `OPENAI_API_KEY`. The inspection job has read-only repository access. `KERNEL_API_KEY` is exposed only while fetching the official page and schedule image, and `OPENAI_API_KEY` is exposed only while transcribing changed image bytes or running the explicit `verify_current` check. The existing `FIELDSPOTTR_BOT_TOKEN` is exposed only to the separate publication step.
+
+Never put an API key in command arguments, files, logs, generated artifacts, or commits. Both workflows fail before creating a pull request when a required secret, fetch, transcription, or validation fails.
+
+The BBP workflow opens a review-required pull request containing only `data/bbp/` source changes. It does not enable auto-merge. Merging that source pull request triggers the strict availability workflow. That workflow opens a separate generated-data pull request only when runtime availability changes; a URL-only metadata update or a new image with the same canonical schedule can produce no generated diff. A generated-data pull request changes `areas.json` or `availability/`, not `data/bbp/`, so it does not trigger another refresh.
 
 ## NYC Parks
 
@@ -101,25 +105,47 @@ scripts/update-availability.sh
 
 ## Brooklyn Bridge Park Pier 5
 
-Brooklyn Bridge Park is the area in the app. Pier 5 is the field/group inside that area, and
-`Field 1`, `Field 2`, and `Field 3` are the subfields shown as columns in the grid.
+Brooklyn Bridge Park is the area in the app. Pier 5 is the field/group inside that area, and `Field 1`, `Field 2`, and `Field 3` are the subfields shown as columns in the grid.
 
-Pier 5 availability is generated from a manually read transcription of the official schedule image
-on the Pier 5 page:
+Pier 5 availability is generated from a checked-in transcription of the official schedule image on the Pier 5 page:
 
 https://brooklynbridgepark.org/places-to-see/pier-5/
 
-The current checked-in source snapshot is `data/bbp/pier5-summer-2026.png`, and the generator reads
-`data/bbp/pier5-summer-2026.json`.
+`data/bbp/pier5-current.json` is the current source pointer. It records the official page and image URLs, image hash and path, schedule year and valid date range, transcription provenance, and the field, day, and time blocks that the generator expands into availability rows. Images use immutable names in the form `data/bbp/pier5-<full-sha256>.<ext>`, and every prior hash-named image remains checked in for audit.
 
-1. Open the official Pier 5 page and find the current turf schedule image.
-2. If the image changed, replace `data/bbp/pier5-summer-2026.png`.
-3. Read the field/date/time table from the image.
-4. Update `data/bbp/pier5-summer-2026.json`, including:
-   - valid date range
-   - days of week
-   - Pier 5 subfield numbers
-   - start and end times
+For a local check, load `KERNEL_API_KEY` and `OPENAI_API_KEY` from a secure shell environment and run:
+
+```bash
+scripts/update-bbp-schedule.sh
+```
+
+The no-argument command runs `fetch`, conditionally runs `transcribe` when the image bytes changed, and then runs `prepare`. Those phase names can also be passed separately when investigating a failure.
+
+The transcription defaults to `gpt-5.6-sol`. Local callers can set `OPENAI_MODEL` to test another model, while CI pins the default explicitly.
+
+The updater creates one Kernel stealth browser session, fetches the official page and exact schedule image, and compares the image bytes with the checked-in snapshot. Unchanged bytes require no transcription. A URL-only change reuses the existing transcription. Changed bytes are transcribed twice through the Responses API, and both canonical results must agree before deterministic validation accepts the candidate. Candidate source files and a network-free generated preview are written under `build/bbp-refresh/`. After validation succeeds, the updater installs only the changed source files under `data/bbp/` for review; it does not commit or open a pull request.
+
+To exercise the transcription and comparison against the checked-in image without fetching or preparing an update, run:
+
+```bash
+scripts/update-bbp-schedule.sh verify-current
+```
+
+The manual workflow exposes the same check through its `verify_current` input. That mode is exclusive: it does not fetch a new image, prepare source changes, or run the publication job.
+
+The updater fails closed when Kernel cannot fetch the page or image, the asset is unsupported, the API refuses or cannot complete the transcription, the two transcriptions disagree, or deterministic source and generator validation fails. Failed workflow runs open no pull request and retain sanitized diagnostics for 14 days.
+
+If automation cannot produce a valid candidate, update the source manually:
+
+1. Open the official Pier 5 page and download the current turf schedule image.
+2. Compute the image's full lowercase SHA-256 with `shasum -a 256 <image>` or `sha256sum <image>`, then copy it to `data/bbp/pier5-<full-sha256>.<ext>` using its `.png`, `.jpg`, or `.webp` extension without replacing or removing any prior hash-named image.
+3. Update `data/bbp/pier5-current.json` with its schema version and ID; exact `sourcePageUrl`, `imageUrl`, `imagePath`, and `imageSha256`; schedule year and valid dates; the manual `provenance` fields `method`, `model`, `promptVersion`, `responseIds`, and `extractedAt`; and the days, Pier 5 field IDs, start times, and end times exactly as shown.
+4. Validate the source and image:
+
+   ```bash
+   ./gradlew :generator:run --args="--validate-bbp-source=data/bbp/pier5-current.json --bbp-image-root=."
+   ```
+
 5. Regenerate repo data:
 
    ```bash
@@ -127,14 +153,12 @@ The current checked-in source snapshot is `data/bbp/pier5-summer-2026.png`, and 
    ```
 
 6. Confirm `availability/areas/brooklyn-bridge-park.json` changed as expected.
-7. Run generator tests:
+7. Run the focused updater and generator tests:
 
    ```bash
+   scripts/update-bbp-schedule-test.sh
    ./gradlew :generator:test
    ```
-
-The generator checks the Pier 5 page for a current turf schedule image URL and prints a warning if
-it differs from the checked-in transcription metadata.
 
 ## Hudson River Park / West Side Highway
 

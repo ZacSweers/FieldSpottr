@@ -2,6 +2,11 @@ name: Update availability
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'data/bbp/**'
   schedule:
     - cron: '17 8 * * *'
 
