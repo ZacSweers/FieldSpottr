@@ -6,7 +6,7 @@
       "areaName": "Baruch",
       "areaId": "baruch",
       "path": "availability/areas/baruch.json",
-      "hash": "a3e01591a867e81f057b8e221482f8ef3090672e6ed0d4616da2404f6c673836",
+      "hash": "01997cd0f8ff3414021e66276a5b244b136d87255e4ed04c7daed0004b5a7208",
       "generatedAt": null
     },
     {
@@ -27,7 +27,7 @@
       "areaName": "Columbus Park",
       "areaId": "columbus-park",
       "path": "availability/areas/columbus-park.json",
-      "hash": "a3a053f926879529a1e964223e50925087dc6bbada5e32f0ffbb3457f2b6e8f8",
+      "hash": "461c15e95029651115a0ff748b10a990bcb356c8c51c3335fca6eebfdff80b2a",
       "generatedAt": null
     },
     {
@@ -41,14 +41,14 @@
       "areaName": "ERP",
       "areaId": "erp",
       "path": "availability/areas/erp.json",
-      "hash": "abc0160498bfa6163c90fb3b510ab4e3c538f4691bd559ead6404d2745b7e4ad",
+      "hash": "0cd730edceed1fdff3b8e9fdab21d45f18116a48d992e78332f04f0cdd55f76b",
       "generatedAt": null
     },
     {
       "areaName": "McCarren",
       "areaId": "mccarren",
       "path": "availability/areas/mccarren.json",
-      "hash": "d0dd9cdb029b719f277f4d941ede001742bcfe0ff765091e73c602f2d89a46fe",
+      "hash": "d2c9979db0d1ef32115922e26eb1e980c7711abb94e10aa2dab9474f386496e6",
       "generatedAt": null
     },
     {
