@@ -14,6 +14,7 @@ import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
+import dev.zacsweers.metro.suspendLazy
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -52,7 +53,7 @@ class PermitRepositoryTest {
       appDirs,
       json,
       Logger.Companion,
-      suspend { temporaryDatabase.db() },
+      suspendLazy { temporaryDatabase.db() },
       lazyOf(httpClient),
     )
 
@@ -170,7 +171,7 @@ class PermitRepositoryTest {
       appDirs,
       json,
       Logger.Companion,
-      suspend { temporaryDatabase.db() },
+      suspendLazy { temporaryDatabase.db() },
       lazyOf(client),
     ) to client
   }

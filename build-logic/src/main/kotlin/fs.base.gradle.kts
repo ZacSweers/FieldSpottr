@@ -22,5 +22,9 @@ pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") {
     targets.withType<KotlinJvmTarget>().configureEach {
       compilerOptions { configureCommonJvmCompilerOptions() }
     }
+
+    pluginManager.withPlugin("dev.zacsweers.metro") {
+      compilerOptions { optIn.add("dev.zacsweers.metro.ExperimentalMetroCoroutinesApi") }
+    }
   }
 }

@@ -44,7 +44,7 @@ class WeatherRepositoryTest {
 
     assertThat(forecast.current).isNotNull()
     assertThat(forecast.current!!.tempF).isEqualTo(73)
-    assertThat(forecast.current!!.condition).isEqualTo(WeatherCondition.PARTLY_CLOUDY)
+    assertThat(forecast.current.condition).isEqualTo(WeatherCondition.PARTLY_CLOUDY)
 
     val daily = forecast.daily(date)
     assertThat(daily).isNotNull()

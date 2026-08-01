@@ -21,7 +21,11 @@ plugins {
   id("fs.android")
 }
 
-@OptIn(ExperimentalMetroGradleApi::class) metro { enableCircuitCodegen.set(true) }
+@OptIn(ExperimentalMetroGradleApi::class)
+metro {
+  enableCircuitCodegen.set(true)
+  enableSuspendProviders.set(true)
+}
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {

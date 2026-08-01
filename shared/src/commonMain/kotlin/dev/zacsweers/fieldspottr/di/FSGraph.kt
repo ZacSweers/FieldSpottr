@@ -8,11 +8,17 @@ import com.slack.circuit.foundation.Circuit
 import com.slack.circuit.runtime.presenter.Presenter
 import com.slack.circuit.runtime.ui.Ui
 import dev.zacsweers.fieldspottr.BuildConfig
+import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
+import dev.zacsweers.fieldspottr.SqlDriverFactory
+import dev.zacsweers.fieldspottr.data.createFSDatabase
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okio.FileSystem
 import okio.SYSTEM
@@ -30,6 +36,12 @@ interface FSGraph {
   }
 
   @Provides @SingleIn(AppScope::class) fun provideHttpClient(): HttpClient = HttpClient()
+
+  @Provides
+  suspend fun provideDatabase(sqlDriverFactory: SqlDriverFactory): FSDatabase =
+    withContext(Dispatchers.IO) {
+      sqlDriverFactory.create(FSDatabase.Schema, "fs.db").createFSDatabase()
+    }
 
   @Provides
   @SingleIn(AppScope::class)
