@@ -2,8 +2,13 @@ name: Update availability
 
 on:
   workflow_dispatch:
-#  schedule:
-#    - cron: '17 8 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - 'data/bbp/**'
+  schedule:
+    - cron: '17 8 * * *'
 
 permissions:
   contents: write
@@ -18,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
 
@@ -31,65 +36,23 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Dump HRP fields page
-        continue-on-error: true
-        run: |
-          mkdir -p build/hrp
-          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
-          "$CHROME" \
-              --headless=new \
-              --disable-gpu \
-              --no-sandbox \
-              --dump-dom \
-              https://hudsonriverpark.org/visit/events/permits/fields/ \
-              > build/hrp/fields.html
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
 
-      - name: Dump NYC live API responses
-        continue-on-error: true
-        run: |
-          mkdir -p build/nyc-live
-          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
-          USER_AGENT="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
-          TODAY="$(TZ=America/New_York date +%F)"
-          LIVE_DAYS=7
+      - name: Install Kernel CLI
+        run: npm install --global @onkernel/cli@0.26.0
 
-          jq -r '.. | objects | .apiLocationId? // empty' areas.json | sort -u |
-            while read -r api_location_id; do
-              mkdir -p "build/nyc-live/$api_location_id"
-              offset=0
-              while [ "$offset" -lt "$LIVE_DAYS" ]; do
-                live_date="$(date -d "$TODAY + $offset days" +%F)"
-                output="build/nyc-live/$api_location_id/$live_date.json"
-                url="https://www.nycgovparks.org/api/athletic-fields?location=$api_location_id&date=$live_date"
-                echo "Dumping $url"
-                if ! "$CHROME" \
-                    --headless=new \
-                    --disable-gpu \
-                    --no-sandbox \
-                    --user-agent="$USER_AGENT" \
-                    --dump-dom \
-                    "$url" \
-                    > "$output"; then
-                  echo "Chrome failed to dump $url"
-                  rm -f "$output"
-                elif [ ! -s "$output" ]; then
-                  echo "Chrome wrote an empty response for $url"
-                  rm -f "$output"
-                else
-                  head -c 160 "$output"
-                  echo
-                fi
-                offset=$((offset + 7))
-              done
-            done
+      - name: Test availability updater
+        run: scripts/update-availability-test.sh
 
-      - name: Generate availability data
-        run: |
-          ARGS="--output=. --nyc-live-source-dir=build/nyc-live"
-          if [ -s build/hrp/fields.html ]; then
-            ARGS="$ARGS --hrp-source-file=build/hrp/fields.html"
-          fi
-          ./gradlew :generator:run --args="$ARGS"
+      - name: Update availability data
+        env:
+          FETCH_BACKEND: kernel
+          KERNEL_API_KEY: ${{ secrets.KERNEL_API_KEY }}
+          REQUIRE_FRESH_LIVE_SOURCES: 'true'
+        run: scripts/update-availability.sh
 
       - name: Write generated data diff
         id: diff

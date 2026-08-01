@@ -20,7 +20,6 @@ import io.ktor.http.HttpHeaders
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
-import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -47,8 +46,6 @@ private const val NYC_PARKS_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
 private const val BROWSER_LIKE_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
-private val defaultBbpSourceFile = Path.of("data/bbp/pier5-summer-2026.json")
-
 private val nyZone = ZoneId.of("America/New_York")
 private val csvFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm a", Locale.US)
 private val usDateFormatter = DateTimeFormatter.ofPattern("M/d/yyyy", Locale.US)
@@ -64,6 +61,21 @@ private val json = Json {
 }
 
 fun main(args: Array<String>) = runBlocking {
+  if (runBbpCommand(args)) return@runBlocking
+
+  args.stringOption("validate-hrp-source")?.let { source ->
+    val sourcePath = Path.of(source)
+    check(Files.isRegularFile(sourcePath)) {
+      "Hudson River Park source does not exist: $sourcePath"
+    }
+    val area = Areas.default.entries.single { it.areaName == "West Side Highway" }
+    val response = Files.readString(sourcePath)
+    check(!response.isCloudflareBlockPage() && response.toHrpRows(area).isNotEmpty()) {
+      "Hudson River Park source produced no rows: $sourcePath"
+    }
+    return@runBlocking
+  }
+
   val options = args.options()
   Files.createDirectories(options.outputRoot)
 
@@ -126,6 +138,7 @@ private data class Options(
   val nycLiveSourceDir: Path?,
   val closuresSourceFile: Path?,
   val closuresDays: Long,
+  val requireFreshLiveSources: Boolean,
 )
 
 private fun Array<String>.options(): Options {
@@ -138,6 +151,7 @@ private fun Array<String>.options(): Options {
     nycLiveSourceDir = stringOption("nyc-live-source-dir")?.let(Path::of),
     closuresSourceFile = stringOption("closures-source-file")?.let(Path::of),
     closuresDays = longOption("closures-days") ?: defaultClosuresDays,
+    requireFreshLiveSources = contains("--require-fresh-live-sources"),
   )
 }
 
@@ -148,7 +162,7 @@ private fun Array<String>.outputRoot(): Path {
   return Path.of(".")
 }
 
-private fun Array<String>.stringOption(name: String): String? {
+internal fun Array<String>.stringOption(name: String): String? {
   val prefix = "--$name="
   firstOrNull { it.startsWith(prefix) }
     ?.let {
@@ -173,6 +187,11 @@ private suspend fun generateFeed(
   closureResult: ParkClosureFetchResult = ParkClosureFetchResult(),
 ): AvailabilityAreaFeed {
   val hrpRows = client.fetchHrpRows(area, options.hrpSourceFile)
+  requireFreshHrpSource(
+    enabled = options.requireFreshLiveSources,
+    areaName = area.areaName,
+    sourceSucceeded = hrpRows != null,
+  )
 
   val preservedHrpRows =
     if (area.areaName == "West Side Highway" && hrpRows == null) {
@@ -195,7 +214,19 @@ private suspend fun generateFeed(
       emptyList()
     }
 
-  val liveResult = client.fetchNycLiveRows(area, today, liveDays, options.nycLiveSourceDir)
+  val liveResult =
+    client.fetchNycLiveRows(
+      area = area,
+      today = today,
+      liveDays = liveDays,
+      sourceDir = options.nycLiveSourceDir,
+      requireFreshSourceFiles = options.requireFreshLiveSources,
+    )
+  requireFreshNycLiveSources(
+    enabled = options.requireFreshLiveSources,
+    areaName = area.areaName,
+    failedSourceIds = liveResult.failedSourceIds,
+  )
   val preservedLiveRows =
     if (liveResult.failedSourceIds.isNotEmpty()) {
       existingFeed.preserveRows(liveResult.failedSourceIds, "NYC live")
@@ -212,7 +243,7 @@ private suspend fun generateFeed(
   val sourceRows = buildList {
     addAll(csvResult.rows)
     addAll(preservedCsvRows)
-    addAll(client.fetchBbpRows(area, options.bbpSourceFile))
+    addAll(fetchBbpRows(area, options.bbpSourceFile, today))
     addAll(hrpRows ?: preservedHrpRows)
     addAll(liveResult.rows)
     addAll(preservedLiveRows)
@@ -224,6 +255,28 @@ private suspend fun generateFeed(
       rows = sourceRows,
     )
     .canonical()
+}
+
+internal fun requireFreshHrpSource(
+  enabled: Boolean,
+  areaName: String,
+  sourceSucceeded: Boolean,
+) {
+  if (enabled && areaName == "West Side Highway" && !sourceSucceeded) {
+    error("Required fresh Hudson River Park source failed")
+  }
+}
+
+internal fun requireFreshNycLiveSources(
+  enabled: Boolean,
+  areaName: String,
+  failedSourceIds: Set<String>,
+) {
+  if (enabled && failedSourceIds.isNotEmpty()) {
+    error(
+      "Required fresh NYC live sources failed for $areaName: ${failedSourceIds.sorted().joinToString()}"
+    )
+  }
 }
 
 private fun AvailabilityAreaFeed?.preserveRows(
@@ -383,6 +436,7 @@ private suspend fun HttpClient.fetchNycLiveRows(
   today: LocalDate,
   liveDays: Long,
   sourceDir: Path?,
+  requireFreshSourceFiles: Boolean,
 ): NycLiveFetchResult {
   if (liveDays <= 0) return NycLiveFetchResult()
 
@@ -399,7 +453,12 @@ private suspend fun HttpClient.fetchNycLiveRows(
       while (date < windowEndExclusive) {
         val response =
           try {
-            getNycLiveResponse(sourceDir, apiLocationId, date)
+            getNycLiveResponse(
+              sourceDir = sourceDir,
+              apiLocationId = apiLocationId,
+              date = date,
+              requireFreshSourceFile = requireFreshSourceFiles,
+            )
           } catch (e: Exception) {
             System.err.println("Failed to fetch NYC live data for $apiLocationId on $date: $e")
             fieldFailed = true
@@ -442,9 +501,23 @@ private suspend fun HttpClient.getNycLiveResponse(
   sourceDir: Path?,
   apiLocationId: String,
   date: LocalDate,
+  requireFreshSourceFile: Boolean,
 ): NycLiveResponseBody {
-  return tryGetNycLiveSourceFile(sourceDir, apiLocationId, date)
-    ?: fetchNycLiveResponse(apiLocationId, date)
+  val sourcePath =
+    nycLiveSourcePath(
+      sourceDir = sourceDir,
+      apiLocationId = apiLocationId,
+      date = date,
+      requireFreshSourceFile = requireFreshSourceFile,
+    )
+  if (sourcePath != null) {
+    val body = Files.readString(sourcePath)
+    return NycLiveResponseBody(
+      body = body,
+      source = "$sourcePath (${body.length} chars)",
+    )
+  }
+  return fetchNycLiveResponse(apiLocationId, date)
 }
 
 private suspend fun HttpClient.fetchNycLiveResponse(
@@ -464,18 +537,20 @@ private suspend fun HttpClient.fetchNycLiveResponse(
   )
 }
 
-private fun tryGetNycLiveSourceFile(
+internal fun nycLiveSourcePath(
   sourceDir: Path?,
   apiLocationId: String,
   date: LocalDate,
-): NycLiveResponseBody? {
+  requireFreshSourceFile: Boolean,
+): Path? {
   if (sourceDir == null) return null
 
   val path = sourceDir.resolve(apiLocationId).resolve("$date.json")
-  if (!Files.exists(path)) return null
-
-  val body = Files.readString(path)
-  return NycLiveResponseBody(body = body, source = "$path (${body.length} chars)")
+  if (Files.exists(path)) return path
+  if (requireFreshSourceFile) {
+    error("Required fresh NYC live source is missing: $path")
+  }
+  return null
 }
 
 private data class NycLiveResponseBody(
@@ -505,7 +580,7 @@ internal fun String.toNycLiveRows(
   ) ?: emptyList()
 }
 
-private fun String.toNycLiveRowsOrNull(
+internal fun String.toNycLiveRowsOrNull(
   area: Area,
   groupName: String,
   field: Field,
@@ -513,6 +588,14 @@ private fun String.toNycLiveRowsOrNull(
   endDateExclusive: LocalDate,
   source: String,
 ): List<AvailabilityFeedRow>? {
+  if (isCloudflareBlockPage()) {
+    System.err.println(
+      "Skipping NYC live data for ${field.apiLocationId} from $source because it is a " +
+        "Cloudflare block page"
+    )
+    return null
+  }
+
   val jsonPayload =
     jsonPayloadOrNull()
       ?: run {
@@ -522,6 +605,20 @@ private fun String.toNycLiveRowsOrNull(
         )
         return null
       }
+
+  val responseObject =
+    try {
+      json.parseToJsonElement(jsonPayload) as? JsonObject
+    } catch (e: SerializationException) {
+      null
+    }
+  if (responseObject == null || !responseObject.isNycLiveResponse()) {
+    System.err.println(
+      "Skipping NYC live data for ${field.apiLocationId} from $source because the JSON did not " +
+        "match an NYC live response. Preview: ${preview()}"
+    )
+    return null
+  }
 
   val response =
     try {
@@ -572,6 +669,16 @@ private fun String.toNycLiveRowsOrNull(
       }
     }
   }
+}
+
+private fun JsonObject.isNycLiveResponse(): Boolean {
+  this["availability"]?.let { availability ->
+    return availability is JsonObject
+  }
+  val fieldName = this["fieldName"] as? JsonPrimitive ?: return false
+  val close = this["close"] as? JsonObject ?: return false
+  return fieldName.isString &&
+    close.values.all { value -> value is JsonPrimitive && value.isString }
 }
 
 private fun String.jsonPayloadOrNull(): String? {
@@ -893,153 +1000,6 @@ internal fun generateClosureRows(
 
 // endregion
 
-private suspend fun HttpClient.fetchBbpRows(
-  area: Area,
-  sourceFile: Path,
-): List<AvailabilityFeedRow> {
-  if (area.areaName != "Brooklyn Bridge Park") return emptyList()
-  val source = sourceFile.decodeBbpPier5Source()
-  checkBbpSourceIsLatest(source)
-  return generateBbpPier5Rows(source)
-}
-
-internal fun generateBbpPier5Rows(
-  sourceFile: Path = defaultBbpSourceFile
-): List<AvailabilityFeedRow> {
-  return generateBbpPier5Rows(sourceFile.decodeBbpPier5Source())
-}
-
-private fun generateBbpPier5Rows(source: BbpPier5Source): List<AvailabilityFeedRow> {
-  val validFrom = LocalDate.parse(source.validFrom)
-  val validTo = LocalDate.parse(source.validTo)
-  return generateSequence(validFrom) { it.plusDays(1) }
-    .takeWhile { !it.isAfter(validTo) }
-    .flatMap { date ->
-      source.blocks
-        .filter { it.dayOfWeek == date.dayOfWeek }
-        .flatMap { block ->
-          block.fieldIds.map { fieldId ->
-            AvailabilityFeedRow(
-              areaName = "Brooklyn Bridge Park",
-              groupName = "Pier 5",
-              fieldId = fieldId,
-              start = date.atTime(block.startTime).atZone(nyZone).toInstant().toEpochMilli(),
-              end = date.atTime(block.endTime).atZone(nyZone).toInstant().toEpochMilli(),
-              title = "Busy (Active permits)",
-              org = "Brooklyn Bridge Park",
-              status = "Active permits",
-              kind = "BBP active permits",
-              sourceId = source.id,
-            )
-          }
-        }
-    }
-    .toList()
-}
-
-@Serializable
-private data class BbpPier5Source(
-  val id: String,
-  val sourcePageUrl: String,
-  val imageUrl: String,
-  val validFrom: String,
-  val validTo: String,
-  val blocks: List<BbpRecurringBlock>,
-)
-
-@Serializable
-private data class BbpRecurringBlock(
-  val day: String,
-  val fieldIds: List<String>,
-  val start: String,
-  val end: String,
-)
-
-private val BbpRecurringBlock.dayOfWeek: DayOfWeek
-  get() = DayOfWeek.valueOf(day)
-
-private val BbpRecurringBlock.startTime: LocalTime
-  get() = LocalTime.parse(start)
-
-private val BbpRecurringBlock.endTime: LocalTime
-  get() = LocalTime.parse(end)
-
-private fun Path.decodeBbpPier5Source(): BbpPier5Source {
-  return json.decodeFromString<BbpPier5Source>(Files.readString(existingPath()))
-}
-
-private fun Path.existingPath(): Path {
-  if (Files.exists(this)) return this
-  val parentPath = Path.of("..").resolve(this).normalize()
-  return if (Files.exists(parentPath)) parentPath else this
-}
-
-private suspend fun HttpClient.checkBbpSourceIsLatest(source: BbpPier5Source) {
-  val page =
-    try {
-      get(source.sourcePageUrl) {
-          header(HttpHeaders.UserAgent, BROWSER_LIKE_USER_AGENT)
-          header(HttpHeaders.Accept, "text/html")
-        }
-        .body<String>()
-    } catch (e: Exception) {
-      System.err.println("Failed to check Brooklyn Bridge Park source page: $e")
-      return
-    }
-  val latestImageUrl = page.findBbpPier5ScheduleImageUrl()
-  if (latestImageUrl == null) {
-    System.err.println(
-      "Brooklyn Bridge Park source page did not contain a Pier 5 turf schedule image"
-    )
-    return
-  }
-  if (latestImageUrl != source.imageUrl) {
-    System.err.println(
-      "Brooklyn Bridge Park Pier 5 schedule image may have changed. Latest: $latestImageUrl, checked-in: ${source.imageUrl}"
-    )
-  }
-}
-
-internal fun String.findBbpPier5ScheduleImageUrl(): String? {
-  val urls =
-    Regex("""https?://[^"'\\\s)]+?\.(?:png|jpe?g|pdf)""", RegexOption.IGNORE_CASE)
-      .findAll(replace("\\/", "/").replace("&amp;", "&"))
-      .map { it.value.toCanonicalBbpAssetUrl() }
-      .filter { it.contains("pier", ignoreCase = true) }
-      .filter { it.contains("5") }
-      .filter { it.contains("turf", ignoreCase = true) }
-      .distinct()
-      .toList()
-  return urls.maxWithOrNull(compareBy<String> { it.scheduleYear() }.thenBy { it.seasonRank() })
-}
-
-private fun String.toCanonicalBbpAssetUrl(): String {
-  val uploadsPath =
-    substringAfter("brooklynbridgepark.org/wp-content/uploads/", missingDelimiterValue = "")
-  val url =
-    if (uploadsPath.isNotEmpty()) {
-      "https://brooklynbridgepark.org/wp-content/uploads/$uploadsPath"
-    } else {
-      this
-    }
-  return url.substringBefore("?").replace(Regex("""-\d+x\d+(?=\.(?:png|jpe?g|pdf)$)"""), "")
-}
-
-private fun String.scheduleYear(): Int {
-  return Regex("""\b(20\d{2})\b""").findAll(this).lastOrNull()?.value?.toIntOrNull() ?: 0
-}
-
-private fun String.seasonRank(): Int {
-  val lower = lowercase()
-  return when {
-    "winter" in lower -> 1
-    "spring" in lower -> 2
-    "summer" in lower -> 3
-    "fall" in lower || "autumn" in lower -> 4
-    else -> 0
-  }
-}
-
 private suspend fun HttpClient.fetchHrpRows(
   area: Area,
   sourceFile: Path?,
@@ -1097,7 +1057,7 @@ internal fun String.toHrpRows(area: Area): List<AvailabilityFeedRow> {
 private fun String.hrpScheduleYear(): Int? {
   val scheduleHeading =
     Regex(
-        """(?i)\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\s*[–-]\s*\d{1,2},\s*(\d{4})\b"""
+        """(?i)\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\s*[–-]\s*(?:(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+)?\d{1,2},\s*(\d{4})\b"""
       )
       .find(this)
   return scheduleHeading?.groupValues?.get(1)?.toIntOrNull()
@@ -1113,8 +1073,13 @@ private fun String.toHrpFieldTitle(): String {
 }
 
 private fun String.toScheduleText(): String {
-  return replace(Regex("""(?is)<img\b[^>]*alt=["']([^"']+)["'][^>]*>"""), "\nImage: $1\n")
-    .replace(Regex("""(?is)<br\s*/?>"""), "\n")
+  val normalizedTableRows =
+    replace(Regex("""(?is)<tr\b[^>]*>(.*?)</tr>""")) { match ->
+      "\n${match.groupValues[1].replace(Regex("""[\r\n]+"""), " ")}\n"
+    }
+  return normalizedTableRows
+    .replace(Regex("""(?is)<img\b[^>]*alt=["']([^"']+)["'][^>]*>"""), "\nImage: $1\n")
+    .replace(Regex("""(?is)<br\s*/?>"""), " ")
     .replace(Regex("""(?is)</t[dh]>"""), " | ")
     .replace(Regex("""(?is)</tr>"""), "\n")
     .replace(Regex("""(?is)<[^>]+>"""), " ")
@@ -1340,7 +1305,7 @@ private fun Field.canonical(): Field {
   return copy(sharedFields = sharedFields.sorted().toImmutableSet())
 }
 
-private fun AvailabilityAreaFeed.canonical(): AvailabilityAreaFeed {
+internal fun AvailabilityAreaFeed.canonical(): AvailabilityAreaFeed {
   return copy(rows = rows.mergeAdjacentRows().sortedWith(feedRowComparator))
 }
 

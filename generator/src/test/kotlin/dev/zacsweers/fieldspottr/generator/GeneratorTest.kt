@@ -12,21 +12,23 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.Field
+import java.nio.file.Files
+import java.time.LocalDate
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlinx.collections.immutable.persistentListOf
 
 class GeneratorTest {
   @Test
   fun `bbp monday schedule expands field 1 split blocks`() {
-    val juneFirst =
-      generateBbpPier5Rows().filter { row ->
-        row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
-      }
-    val mondayField1 =
-      generateBbpPier5Rows().filter { row ->
-        row.fieldId == "pier5-field-1" &&
-          row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
-      }
+    val rows = generateBbpPier5Rows(today = LocalDate.parse("2026-06-01"))
+    val juneFirst = rows.filter { row ->
+      row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
+    }
+    val mondayField1 = rows.filter { row ->
+      row.fieldId == "pier5-field-1" &&
+        row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
+    }
 
     assertThat(juneFirst).hasSize(1)
     assertThat(juneFirst.single().groupName).isEqualTo("Pier 5")
@@ -38,7 +40,7 @@ class GeneratorTest {
   }
 
   @Test
-  fun `nyc live parser creates hard and advisory rows`() {
+  fun `nyc live parser reads raw Kernel json`() {
     val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
     val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
     val response =
@@ -64,12 +66,15 @@ class GeneratorTest {
         .trimIndent()
 
     val rows =
-      response.toNycLiveRows(
-        area = area,
-        groupName = "Baruch",
-        field = field,
-        startDateInclusive = java.time.LocalDate.of(2026, 6, 5),
-        endDateExclusive = java.time.LocalDate.of(2026, 6, 6),
+      checkNotNull(
+        response.toNycLiveRowsOrNull(
+          area = area,
+          groupName = "Baruch",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 6, 5),
+          endDateExclusive = LocalDate.of(2026, 6, 6),
+          source = "Kernel Browser Curl",
+        )
       )
 
     assertThat(rows).hasSize(3)
@@ -109,28 +114,114 @@ class GeneratorTest {
   }
 
   @Test
-  fun `nyc live parser ignores html block pages`() {
+  fun `nyc live parser accepts valid empty availability`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
+
+    val rows =
+      """{"availability":{}}"""
+        .toNycLiveRowsOrNull(
+          area = area,
+          groupName = "Baruch",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 6, 5),
+          endDateExclusive = LocalDate.of(2026, 6, 6),
+          source = "Kernel Browser Curl",
+        )
+
+    assertThat(rows).isEqualTo(emptyList<AvailabilityFeedRow>())
+  }
+
+  @Test
+  fun `nyc live parser accepts provider metadata without availability`() {
+    val area = Area("ERP", "East River Park", fieldGroups = persistentListOf())
+    val field = Field("Soccer-01", "Soccer 1", "ERP", apiLocationId = "M144-ZN05-SOCCER-2")
+    val response =
+      """
+      {
+        "fieldName": "Soccer-01A East 6th Street",
+        "close": {"2026-07-29": "21:00"}
+      }
+      """
+        .trimIndent()
+
+    val rows =
+      response.toNycLiveRowsOrNull(
+        area = area,
+        groupName = "ERP",
+        field = field,
+        startDateInclusive = LocalDate.of(2026, 7, 29),
+        endDateExclusive = LocalDate.of(2026, 7, 30),
+        source = "Kernel Browser Curl",
+      )
+
+    assertThat(rows).isEqualTo(emptyList<AvailabilityFeedRow>())
+  }
+
+  @Test
+  fun `nyc live parser rejects unrelated json objects`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
+
+    val rows =
+      "{}"
+        .toNycLiveRowsOrNull(
+          area = area,
+          groupName = "Baruch",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 6, 5),
+          endDateExclusive = LocalDate.of(2026, 6, 6),
+          source = "Kernel Browser Curl",
+        )
+
+    assertThat(rows).isEqualTo(null)
+  }
+
+  @Test
+  fun `nyc live parser rejects malformed provider metadata`() {
+    val area = Area("ERP", "East River Park", fieldGroups = persistentListOf())
+    val field = Field("Soccer-01", "Soccer 1", "ERP", apiLocationId = "M144-ZN05-SOCCER-2")
+
+    val rows =
+      """{"fieldName":{},"close":[]}"""
+        .toNycLiveRowsOrNull(
+          area = area,
+          groupName = "ERP",
+          field = field,
+          startDateInclusive = LocalDate.of(2026, 7, 29),
+          endDateExclusive = LocalDate.of(2026, 7, 30),
+          source = "Kernel Browser Curl",
+        )
+
+    assertThat(rows).isEqualTo(null)
+  }
+
+  @Test
+  fun `nyc live parser rejects cloudflare pages with embedded json`() {
     val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
     val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
     val response =
       """
       <!doctype html>
       <html>
-        <title>Attention Required</title>
+        <title>Attention Required! | Cloudflare</title>
+        <script type="application/json">{"unrelated":"value"}</script>
+        <p>Sorry, you have been blocked. Cloudflare Ray ID: abc</p>
       </html>
       """
         .trimIndent()
 
     val rows =
-      response.toNycLiveRows(
+      response.toNycLiveRowsOrNull(
         area = area,
         groupName = "Baruch",
         field = field,
-        startDateInclusive = java.time.LocalDate.of(2026, 6, 5),
-        endDateExclusive = java.time.LocalDate.of(2026, 6, 6),
+        startDateInclusive = LocalDate.of(2026, 6, 5),
+        endDateExclusive = LocalDate.of(2026, 6, 6),
+        source = "Kernel Browser Curl",
       )
 
-    assertThat(rows).isEmpty()
+    assertThat(rows).isEqualTo(null)
   }
 
   @Test
@@ -207,12 +298,16 @@ class GeneratorTest {
     val volleyballImage =
       "https://brooklynbridgepark.org/wp-content/uploads/2023/07/" +
         "Volleyball-Court-Schedule-Summer-2026-e333.png"
+    val wrongPierImage =
+      "https://brooklynbridgepark.org/wp-content/uploads/2025/05/" +
+        "Pier-2-Turf-Summer-2027-e444.png"
     val page =
       """
       <html>
         <img src="$springImage">
         <img srcset="$summerImage 300w">
         <img src="$volleyballImage">
+        <img src="$wrongPierImage">
       </html>
       """
         .trimIndent()
@@ -255,6 +350,93 @@ class GeneratorTest {
   }
 
   @Test
+  fun `strict source validation reports provider failures`() {
+    val hrpFailure =
+      assertFailsWith<IllegalStateException> {
+        requireFreshHrpSource(
+          enabled = true,
+          areaName = "West Side Highway",
+          sourceSucceeded = false,
+        )
+      }
+    assertThat(hrpFailure.message).isEqualTo("Required fresh Hudson River Park source failed")
+
+    val nycFailure =
+      assertFailsWith<IllegalStateException> {
+        requireFreshNycLiveSources(
+          enabled = true,
+          areaName = "Baruch",
+          failedSourceIds =
+            setOf("nyc-parks-live:M165-FOOTBALL-2", "nyc-parks-live:M165-FOOTBALL-1"),
+        )
+      }
+    assertThat(nycFailure.message)
+      .isEqualTo(
+        "Required fresh NYC live sources failed for Baruch: " +
+          "nyc-parks-live:M165-FOOTBALL-1, nyc-parks-live:M165-FOOTBALL-2"
+      )
+  }
+
+  @Test
+  fun `preservation mode does not require fresh live sources`() {
+    requireFreshHrpSource(
+      enabled = false,
+      areaName = "West Side Highway",
+      sourceSucceeded = false,
+    )
+    requireFreshHrpSource(enabled = true, areaName = "Baruch", sourceSucceeded = false)
+    requireFreshNycLiveSources(
+      enabled = false,
+      areaName = "Baruch",
+      failedSourceIds = setOf("nyc-parks-live:M165-FOOTBALL-1"),
+    )
+  }
+
+  @Test
+  fun `strict staged live sources do not fall back when a file is missing`() {
+    val sourceDir = Files.createTempDirectory("fieldspottr-nyc-live")
+    val date = LocalDate.of(2026, 6, 5)
+    val apiLocationId = "M165-FOOTBALL-1"
+    val expectedPath = sourceDir.resolve(apiLocationId).resolve("$date.json")
+    try {
+      val failure =
+        assertFailsWith<IllegalStateException> {
+          nycLiveSourcePath(
+            sourceDir = sourceDir,
+            apiLocationId = apiLocationId,
+            date = date,
+            requireFreshSourceFile = true,
+          )
+        }
+      assertThat(failure.message)
+        .isEqualTo("Required fresh NYC live source is missing: $expectedPath")
+      assertThat(
+          nycLiveSourcePath(
+            sourceDir = sourceDir,
+            apiLocationId = apiLocationId,
+            date = date,
+            requireFreshSourceFile = false,
+          )
+        )
+        .isEqualTo(null)
+
+      Files.createDirectories(expectedPath.parent)
+      Files.writeString(expectedPath, """{"availability":{}}""")
+      assertThat(
+          nycLiveSourcePath(
+            sourceDir = sourceDir,
+            apiLocationId = apiLocationId,
+            date = date,
+            requireFreshSourceFile = true,
+          )
+        )
+        .isEqualTo(expectedPath)
+    } finally {
+      sourceDir.toFile().deleteRecursively()
+    }
+  }
+
+  @Test
   fun `hrp weekly schedule parser expands table rows`() {
     val area = Areas.default.entries.single { it.areaName == "West Side Highway" }
     val rows = hrpFixture.toHrpRows(area)
@@ -269,6 +451,41 @@ class GeneratorTest {
     assertThat(rows[0].groupName).isEqualTo("Pier 25")
     assertThat(rows[0].title).isEqualTo("Busy (Active permits)")
     assertThat(rows[0].kind).isEqualTo("HRP active permits")
+  }
+
+  @Test
+  fun `hrp weekly schedule parser reads raw Browser Curl html`() {
+    val area = Areas.default.entries.single { it.areaName == "West Side Highway" }
+    val response =
+      """
+      <meta name="copyright" content="2020">
+      <h4>July 26–August 2, 2026</h4>
+      <table>
+        <tr>
+          <th><img src="pier25.png" alt="Pier 25 Turf Field"></th>
+        </tr>
+        <tr>
+          <th>Time</th>
+          <th>Sun<br>7/26</th>
+        </tr>
+        <tr>
+          <td>8:00 AM</td>
+          <td class="permitted">8:00 AM–</td>
+        </tr>
+        <tr>
+          <td>9:00 AM</td>
+          <td class="permitted">9:00 AM</td>
+        </tr>
+      </table>
+      """
+        .trimIndent()
+
+    val rows = response.toHrpRows(area)
+
+    assertThat(rows).hasSize(1)
+    assertThat(rows.single().fieldId).isEqualTo("pier25-turf-field")
+    assertThat(rows.single().start).isEqualTo(nyMillis("2026-07-26T08:00"))
+    assertThat(rows.single().end).isEqualTo(nyMillis("2026-07-26T09:00"))
   }
 
   @Test
