@@ -35,8 +35,8 @@ class SuspendLazyGraphTest {
     assertThat(factory.attempts).isEqualTo(0)
     assertThat(resource.isInitialized()).isFalse()
 
-    val first = resource.value()
-    val second = resource.value()
+    val first = resource.await()
+    val second = resource.await()
 
     assertThat(first).isSameInstanceAs(second)
     assertThat(factory.attempts).isEqualTo(1)
@@ -54,9 +54,9 @@ class SuspendLazyGraphTest {
     }
     val resource = createGraph(factory).consumer.resource
 
-    val firstCall = async(start = CoroutineStart.UNDISPATCHED) { resource.value() }
+    val firstCall = async(start = CoroutineStart.UNDISPATCHED) { resource.await() }
     started.await()
-    val secondCall = async(start = CoroutineStart.UNDISPATCHED) { resource.value() }
+    val secondCall = async(start = CoroutineStart.UNDISPATCHED) { resource.await() }
 
     try {
       assertThat(factory.attempts).isEqualTo(1)
@@ -77,9 +77,9 @@ class SuspendLazyGraphTest {
     }
     val resource = createGraph(factory).consumer.resource
 
-    assertFailsWith<IllegalStateException> { resource.value() }
+    assertFailsWith<IllegalStateException> { resource.await() }
     assertThat(resource.isInitialized()).isFalse()
-    assertThat(resource.value().attempt).isEqualTo(2)
+    assertThat(resource.await().attempt).isEqualTo(2)
     assertThat(factory.attempts).isEqualTo(2)
     assertThat(resource.isInitialized()).isTrue()
   }
@@ -96,12 +96,12 @@ class SuspendLazyGraphTest {
     }
     val resource = createGraph(factory).consumer.resource
 
-    val firstCall = launch(start = CoroutineStart.UNDISPATCHED) { resource.value() }
+    val firstCall = launch(start = CoroutineStart.UNDISPATCHED) { resource.await() }
     started.await()
     firstCall.cancelAndJoin()
 
     assertThat(resource.isInitialized()).isFalse()
-    assertThat(resource.value().attempt).isEqualTo(2)
+    assertThat(resource.await().attempt).isEqualTo(2)
     assertThat(factory.attempts).isEqualTo(2)
     assertThat(resource.isInitialized()).isTrue()
   }

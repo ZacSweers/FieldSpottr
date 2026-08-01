@@ -37,7 +37,7 @@ class TemporaryDatabase<T>(
     instance
   }
 
-  suspend fun db(): T = lazyDb.value()
+  suspend fun db(): T = lazyDb.await()
 
   override fun after() {
     driver?.close()
