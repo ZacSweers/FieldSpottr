@@ -631,38 +631,12 @@
       "groupName": "Corlears Hook",
       "fieldId": "Soccer-01",
       "start": 1786743000000,
-      "end": 1786744800000,
-      "title": "New York City Department of Citywide Administrativ",
-      "org": "New York City Department of Citywide Administrativ",
-      "status": "Permit #943180",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M017-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Corlears Hook",
-      "groupName": "Corlears Hook",
-      "fieldId": "Soccer-01",
-      "start": 1786743000000,
       "end": 1786752000000,
       "title": "New York City Department of Citywide Administrativ",
       "org": "New York City Department of Citywide Administrativ",
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Corlears Hook",
-      "advisory": null
-    },
-    {
-      "areaName": "Corlears Hook",
-      "groupName": "Corlears Hook",
-      "fieldId": "Soccer-01",
-      "start": 1786744800000,
-      "end": 1786752000000,
-      "title": "New York City Department of Citywide Administrativ",
-      "org": "New York City Department of Citywide Administrativ",
-      "status": "Permit #943180",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M017-SOCCER-1",
       "advisory": null
     },
     {
@@ -5187,20 +5161,6 @@
       "status": "Approved",
       "kind": "Miscellaneous",
       "sourceId": "nyc-parks-csv:Corlears Hook",
-      "advisory": null
-    },
-    {
-      "areaName": "Corlears Hook",
-      "groupName": "Corlears Hook",
-      "fieldId": "Softball-01",
-      "start": 1786743000000,
-      "end": 1786752000000,
-      "title": "Overlapping field permit",
-      "org": "New York City Department of Citywide Administrativ",
-      "status": "Permit #943180",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M017-BASEBALL-1",
-      "isOverlap": true,
       "advisory": null
     },
     {

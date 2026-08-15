@@ -6,7 +6,7 @@
       "areaName": "Baruch",
       "areaId": "baruch",
       "path": "availability/areas/baruch.json",
-      "hash": "3a4671de650354046171f9ac5113a7194884b8304a11d1178b657412d5efde89",
+      "hash": "7107ade3a30393f0575695811e0f91be321f9e61497fe78858364a02de3feb9b",
       "generatedAt": null
     },
     {
@@ -20,63 +20,63 @@
       "areaName": "Bushwick Inlet Park",
       "areaId": "bushwick-inlet-park",
       "path": "availability/areas/bushwick-inlet-park.json",
-      "hash": "123c9c2162e02ef6b0cc142e9341bff970f06a05ea92e72361a90b57c8a97627",
+      "hash": "05cfe13fbff713aacd04ebb2571d3d1ffcd64edfc8c0781c2b26291d9903af48",
       "generatedAt": null
     },
     {
       "areaName": "Columbus Park",
       "areaId": "columbus-park",
       "path": "availability/areas/columbus-park.json",
-      "hash": "cd53feeea8b81bc5df1983eeb9e57df9b56659cf4da720bfe5ada601bacec6b9",
+      "hash": "39a43e6b2620cc17651f3bbd76aa079fde343775487c553f5a183a5c11a581f5",
       "generatedAt": null
     },
     {
       "areaName": "Corlears Hook",
       "areaId": "corlears-hook",
       "path": "availability/areas/corlears-hook.json",
-      "hash": "197927618e285a4afdd5fd84d2ed10a230b6a155c8646465ec1e4fc6b00b721f",
+      "hash": "b1e7d6c4c9b44ad632cc8c7d40db5184ccd5d450b86580f1f5fc4d12935bcb67",
       "generatedAt": null
     },
     {
       "areaName": "ERP",
       "areaId": "erp",
       "path": "availability/areas/erp.json",
-      "hash": "8230170d31340944226e61f49e4e5caf7d9c4617b918b1b18ff6b1b821a5d2f6",
+      "hash": "718a6e9e229a05dd49cfd97a3fbd79086233b78f976b4d15566830fb3d50830e",
       "generatedAt": null
     },
     {
       "areaName": "McCarren",
       "areaId": "mccarren",
       "path": "availability/areas/mccarren.json",
-      "hash": "4f8ad5426e68bf8200b1211b2e697e8135ff2bd4bf119722e5ccd5567b249779",
+      "hash": "0bef61bab42f8bd3cb4dd94e36ae21a50023af12fac567b5b82b1a9100b4aae6",
       "generatedAt": null
     },
     {
       "areaName": "Murphy Brothers Playground",
       "areaId": "murphy-brothers-playground",
       "path": "availability/areas/murphy-brothers-playground.json",
-      "hash": "cc5cca1ea2c9bc388a27fe99a8465c213aded06c9674d1d798d86a7bb75cbfea",
+      "hash": "227b13527eaaddc0c1665feb30736db05f8356e7ee1b95b36a3353de7b1c424e",
       "generatedAt": null
     },
     {
       "areaName": "Peter's Field",
       "areaId": "peter-s-field",
       "path": "availability/areas/peter-s-field.json",
-      "hash": "2a4c943eca1329990ec0c81d2bb263aff4632078379b0b66cb98aebaf6751ff7",
+      "hash": "dcad705987b1748b729dd63f8e547aa40184e340e50253bc4acac42aac72a68e",
       "generatedAt": null
     },
     {
       "areaName": "Pier 42",
       "areaId": "pier-42",
       "path": "availability/areas/pier-42.json",
-      "hash": "bbe90fb72c6639f11fede1870a0b8a0145a661c5fd04e64844f924232358b98c",
+      "hash": "3b60fbb1415c4d20b3f410dc0ec6f31decf466d55d1ee9a563151ecaf048e327",
       "generatedAt": null
     },
     {
       "areaName": "Sara D. Roosevelt Park",
       "areaId": "sara-d-roosevelt-park",
       "path": "availability/areas/sara-d-roosevelt-park.json",
-      "hash": "5fd76c2910bf9ccb5f43a441203f7afc44b61bf10abaac98c30ff381a00de10c",
+      "hash": "c155b3f460ead5d6cb67b60f287fb6cf7aeab21b030f1beafdd361b26b9c03c9",
       "generatedAt": null
     },
     {
