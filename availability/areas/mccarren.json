@@ -7235,51 +7235,12 @@
       "groupName": "McCarren Track",
       "fieldId": "Soccer-01",
       "start": 1787486400000,
-      "end": 1787488200000,
-      "title": "Polonia NY Soccer Club",
-      "org": "Polonia NY Soccer Club",
-      "status": "Permit #900804",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
-      "advisory": null
-    },
-    {
-      "areaName": "McCarren",
-      "groupName": "McCarren Track",
-      "fieldId": "Soccer-01",
-      "start": 1787486400000,
       "end": 1787500800000,
       "title": "Renewal Spring Permit 2025 Renewal",
       "org": "Polonia NY Soccer Club",
       "status": "Approved",
       "kind": "Soccer -Regulation",
       "sourceId": "nyc-parks-csv:McCarren",
-      "advisory": null
-    },
-    {
-      "areaName": "McCarren",
-      "groupName": "McCarren Track",
-      "fieldId": "Soccer-01",
-      "start": 1787488200000,
-      "end": 1787500800000,
-      "title": "Polonia NY Soccer Club",
-      "org": "Polonia NY Soccer Club",
-      "status": "Permit #900804",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
-      "advisory": null
-    },
-    {
-      "areaName": "McCarren",
-      "groupName": "McCarren Track",
-      "fieldId": "Soccer-01",
-      "start": 1787500800000,
-      "end": 1787502600000,
-      "title": "American Soccer League, Inc.",
-      "org": "American Soccer League, Inc.",
-      "status": "Permit #905011",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
       "advisory": null
     },
     {
@@ -7293,19 +7254,6 @@
       "status": "\"American Soccer League",
       "kind": "Soccer -Regulation",
       "sourceId": "nyc-parks-csv:McCarren",
-      "advisory": null
-    },
-    {
-      "areaName": "McCarren",
-      "groupName": "McCarren Track",
-      "fieldId": "Soccer-01",
-      "start": 1787502600000,
-      "end": 1787536800000,
-      "title": "American Soccer League, Inc.",
-      "org": "American Soccer League, Inc.",
-      "status": "Permit #905011",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
       "advisory": null
     },
     {
@@ -8236,12 +8184,51 @@
       "groupName": "McCarren Track",
       "fieldId": "Soccer-01",
       "start": 1788094800000,
+      "end": 1788096600000,
+      "title": "DiscNY Inc",
+      "org": "DiscNY Inc",
+      "status": "Permit #903739",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
+      "advisory": null
+    },
+    {
+      "areaName": "McCarren",
+      "groupName": "McCarren Track",
+      "fieldId": "Soccer-01",
+      "start": 1788094800000,
       "end": 1788105600000,
       "title": "DiscNY Inc - Adult Renewal",
       "org": "DiscNY Inc",
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:McCarren",
+      "advisory": null
+    },
+    {
+      "areaName": "McCarren",
+      "groupName": "McCarren Track",
+      "fieldId": "Soccer-01",
+      "start": 1788096600000,
+      "end": 1788105600000,
+      "title": "DiscNY Inc",
+      "org": "DiscNY Inc",
+      "status": "Permit #903739",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
+      "advisory": null
+    },
+    {
+      "areaName": "McCarren",
+      "groupName": "McCarren Track",
+      "fieldId": "Soccer-01",
+      "start": 1788105600000,
+      "end": 1788107400000,
+      "title": "American Soccer League, Inc.",
+      "org": "American Soccer League, Inc.",
+      "status": "Permit #905011",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
       "advisory": null
     },
     {
@@ -8255,6 +8242,19 @@
       "status": "\"American Soccer League",
       "kind": "Soccer -Regulation",
       "sourceId": "nyc-parks-csv:McCarren",
+      "advisory": null
+    },
+    {
+      "areaName": "McCarren",
+      "groupName": "McCarren Track",
+      "fieldId": "Soccer-01",
+      "start": 1788107400000,
+      "end": 1788141600000,
+      "title": "American Soccer League, Inc.",
+      "org": "American Soccer League, Inc.",
+      "status": "Permit #905011",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:B058-ZN02-FOOTBALL-1",
       "advisory": null
     },
     {

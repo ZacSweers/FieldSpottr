@@ -721,20 +721,6 @@
       "areaName": "Corlears Hook",
       "groupName": "Corlears Hook",
       "fieldId": "Soccer-01",
-      "start": 1787517000000,
-      "end": 1787529600000,
-      "title": "Overlapping field permit",
-      "org": "INDIVIDUAL",
-      "status": "Permit #967668",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M017-SOCCER-1",
-      "isOverlap": true,
-      "advisory": null
-    },
-    {
-      "areaName": "Corlears Hook",
-      "groupName": "Corlears Hook",
-      "fieldId": "Soccer-01",
       "start": 1787598000000,
       "end": 1787599800000,
       "title": "East Side Community High School",
@@ -5292,19 +5278,6 @@
       "status": "Approved",
       "kind": "Miscellaneous",
       "sourceId": "nyc-parks-csv:Corlears Hook",
-      "advisory": null
-    },
-    {
-      "areaName": "Corlears Hook",
-      "groupName": "Corlears Hook",
-      "fieldId": "Softball-01",
-      "start": 1787517000000,
-      "end": 1787529600000,
-      "title": "INDIVIDUAL",
-      "org": "INDIVIDUAL",
-      "status": "Permit #967668",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M017-BASEBALL-1",
       "advisory": null
     },
     {
