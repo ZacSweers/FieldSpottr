@@ -6429,51 +6429,12 @@
       "groupName": "Columbus Park",
       "fieldId": "Soccer-01",
       "start": 1787598000000,
-      "end": 1787599800000,
-      "title": "06 United Inc",
-      "org": "06 United Inc",
-      "status": "Permit #965586",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1787598000000,
       "end": 1787608800000,
       "title": "06 United Inc - Youth",
       "org": "06 United Inc",
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1787599800000,
-      "end": 1787608800000,
-      "title": "06 United Inc",
-      "org": "06 United Inc",
-      "status": "Permit #965586",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1787608800000,
-      "end": 1787610600000,
-      "title": "NYC Soccer Collective",
-      "org": "NYC Soccer Collective",
-      "status": "Permit #907125",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
@@ -6487,19 +6448,6 @@
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1787610600000,
-      "end": 1787616000000,
-      "title": "NYC Soccer Collective",
-      "org": "NYC Soccer Collective",
-      "status": "Permit #907125",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
@@ -7196,12 +7144,51 @@
       "groupName": "Columbus Park",
       "fieldId": "Soccer-01",
       "start": 1788202800000,
+      "end": 1788204600000,
+      "title": "06 United Inc",
+      "org": "06 United Inc",
+      "status": "Permit #965586",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M015-SOCCER-1",
+      "advisory": null
+    },
+    {
+      "areaName": "Columbus Park",
+      "groupName": "Columbus Park",
+      "fieldId": "Soccer-01",
+      "start": 1788202800000,
       "end": 1788213600000,
       "title": "06 United Inc - Youth",
       "org": "06 United Inc",
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
+      "advisory": null
+    },
+    {
+      "areaName": "Columbus Park",
+      "groupName": "Columbus Park",
+      "fieldId": "Soccer-01",
+      "start": 1788204600000,
+      "end": 1788213600000,
+      "title": "06 United Inc",
+      "org": "06 United Inc",
+      "status": "Permit #965586",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M015-SOCCER-1",
+      "advisory": null
+    },
+    {
+      "areaName": "Columbus Park",
+      "groupName": "Columbus Park",
+      "fieldId": "Soccer-01",
+      "start": 1788213600000,
+      "end": 1788215400000,
+      "title": "NYC Soccer Collective",
+      "org": "NYC Soccer Collective",
+      "status": "Permit #907125",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
@@ -7215,6 +7202,19 @@
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
+      "advisory": null
+    },
+    {
+      "areaName": "Columbus Park",
+      "groupName": "Columbus Park",
+      "fieldId": "Soccer-01",
+      "start": 1788215400000,
+      "end": 1788220800000,
+      "title": "NYC Soccer Collective",
+      "org": "NYC Soccer Collective",
+      "status": "Permit #907125",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
