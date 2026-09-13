@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,7 +37,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.entity.Library
+import com.mikepenz.aboutlibraries.ui.compose.LibraryDefaults
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
+import com.mikepenz.aboutlibraries.ui.compose.m3.style.m3VariantTextStyles
+import com.mikepenz.aboutlibraries.ui.compose.variant.LibraryBadges
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.runtime.screen.StaticScreen
@@ -78,11 +82,16 @@ fun About(modifier: Modifier = Modifier) {
     LibrariesContainer(
       libraries = libs,
       modifier = modifier.fillMaxSize(),
-      showAuthor = true,
-      showVersion = false,
+      badges = LibraryBadges(author = true, version = false),
       header = { item(key = "header") { Header(Modifier.fillMaxWidth()) } },
-      name = { Text(it, fontWeight = Bold) },
-      onLibraryClick = { it.website?.let(uriHandler::openUri) },
+      variantTextStyles =
+        LibraryDefaults.m3VariantTextStyles(
+          nameTextStyle = LocalTextStyle.current.copy(fontWeight = Bold)
+        ),
+      onLibraryClick = {
+        it.website?.let(uriHandler::openUri)
+        true
+      },
     )
   }
 }
