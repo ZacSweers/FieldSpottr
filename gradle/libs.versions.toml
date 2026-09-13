@@ -2,23 +2,24 @@
 aboutLicenses = "15.2.0"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.8.0"
-agp = "9.3.2"
+androidx-compose-runtime = "1.12.1"
+agp = "9.4.0"
 androidx-datastore = "1.2.1"
 assertk = "0.28.1"
-calf = "0.13.0"
-circuit = "0.36.1"
+calf = "0.14.0"
+circuit = "0.38.0"
 compose-jb = "1.12.0"
 androidCompileSdk = "37"
 jdk = "25"
 jvmTarget = "11"
-kermit = "2.1.0"
-kotlin = "2.4.10"
+kermit = "2.2.0"
+kotlin = "2.4.20"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.11.0"
 ktor = "3.5.2"
-mapsCompose = "8.5.0"
-metro = "1.4.2"
-okio = "3.18.1"
+mapsCompose = "8.6.0"
+metro = "1.4.3"
+okio = "3.18.2"
 sqldelight = "2.3.2"
 
 [plugins]
@@ -31,7 +32,6 @@ compose = { id = "org.jetbrains.compose", version.ref = "compose-jb" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-kotlin-plugin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }
 kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 metro = { id = "dev.zacsweers.metro", version.ref = "metro" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
@@ -51,6 +51,7 @@ bugsnag-android = "com.bugsnag:bugsnag-android:6.27.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
+circuit-serialization = { module = "com.slack.circuit:circuit-serialization", version.ref = "circuit" }
 circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.ref = "circuit" }
 circuitx-gestureNav = { module = "com.slack.circuit:circuitx-gesture-navigation", version.ref = "circuit" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-jb" }
@@ -58,6 +59,7 @@ compose-material-icons = { module = "org.jetbrains.compose.material:material-ico
 compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.9.0" }
 # Tooling support (Previews, etc.)
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-jb" }
+compose-runtime-retain = { module = "androidx.compose.runtime:runtime-retain", version.ref = "androidx-compose-runtime" }
 compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-jb" }
 compose-ui-tooling-data = { module = "org.jetbrains.compose.ui:ui-tooling-data", version.ref = "compose-jb" }
 compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-jb" }
@@ -87,7 +89,7 @@ lints-compose = "com.slack.lint.compose:compose-lint-checks:1.6.0"
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
 
-slf4jNop = "org.slf4j:slf4j-nop:2.0.18"
+slf4jNop = "org.slf4j:slf4j-nop:2.0.19"
 
 sqldelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
 sqldelight-driver-jdbc = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }

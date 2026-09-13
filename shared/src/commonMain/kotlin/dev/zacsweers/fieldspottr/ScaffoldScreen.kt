@@ -20,10 +20,10 @@ import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.metro.AppScope
 
-@CommonParcelize
+@CircuitSerializable(AppScope::class)
 data class ScaffoldScreen(val title: String = "Field Spottr", val contentScreen: Screen) : Screen {
   data class State(val title: String, val contentScreen: Screen, val onBackPressed: () -> Unit) :
     CircuitUiState

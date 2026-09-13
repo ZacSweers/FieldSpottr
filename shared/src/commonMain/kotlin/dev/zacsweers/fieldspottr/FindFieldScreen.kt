@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,10 +52,10 @@ import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
-import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
+import com.slack.circuit.serialization.CircuitSerializable
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import dev.zacsweers.fieldspottr.PermitState.Companion.isBlocked
@@ -66,7 +67,6 @@ import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.WeatherStrip
 import dev.zacsweers.fieldspottr.util.ReflowText
@@ -110,7 +110,7 @@ data class AvailabilityBuckets(
     get() = fullyOpen.size + partiallyOpen.size
 }
 
-@CommonParcelize
+@CircuitSerializable(AppScope::class)
 data object FindFieldScreen : Screen {
   data class State(
     val selectedDate: LocalDate,
@@ -140,14 +140,14 @@ fun FindFieldPresenter(
   weatherRepository: WeatherRepository,
   navigator: Navigator,
 ): FindFieldScreen.State {
-  val areasFlow = rememberRetained { repository.areasFlow() }
+  val areasFlow = retain { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()
   val currentLocalDateTime = remember {
     System.now().toLocalDateTime(TimeZone.currentSystemDefault())
   }
   val today = currentLocalDateTime.date
-  var selectedDate by rememberRetained { mutableStateOf(today) }
-  var selectedWindow by rememberRetained {
+  var selectedDate by retain { mutableStateOf(today) }
+  var selectedWindow by retain {
     mutableStateOf(TimeWindow.forHour(currentLocalDateTime.hour))
   }
 
@@ -156,7 +156,7 @@ fun FindFieldPresenter(
   // Last updated — use the first area as a representative
   val firstAreaName = remember(areas) { areas.entries.firstOrNull()?.areaName }
   val lastUpdateFlow =
-    rememberRetained(firstAreaName) {
+    retain(firstAreaName) {
       if (firstAreaName != null) repository.lastUpdateFlow(firstAreaName) else flowOf(null)
     }
   val lastUpdateInstant by lastUpdateFlow.collectAsRetainedState(null)
@@ -177,7 +177,7 @@ fun FindFieldPresenter(
   val startHour = selectedWindow?.startHour ?: 0
   val endHour = selectedWindow?.endHour ?: 24
   val availabilityFlow =
-    rememberRetained(selectedDate, selectedWindow, areas) {
+    retain(selectedDate, selectedWindow, areas) {
       repository.allPermitsInWindow(selectedDate, startHour, endHour).map { permits ->
         computeAvailability(permits, areas, startHour, endHour)
       }

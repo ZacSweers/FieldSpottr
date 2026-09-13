@@ -40,7 +40,7 @@ import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.runtime.screen.StaticScreen
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.theme.FSLinkStyle
 import dev.zacsweers.metro.AppScope
 import kotlinx.collections.immutable.toPersistentList
@@ -50,7 +50,7 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.ExperimentalResourceApi
 import org.jetbrains.compose.resources.painterResource
 
-@CommonParcelize data object AboutScreen : StaticScreen
+@CircuitSerializable(AppScope::class) data object AboutScreen : StaticScreen
 
 @CircuitInject(AboutScreen::class, AppScope::class)
 @OptIn(ExperimentalResourceApi::class)

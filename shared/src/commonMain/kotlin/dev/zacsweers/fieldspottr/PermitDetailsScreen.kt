@@ -45,6 +45,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Alignment.Companion.Center
@@ -58,14 +59,13 @@ import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
 import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
-import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
+import com.slack.circuit.serialization.CircuitSerializable
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import dev.zacsweers.fieldspottr.data.PermitRepository
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.ui.Group
 import dev.zacsweers.fieldspottr.ui.Schedule
 import dev.zacsweers.fieldspottr.util.DragToDismiss
@@ -80,7 +80,7 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 
-@CommonParcelize
+@CircuitSerializable(AppScope::class)
 data class PermitDetailsScreen(
   val fieldName: String,
   val index: Int,
@@ -128,8 +128,8 @@ fun PermitDetailsPresenter(
   repository: PermitRepository,
   navigator: Navigator,
 ): PermitDetailsScreen.State {
-  val today = rememberRetained { System.now().toNyLocalDateTime().date }
-  val permitsFlow = rememberRetained {
+  val today = retain { System.now().toNyLocalDateTime().date }
+  val permitsFlow = retain {
     repository
       .permitsByGroup(screen.group, screen.org, today)
       .map { dbPermits ->
