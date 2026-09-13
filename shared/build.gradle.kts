@@ -9,7 +9,6 @@ import org.jetbrains.kotlin.konan.target.Family
 plugins {
   alias(libs.plugins.agp.kotlin.multiplatform)
   alias(libs.plugins.kotlin.multiplatform)
-  alias(libs.plugins.kotlin.plugin.parcelize)
   alias(libs.plugins.compose)
   alias(libs.plugins.kotlin.plugin.compose)
   alias(libs.plugins.sqldelight)
@@ -32,13 +31,6 @@ kotlin {
   android {
     namespace = "dev.zacsweers.fieldspottr.shared"
     androidResources.enable = true
-
-    compilerOptions {
-      freeCompilerArgs.addAll(
-        "-P",
-        "plugin:org.jetbrains.kotlin.parcelize:additionalAnnotation=dev.zacsweers.fieldspottr.parcel.CommonParcelize",
-      )
-    }
   }
   jvm { mainRun { mainClass.set("dev.zacsweers.fieldspottr.MainKt") } }
 
@@ -52,9 +44,11 @@ kotlin {
         // API for klib reasons
         api(libs.calf.ui)
         implementation(libs.compose.components.resources)
+        implementation(libs.compose.runtime.retain)
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.circuit.foundation)
         implementation(libs.circuit.overlay)
+        implementation(libs.circuit.serialization)
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
         implementation(libs.androidx.datastore.preferences)

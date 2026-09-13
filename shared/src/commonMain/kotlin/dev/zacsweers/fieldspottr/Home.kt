@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.slack.circuit.codegen.annotations.CircuitInject
@@ -30,12 +31,11 @@ import com.slack.circuit.foundation.CircuitContent
 import com.slack.circuit.foundation.NavEvent
 import com.slack.circuit.foundation.onNavEvent
 import com.slack.circuit.retained.collectAsRetainedState
-import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
+import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.data.PermitRepository
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.metro.AppScope
 
 private enum class Tab(val label: String) {
@@ -44,7 +44,7 @@ private enum class Tab(val label: String) {
   ABOUT("About"),
 }
 
-@CommonParcelize
+@CircuitSerializable(AppScope::class)
 data object HomeScreen : Screen {
   data class State(
     val selectedTabIndex: Int,
@@ -61,10 +61,10 @@ data object HomeScreen : Screen {
 @CircuitInject(HomeScreen::class, AppScope::class)
 @Composable
 fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScreen.State {
-  var selectedTabIndex by rememberRetained { mutableStateOf(0) }
+  var selectedTabIndex by retain { mutableStateOf(0) }
 
   // Trigger initial DB population
-  var populateDb by rememberRetained { mutableStateOf(true) }
+  var populateDb by retain { mutableStateOf(true) }
   if (populateDb) {
     LaunchedEffect(Unit) {
       repository.populateDb(forceRefresh = false)
