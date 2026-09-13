@@ -38,6 +38,7 @@ import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,10 +49,10 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
-import com.slack.circuit.retained.rememberRetained
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.screen.Screen
+import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
@@ -60,7 +61,6 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.currentNyHour
 import dev.zacsweers.fieldspottr.ui.formatHour12
@@ -78,7 +78,7 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
-@CommonParcelize
+@CircuitSerializable(AppScope::class)
 data object PermitGridScreen : Screen {
   data class State(
     val areas: Areas,
@@ -131,16 +131,16 @@ fun PermitGridPresenter(
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): PermitGridScreen.State {
-  val areasFlow = rememberRetained { repository.areasFlow() }
+  val areasFlow = retain { repository.areasFlow() }
   val areas by areasFlow.collectAsRetainedState()
 
-  var gridDate by rememberRetained {
+  var gridDate by retain {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
   }
   val scope = rememberCoroutineScope()
   val defaultGroup by preferencesStore.defaultGroup.collectAsRetainedState(null)
-  var selectedGroup by rememberRetained { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
-  var userHasChangedGroup by rememberRetained { mutableStateOf(false) }
+  var selectedGroup by retain { mutableStateOf(areas.entries[0].fieldGroups[0].name) }
+  var userHasChangedGroup by retain { mutableStateOf(false) }
   LaunchedEffect(areas) {
     if (selectedGroup !in areas.groups) {
       selectedGroup = areas.entries[0].fieldGroups[0].name
@@ -156,7 +156,7 @@ fun PermitGridPresenter(
   var defaultGroupMessage by remember { mutableStateOf<String?>(null) }
 
   val permitsFlow =
-    rememberRetained(gridDate, selectedGroup) {
+    retain(gridDate, selectedGroup) {
       repository.permitsFlow(gridDate, selectedGroup).map {
         PermitData(
           permits = PermitState.fromPermits(it, areas, selectedGroup),
@@ -168,7 +168,7 @@ fun PermitGridPresenter(
 
   val currentAreaName = remember(selectedGroup, areas) { areas.groups[selectedGroup]?.area }
   val lastUpdateFlow =
-    rememberRetained(currentAreaName) {
+    retain(currentAreaName) {
       if (currentAreaName != null) repository.lastUpdateFlow(currentAreaName) else flowOf(null)
     }
   val lastUpdateInstant by lastUpdateFlow.collectAsRetainedState(null)
@@ -185,7 +185,7 @@ fun PermitGridPresenter(
       }
     }
 
-  val dateRangeFlow = rememberRetained { repository.permitDateRangeFlow() }
+  val dateRangeFlow = retain { repository.permitDateRangeFlow() }
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
   // Weather
@@ -193,9 +193,9 @@ fun PermitGridPresenter(
   LaunchedEffect(Unit) { weatherRepository.refresh() }
 
   // Week view
-  var viewMode by rememberRetained { mutableStateOf(GridViewMode.DAY) }
+  var viewMode by retain { mutableStateOf(GridViewMode.DAY) }
   val weekFlow =
-    rememberRetained(gridDate, selectedGroup, viewMode, areas) {
+    retain(gridDate, selectedGroup, viewMode, areas) {
       if (viewMode == GridViewMode.WEEK) {
         repository.permitsFlow(gridDate, days = 7, group = selectedGroup).map { permits ->
           computeWeekAvailability(permits, areas, selectedGroup, gridDate)
@@ -388,12 +388,10 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
 
       // Retain scroll separately per group/date. The first load can jump to the first permit, but
       // navigating away and back should restore wherever the user left the grid.
-      val gridVerticalScrollState =
-        rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
-      val gridHorizontalScrollState =
-        rememberRetained(state.selectedGroup, state.date) { ScrollState(0) }
+      val gridVerticalScrollState = retain(state.selectedGroup, state.date) { ScrollState(0) }
+      val gridHorizontalScrollState = retain(state.selectedGroup, state.date) { ScrollState(0) }
       var autoScrollToFirstPermit by
-        rememberRetained(state.selectedGroup, state.date) { mutableStateOf(true) }
+        retain(state.selectedGroup, state.date) { mutableStateOf(true) }
 
       val cornerSlot =
         remember(state.date, state.weather) {

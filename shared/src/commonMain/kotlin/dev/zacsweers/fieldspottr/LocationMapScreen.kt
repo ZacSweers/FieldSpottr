@@ -7,10 +7,10 @@ import androidx.compose.ui.Modifier
 import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.screen.Screen
-import dev.zacsweers.fieldspottr.parcel.CommonParcelize
+import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.metro.AppScope
 
-@CommonParcelize
+@CircuitSerializable(AppScope::class)
 data class LocationMapScreen(
   val latitude: Double,
   val longitude: Double,

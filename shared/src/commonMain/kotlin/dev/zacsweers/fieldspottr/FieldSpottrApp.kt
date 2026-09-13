@@ -14,13 +14,15 @@ import com.slack.circuit.foundation.NavigableCircuitContent
 import com.slack.circuit.foundation.rememberCircuitNavigator
 import com.slack.circuit.overlay.ContentWithOverlays
 import com.slack.circuit.overlay.rememberOverlayHost
+import com.slack.circuit.retained.ExperimentalCircuitRetainedApi
+import com.slack.circuit.retained.RetainedValuesStoreProvider
 import com.slack.circuit.sharedelements.SharedElementTransitionLayout
 import com.slack.circuitx.gesturenavigation.GestureNavigationDecorationFactory
 import dev.zacsweers.fieldspottr.theme.FSTheme
 import dev.zacsweers.metro.Assisted
 import dev.zacsweers.metro.Inject
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalCircuitRetainedApi::class)
 @Composable
 @Inject
 fun FieldSpottrApp(
@@ -28,28 +30,32 @@ fun FieldSpottrApp(
   @Assisted modifier: Modifier = Modifier,
   @Assisted onRootPop: () -> Unit,
 ) {
-  CircuitCompositionLocals(circuit) {
-    FSTheme {
-      SharedElementTransitionLayout {
-        Surface(modifier = modifier, color = MaterialTheme.colorScheme.background) {
-          val backStack = rememberSaveableBackStack(HomeScreen)
-          val overlayHost = rememberOverlayHost()
-          val navigator =
-            rememberCircuitNavigator(backStack) {
-              // Dismiss active overlay on back press instead of popping the navigator
-              val overlay = overlayHost.currentOverlayData
-              if (overlay != null) {
-                overlay.finish(DatePickerResult(null))
-              } else {
-                onRootPop()
+  // Temporary until Compose Multiplatform supplies a retained-values store.
+  // https://issuetracker.google.com/issues/467397537
+  RetainedValuesStoreProvider {
+    CircuitCompositionLocals(circuit) {
+      FSTheme {
+        SharedElementTransitionLayout {
+          Surface(modifier = modifier, color = MaterialTheme.colorScheme.background) {
+            val backStack = rememberSaveableBackStack(HomeScreen)
+            val overlayHost = rememberOverlayHost()
+            val navigator =
+              rememberCircuitNavigator(backStack) {
+                // Dismiss active overlay on back press instead of popping the navigator
+                val overlay = overlayHost.currentOverlayData
+                if (overlay != null) {
+                  overlay.finish(DatePickerResult(null))
+                } else {
+                  onRootPop()
+                }
               }
+            ContentWithOverlays(overlayHost = overlayHost) {
+              NavigableCircuitContent(
+                navigator = navigator,
+                backStack = backStack,
+                decoratorFactory = GestureNavigationDecorationFactory(),
+              )
             }
-          ContentWithOverlays(overlayHost = overlayHost) {
-            NavigableCircuitContent(
-              navigator = navigator,
-              backStack = backStack,
-              decoratorFactory = GestureNavigationDecorationFactory(),
-            )
           }
         }
       }

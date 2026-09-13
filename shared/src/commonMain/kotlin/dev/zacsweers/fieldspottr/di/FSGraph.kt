@@ -5,8 +5,12 @@ package dev.zacsweers.fieldspottr.di
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.loggerConfigInit
 import com.slack.circuit.foundation.Circuit
+import com.slack.circuit.retained.CircuitRetainedSettings
+import com.slack.circuit.retained.ExperimentalCircuitRetainedApi
 import com.slack.circuit.runtime.presenter.Presenter
 import com.slack.circuit.runtime.ui.Ui
+import com.slack.circuit.serialization.CircuitSerializerRegistration
+import com.slack.circuit.serialization.SerializableCircuitSaver
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
@@ -56,13 +60,17 @@ interface FSGraph {
 
   @Provides
   @SingleIn(AppScope::class)
+  @OptIn(ExperimentalCircuitRetainedApi::class)
   fun provideCircuit(
     uiFactories: Set<Ui.Factory>,
     presenterFactories: Set<Presenter.Factory>,
+    serializerRegistrations: Set<CircuitSerializerRegistration>,
   ): Circuit {
+    CircuitRetainedSettings.useFirstParty = true
     return Circuit.Builder()
       .addUiFactories(uiFactories)
       .addPresenterFactories(presenterFactories)
+      .setCircuitSaver(SerializableCircuitSaver(serializerRegistrations))
       .build()
   }
 }
