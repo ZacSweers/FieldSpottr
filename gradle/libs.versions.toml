@@ -20,7 +20,7 @@ ktor = "3.5.2"
 mapsCompose = "8.6.0"
 metro = "1.4.3"
 okio = "3.18.2"
-sqldelight = "2.3.2"
+sqldelight = "2.4.0"
 
 [plugins]
 aboutLicenses = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLicenses" }
