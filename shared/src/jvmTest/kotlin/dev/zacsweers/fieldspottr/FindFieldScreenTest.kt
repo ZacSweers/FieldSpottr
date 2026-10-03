@@ -7,6 +7,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
+import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.Location
 import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.buildAreas
@@ -30,6 +31,32 @@ class FindFieldScreenTest {
     assertThat(TimeWindow.forHour(18)).isEqualTo(TimeWindow.EVENING)
     assertThat(TimeWindow.forHour(22)).isEqualTo(TimeWindow.EVENING)
     assertThat(TimeWindow.forHour(23)).isEqualTo(null)
+  }
+
+  @Test
+  fun `find field does not recommend BBP without coverage`() {
+    val unavailable = permit(
+      recordId = 1, area = "Brooklyn Bridge Park", group = "Pier 5",
+      fieldId = "pier5-field-1", startHour = 0, endHour = 23,
+      type = BbpAvailability.UNAVAILABLE_KIND,
+    )
+    for (permits in listOf(emptyList(), listOf(unavailable))) {
+      val buckets = computeAvailability(permits, Areas.default, 18, 23)
+      assertThat(buckets.fullyOpen.none { it.group.name == "Pier 5" }).isTrue()
+      assertThat(buckets.partiallyOpen.none { it.group.name == "Pier 5" }).isTrue()
+      assertThat(buckets.fullyOpen.any { it.group.name == "Baruch" }).isTrue()
+    }
+  }
+
+  @Test
+  fun `find field ignores coverage markers when recommending verified BBP gaps`() {
+    val coverage = permit(
+      recordId = 1, area = "Brooklyn Bridge Park", group = "Pier 5",
+      fieldId = "pier5-field-1", startHour = 0, endHour = 23,
+      type = BbpAvailability.COVERAGE_KIND,
+    )
+    val buckets = computeAvailability(listOf(coverage), Areas.default, 18, 23)
+    assertThat(buckets.fullyOpen.any { it.group.name == "Pier 5" }).isTrue()
   }
 
   @Test

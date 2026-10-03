@@ -61,6 +61,7 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
 import dev.zacsweers.fieldspottr.PermitState.Companion.isBlocked
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
+import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.FieldGroup
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.TimeWindow
@@ -541,6 +542,9 @@ internal fun computeAvailability(
       }
 
       val groupPermits = permitsByAreaAndGroup[area.areaName to group.name].orEmpty()
+      // Unverified BBP schedules cannot be recommended as available fields.
+      if (area.areaName == "Brooklyn Bridge Park" && group.name == "Pier 5" &&
+        groupPermits.none { it.type == BbpAvailability.COVERAGE_KIND }) continue
       val bookedHours =
         bookedHoursForGroup(
           permits = groupPermits,
@@ -618,7 +622,7 @@ private fun bookedHoursForGroup(
 
   val bookedHours = mutableSetOf<Int>()
   for (permit in permits) {
-    if (permit.isAvailabilityOverlay) continue
+    if (permit.isAvailabilityOverlay || permit.type == BbpAvailability.COVERAGE_KIND) continue
     if (permit.fieldId !in area.fieldMappings) continue
 
     val permitStart = permit.start.toNyLocalDateTime()

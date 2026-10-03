@@ -17,6 +17,7 @@ internal const val WEEK_VIEW_START_HOUR = 6
 internal const val WEEK_VIEW_END_HOUR = 23
 
 enum class WeekSlotState {
+  UNKNOWN,
   ALL_FREE,
   SOME_FREE,
   BOOKED,
@@ -41,9 +42,9 @@ data class WeekAvailability(
 
 /**
  * Collapses a group's per-field schedules for 7 days starting at [startDate] into a per-hour
- * 4-state strip per day: at a given hour, every field is free, some are, none are, or the group is
- * outright closed (city blocks/closures only). Subfield overlap semantics (shared physical space)
- * are inherited from [PermitState.fromPermits].
+ * strip per day. Availability is free, partially free, booked, closed, or unknown when BBP
+ * coverage is missing. Subfield overlap semantics (shared physical space) are inherited from
+ * [PermitState.fromPermits].
  */
 internal fun computeWeekAvailability(
   permits: List<DbPermit>,
@@ -74,6 +75,7 @@ internal fun computeWeekAvailability(
               }
             val bookedFields = coveringReservations.count { it != null }
             when {
+              coveringReservations.any { it?.isUnavailable == true } -> WeekSlotState.UNKNOWN
               bookedFields == 0 -> WeekSlotState.ALL_FREE
               bookedFields < fieldCount -> WeekSlotState.SOME_FREE
               coveringReservations.all { it != null && it.isBlocked } -> WeekSlotState.CLOSED

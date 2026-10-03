@@ -26,7 +26,7 @@ class GeneratorTest {
       row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
     }
     val mondayField1 = rows.filter { row ->
-      row.fieldId == "pier5-field-1" &&
+      row.kind == "BBP active permits" && row.fieldId == "pier5-field-1" &&
         row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
     }
 

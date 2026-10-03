@@ -6,6 +6,7 @@ import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.AvailabilityManifest
+import dev.zacsweers.fieldspottr.data.BbpAvailability
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
@@ -804,10 +805,50 @@ internal fun fetchBbpRows(
   area: Area,
   sourceFile: Path,
   today: LocalDate,
+  horizonDays: Long = 14,
 ): List<AvailabilityFeedRow> {
   if (area.areaName != BBP_AREA_NAME) return emptyList()
-  return generateBbpPier5Rows(sourceFile = sourceFile, today = today)
+  val source =
+    try {
+      decodeAndValidateBbpSource(sourceFile, today = today)
+    } catch (e: Exception) {
+      if (e is CancellationException) throw e
+      System.err.println("BBP schedule unavailable: ${e.message}")
+      null
+    }
+  val windowEnd = today.plusDays(horizonDays)
+  val uncoveredDates = generateSequence(today) { it.plusDays(1) }
+    .takeWhile { it.isBefore(windowEnd) }
+    .filter { date ->
+      source == null || date.isBefore(LocalDate.parse(source.validFrom)) ||
+        date.isAfter(LocalDate.parse(source.validTo))
+    }
+  return (source?.let(::generateBbpPier5Rows).orEmpty() +
+    uncoveredDates.flatMap { date ->
+      knownBbpFieldIds.map { fieldId ->
+        bbpDayRow(date, fieldId, BbpAvailability.UNAVAILABLE_KIND, "Schedule unavailable", null)
+      }
+    }.toList())
 }
+
+private fun bbpDayRow(
+  date: LocalDate,
+  fieldId: String,
+  kind: String,
+  title: String,
+  sourceId: String?,
+): AvailabilityFeedRow = AvailabilityFeedRow(
+  areaName = BBP_AREA_NAME,
+  groupName = BBP_GROUP_NAME,
+  fieldId = fieldId,
+  start = date.atStartOfDay(bbpZone).toInstant().toEpochMilli(),
+  end = date.plusDays(1).atStartOfDay(bbpZone).toInstant().toEpochMilli(),
+  title = title,
+  org = BBP_AREA_NAME,
+  status = if (kind == BbpAvailability.UNAVAILABLE_KIND) "Unknown" else "",
+  kind = kind,
+  sourceId = sourceId,
+)
 
 internal fun generateBbpPier5Rows(
   sourceFile: Path = defaultBbpSourceFile,
@@ -823,7 +864,15 @@ private fun generateBbpPier5Rows(source: BbpPier5Source): List<AvailabilityFeedR
   return generateSequence(validFrom) { it.plusDays(1) }
     .takeWhile { !it.isAfter(validTo) }
     .flatMap { date ->
-      source.blocks
+      sequenceOf(
+        bbpDayRow(
+          date,
+          knownBbpFieldIds.first(),
+          BbpAvailability.COVERAGE_KIND,
+          "Schedule coverage",
+          source.id,
+        )
+      ) + source.blocks
         .filter { DayOfWeek.valueOf(it.day) == date.dayOfWeek }
         .flatMap { block ->
           block.fieldIds.map { fieldId ->
@@ -1010,7 +1059,9 @@ internal fun generateBbpOnly(
     baselineFeed
       .copy(
         generatedAt = null,
-        rows = baselineFeed.rows.filterNot { it.kind == BBP_KIND } + generateBbpPier5Rows(source),
+        rows = baselineFeed.rows.filterNot {
+          it.kind in setOf(BBP_KIND, BbpAvailability.COVERAGE_KIND, BbpAvailability.UNAVAILABLE_KIND)
+        } + generateBbpPier5Rows(source),
       )
       .canonical()
 
