@@ -41,9 +41,9 @@ data class WeekAvailability(
 )
 
 /**
- * Collapses a group's per-field schedules for 7 days starting at [startDate] into a per-hour
- * strip per day. Availability is free, partially free, booked, closed, or unknown when BBP
- * coverage is missing. Subfield overlap semantics (shared physical space) are inherited from
+ * Collapses a group's per-field schedules for 7 days starting at [startDate] into a per-hour strip
+ * per day. Availability is free, partially free, booked, closed, or unknown when BBP coverage is
+ * missing. Subfield overlap semantics (shared physical space) are inherited from
  * [PermitState.fromPermits].
  */
 internal fun computeWeekAvailability(

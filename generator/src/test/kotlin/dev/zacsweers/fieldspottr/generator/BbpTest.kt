@@ -10,11 +10,11 @@ import assertk.assertions.isFalse
 import assertk.assertions.isNotEqualTo
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
-import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.AvailabilityManifest
 import dev.zacsweers.fieldspottr.data.AvailabilityManifestArea
+import dev.zacsweers.fieldspottr.data.BbpAvailability
 import java.net.SocketTimeoutException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -706,10 +706,13 @@ class BbpTest {
     val invalid = fixture.root.resolve("invalid.json")
     Files.writeString(invalid, "{}")
     for (sourceFile in listOf(fixture.sourceFile, missing, invalid)) {
-      val rows = AvailabilityAreaFeed(
-        area.areaName,
-        rows = fetchBbpRows(area, sourceFile, expiredToday, horizonDays = 7),
-      ).canonical().rows
+      val rows =
+        AvailabilityAreaFeed(
+            area.areaName,
+            rows = fetchBbpRows(area, sourceFile, expiredToday, horizonDays = 7),
+          )
+          .canonical()
+          .rows
       assertThat(rows.size).isEqualTo(21)
       assertThat(rows.all { it.kind == BbpAvailability.UNAVAILABLE_KIND }).isTrue()
       assertThat(rows.map { it.fieldId }.toSet().size).isEqualTo(3)
@@ -722,10 +725,13 @@ class BbpTest {
   fun `runtime BBP coverage stops exactly at source dates`() {
     val fixture = sourceFixture(validFrom = "2026-06-01", validTo = "2026-06-02")
     val area = Areas.default.entries.single { it.areaName == "Brooklyn Bridge Park" }
-    val rows = AvailabilityAreaFeed(
-      area.areaName,
-      rows = fetchBbpRows(area, fixture.sourceFile, LocalDate.parse("2026-05-31"), 4),
-    ).canonical().rows
+    val rows =
+      AvailabilityAreaFeed(
+          area.areaName,
+          rows = fetchBbpRows(area, fixture.sourceFile, LocalDate.parse("2026-05-31"), 4),
+        )
+        .canonical()
+        .rows
     val coverage = rows.filter { it.kind == BbpAvailability.COVERAGE_KIND }
     assertThat(coverage.size).isEqualTo(2)
     assertThat(coverage.minOf { it.start }).isEqualTo(nyMillis("2026-06-01T00:00"))
@@ -734,18 +740,26 @@ class BbpTest {
     assertThat(unavailable.size).isEqualTo(6)
     assertThat(unavailable.map { it.start }.toSet())
       .isEqualTo(setOf(nyMillis("2026-05-31T00:00"), nyMillis("2026-06-03T00:00")))
-    assertThat(rows.filter { it.kind == "BBP active permits" }.all {
-      it.start >= nyMillis("2026-06-01T00:00") && it.end <= nyMillis("2026-06-03T00:00")
-    }).isTrue()
+    assertThat(
+        rows
+          .filter { it.kind == "BBP active permits" }
+          .all {
+            it.start >= nyMillis("2026-06-01T00:00") && it.end <= nyMillis("2026-06-03T00:00")
+          }
+      )
+      .isTrue()
   }
 
   @Test
   fun `canonical BBP coverage markers remain daily even when no permits match`() {
     val fixture = sourceFixture(validFrom = "2026-06-02", validTo = "2026-06-03")
-    val rows = AvailabilityAreaFeed(
-      "Brooklyn Bridge Park",
-      rows = generateBbpPier5Rows(fixture.sourceFile, today = LocalDate.parse("2026-06-02")),
-    ).canonical().rows
+    val rows =
+      AvailabilityAreaFeed(
+          "Brooklyn Bridge Park",
+          rows = generateBbpPier5Rows(fixture.sourceFile, today = LocalDate.parse("2026-06-02")),
+        )
+        .canonical()
+        .rows
     assertThat(rows.size).isEqualTo(2)
     assertThat(rows.all { it.kind == BbpAvailability.COVERAGE_KIND }).isTrue()
     assertThat(rows.map { it.start })
@@ -760,8 +774,10 @@ class BbpTest {
   }
 
   private fun nyMillis(value: String): Long =
-    java.time.LocalDateTime.parse(value).atZone(java.time.ZoneId.of("America/New_York"))
-      .toInstant().toEpochMilli()
+    java.time.LocalDateTime.parse(value)
+      .atZone(java.time.ZoneId.of("America/New_York"))
+      .toInstant()
+      .toEpochMilli()
 
   private fun sourceFixture(
     validFrom: String = "2026-06-01",

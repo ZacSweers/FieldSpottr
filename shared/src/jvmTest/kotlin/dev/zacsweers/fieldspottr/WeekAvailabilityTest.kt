@@ -144,42 +144,70 @@ class WeekAvailabilityTest {
   fun `BBP dates without verified coverage are unknown in day and week views`() {
     val day = PermitState.fromPermits(emptyList(), Areas.default, "Pier 5")
     assertThat(day.fields.size).isEqualTo(3)
-    assertThat(day.fields.values.all { states ->
-      val reserved = states.single() as PermitState.FieldState.Reserved
-      reserved.isUnavailable && reserved.start == 0 && reserved.end == 24
-    }).isTrue()
+    assertThat(
+        day.fields.values.all { states ->
+          val reserved = states.single() as PermitState.FieldState.Reserved
+          reserved.isUnavailable && reserved.start == 0 && reserved.end == 24
+        }
+      )
+      .isTrue()
     val week = computeWeekAvailability(emptyList(), Areas.default, "Pier 5", startDate)
     assertThat(week.days.all { day -> day.hourStates.all { it == WeekSlotState.UNKNOWN } }).isTrue()
   }
 
   @Test
   fun `BBP covered gaps are free and uncovered days remain unknown`() {
-    val coverage = permit(
-      recordId = 1, date = startDate, fieldId = "pier5-field-1",
-      area = "Brooklyn Bridge Park", group = "Pier 5", startHour = 0, endHour = 23,
-    ).copy(type = BbpAvailability.COVERAGE_KIND)
-    val booking = coverage.copy(
-      recordId = 2, type = "BBP active permits",
-      start = LocalDateTime(startDate, LocalTime(18, 0)).toNyInstant().toEpochMilliseconds(),
-      end = LocalDateTime(startDate, LocalTime(20, 0)).toNyInstant().toEpochMilliseconds(),
-    )
-    val week = computeWeekAvailability(listOf(coverage, booking), Areas.default, "Pier 5", startDate)
+    val coverage =
+      permit(
+          recordId = 1,
+          date = startDate,
+          fieldId = "pier5-field-1",
+          area = "Brooklyn Bridge Park",
+          group = "Pier 5",
+          startHour = 0,
+          endHour = 23,
+        )
+        .copy(type = BbpAvailability.COVERAGE_KIND)
+    val booking =
+      coverage.copy(
+        recordId = 2,
+        type = "BBP active permits",
+        start = LocalDateTime(startDate, LocalTime(18, 0)).toNyInstant().toEpochMilliseconds(),
+        end = LocalDateTime(startDate, LocalTime(20, 0)).toNyInstant().toEpochMilliseconds(),
+      )
+    val week =
+      computeWeekAvailability(listOf(coverage, booking), Areas.default, "Pier 5", startDate)
     assertThat(week.days[0].stateAt(17)).isEqualTo(WeekSlotState.ALL_FREE)
     assertThat(week.days[0].stateAt(18)).isEqualTo(WeekSlotState.SOME_FREE)
     assertThat(week.days[1].stateAt(18)).isEqualTo(WeekSlotState.UNKNOWN)
-    val emptyCoveredDay = computeWeekAvailability(listOf(coverage), Areas.default, "Pier 5", startDate)
+    val emptyCoveredDay =
+      computeWeekAvailability(listOf(coverage), Areas.default, "Pier 5", startDate)
     assertThat(emptyCoveredDay.days[0].hourStates.all { it == WeekSlotState.ALL_FREE }).isTrue()
   }
 
   @Test
   fun `BBP unavailable rows and stale bookings never imply free hours`() {
-    val unavailable = permit(
-      recordId = 1, date = startDate, fieldId = "pier5-field-1",
-      area = "Brooklyn Bridge Park", group = "Pier 5", startHour = 0, endHour = 23,
-    ).copy(type = BbpAvailability.UNAVAILABLE_KIND)
+    val unavailable =
+      permit(
+          recordId = 1,
+          date = startDate,
+          fieldId = "pier5-field-1",
+          area = "Brooklyn Bridge Park",
+          group = "Pier 5",
+          startHour = 0,
+          endHour = 23,
+        )
+        .copy(type = BbpAvailability.UNAVAILABLE_KIND)
     for (kind in listOf(BbpAvailability.UNAVAILABLE_KIND, "BBP active permits")) {
-      val week = computeWeekAvailability(listOf(unavailable.copy(type = kind)), Areas.default, "Pier 5", startDate)
-      assertThat(week.days.all { day -> day.hourStates.all { it == WeekSlotState.UNKNOWN } }).isTrue()
+      val week =
+        computeWeekAvailability(
+          listOf(unavailable.copy(type = kind)),
+          Areas.default,
+          "Pier 5",
+          startDate,
+        )
+      assertThat(week.days.all { day -> day.hourStates.all { it == WeekSlotState.UNKNOWN } })
+        .isTrue()
     }
   }
 

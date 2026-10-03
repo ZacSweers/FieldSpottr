@@ -817,18 +817,22 @@ internal fun fetchBbpRows(
       null
     }
   val windowEnd = today.plusDays(horizonDays)
-  val uncoveredDates = generateSequence(today) { it.plusDays(1) }
-    .takeWhile { it.isBefore(windowEnd) }
-    .filter { date ->
-      source == null || date.isBefore(LocalDate.parse(source.validFrom)) ||
-        date.isAfter(LocalDate.parse(source.validTo))
-    }
-  return (source?.let(::generateBbpPier5Rows).orEmpty() +
-    uncoveredDates.flatMap { date ->
-      knownBbpFieldIds.map { fieldId ->
-        bbpDayRow(date, fieldId, BbpAvailability.UNAVAILABLE_KIND, "Schedule unavailable", null)
+  val uncoveredDates =
+    generateSequence(today) { it.plusDays(1) }
+      .takeWhile { it.isBefore(windowEnd) }
+      .filter { date ->
+        source == null ||
+          date.isBefore(LocalDate.parse(source.validFrom)) ||
+          date.isAfter(LocalDate.parse(source.validTo))
       }
-    }.toList())
+  return (source?.let(::generateBbpPier5Rows).orEmpty() +
+    uncoveredDates
+      .flatMap { date ->
+        knownBbpFieldIds.map { fieldId ->
+          bbpDayRow(date, fieldId, BbpAvailability.UNAVAILABLE_KIND, "Schedule unavailable", null)
+        }
+      }
+      .toList())
 }
 
 private fun bbpDayRow(
@@ -837,18 +841,19 @@ private fun bbpDayRow(
   kind: String,
   title: String,
   sourceId: String?,
-): AvailabilityFeedRow = AvailabilityFeedRow(
-  areaName = BBP_AREA_NAME,
-  groupName = BBP_GROUP_NAME,
-  fieldId = fieldId,
-  start = date.atStartOfDay(bbpZone).toInstant().toEpochMilli(),
-  end = date.plusDays(1).atStartOfDay(bbpZone).toInstant().toEpochMilli(),
-  title = title,
-  org = BBP_AREA_NAME,
-  status = if (kind == BbpAvailability.UNAVAILABLE_KIND) "Unknown" else "",
-  kind = kind,
-  sourceId = sourceId,
-)
+): AvailabilityFeedRow =
+  AvailabilityFeedRow(
+    areaName = BBP_AREA_NAME,
+    groupName = BBP_GROUP_NAME,
+    fieldId = fieldId,
+    start = date.atStartOfDay(bbpZone).toInstant().toEpochMilli(),
+    end = date.plusDays(1).atStartOfDay(bbpZone).toInstant().toEpochMilli(),
+    title = title,
+    org = BBP_AREA_NAME,
+    status = if (kind == BbpAvailability.UNAVAILABLE_KIND) "Unknown" else "",
+    kind = kind,
+    sourceId = sourceId,
+  )
 
 internal fun generateBbpPier5Rows(
   sourceFile: Path = defaultBbpSourceFile,
@@ -872,30 +877,35 @@ private fun generateBbpPier5Rows(source: BbpPier5Source): List<AvailabilityFeedR
           "Schedule coverage",
           source.id,
         )
-      ) + source.blocks
-        .filter { DayOfWeek.valueOf(it.day) == date.dayOfWeek }
-        .flatMap { block ->
-          block.fieldIds.map { fieldId ->
-            AvailabilityFeedRow(
-              areaName = BBP_AREA_NAME,
-              groupName = BBP_GROUP_NAME,
-              fieldId = fieldId,
-              start =
-                date
-                  .atTime(LocalTime.parse(block.start))
-                  .atZone(bbpZone)
-                  .toInstant()
-                  .toEpochMilli(),
-              end =
-                date.atTime(LocalTime.parse(block.end)).atZone(bbpZone).toInstant().toEpochMilli(),
-              title = "Busy (Active permits)",
-              org = BBP_AREA_NAME,
-              status = "Active permits",
-              kind = BBP_KIND,
-              sourceId = source.id,
-            )
+      ) +
+        source.blocks
+          .filter { DayOfWeek.valueOf(it.day) == date.dayOfWeek }
+          .flatMap { block ->
+            block.fieldIds.map { fieldId ->
+              AvailabilityFeedRow(
+                areaName = BBP_AREA_NAME,
+                groupName = BBP_GROUP_NAME,
+                fieldId = fieldId,
+                start =
+                  date
+                    .atTime(LocalTime.parse(block.start))
+                    .atZone(bbpZone)
+                    .toInstant()
+                    .toEpochMilli(),
+                end =
+                  date
+                    .atTime(LocalTime.parse(block.end))
+                    .atZone(bbpZone)
+                    .toInstant()
+                    .toEpochMilli(),
+                title = "Busy (Active permits)",
+                org = BBP_AREA_NAME,
+                status = "Active permits",
+                kind = BBP_KIND,
+                sourceId = source.id,
+              )
+            }
           }
-        }
     }
     .toList()
 }
@@ -1059,9 +1069,11 @@ internal fun generateBbpOnly(
     baselineFeed
       .copy(
         generatedAt = null,
-        rows = baselineFeed.rows.filterNot {
-          it.kind in setOf(BBP_KIND, BbpAvailability.COVERAGE_KIND, BbpAvailability.UNAVAILABLE_KIND)
-        } + generateBbpPier5Rows(source),
+        rows =
+          baselineFeed.rows.filterNot {
+            it.kind in
+              setOf(BBP_KIND, BbpAvailability.COVERAGE_KIND, BbpAvailability.UNAVAILABLE_KIND)
+          } + generateBbpPier5Rows(source),
       )
       .canonical()
 

@@ -38,9 +38,9 @@ enum class GridViewMode {
 }
 
 /**
- * A 7-day availability overview for a field group. Subfields are collapsed into a per-hour
- * strip per day (all free / some free / booked / closed / unknown); tapping a day opens the day grid
- * for per-field detail. Cell colors animate so feed refreshes shift softly instead of popping.
+ * A 7-day availability overview for a field group. Subfields are collapsed into a per-hour strip
+ * per day (all free / some free / booked / closed / unknown); tapping a day opens the day grid for
+ * per-field detail. Cell colors animate so feed refreshes shift softly instead of popping.
  */
 @Composable
 fun WeekGrid(

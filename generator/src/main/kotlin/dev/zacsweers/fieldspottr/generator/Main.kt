@@ -6,9 +6,9 @@ import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
-import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.AvailabilityManifest
 import dev.zacsweers.fieldspottr.data.AvailabilityManifestArea
+import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.data.FieldGroup
 import io.ktor.client.HttpClient
@@ -1260,7 +1260,8 @@ private fun List<AvailabilityFeedRow>.mergeAdjacentRows(): List<AvailabilityFeed
 
 private fun AvailabilityFeedRow.canMergeWith(other: AvailabilityFeedRow): Boolean {
   // Daily BBP markers must stay separate because app queries select rows by start date.
-  if (kind == BbpAvailability.COVERAGE_KIND || kind == BbpAvailability.UNAVAILABLE_KIND) return false
+  if (kind == BbpAvailability.COVERAGE_KIND || kind == BbpAvailability.UNAVAILABLE_KIND)
+    return false
   return areaName == other.areaName &&
     groupName == other.groupName &&
     fieldId == other.fieldId &&

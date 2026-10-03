@@ -35,11 +35,16 @@ class FindFieldScreenTest {
 
   @Test
   fun `find field does not recommend BBP without coverage`() {
-    val unavailable = permit(
-      recordId = 1, area = "Brooklyn Bridge Park", group = "Pier 5",
-      fieldId = "pier5-field-1", startHour = 0, endHour = 23,
-      type = BbpAvailability.UNAVAILABLE_KIND,
-    )
+    val unavailable =
+      permit(
+        recordId = 1,
+        area = "Brooklyn Bridge Park",
+        group = "Pier 5",
+        fieldId = "pier5-field-1",
+        startHour = 0,
+        endHour = 23,
+        type = BbpAvailability.UNAVAILABLE_KIND,
+      )
     for (permits in listOf(emptyList(), listOf(unavailable))) {
       val buckets = computeAvailability(permits, Areas.default, 18, 23)
       assertThat(buckets.fullyOpen.none { it.group.name == "Pier 5" }).isTrue()
@@ -50,11 +55,16 @@ class FindFieldScreenTest {
 
   @Test
   fun `find field ignores coverage markers when recommending verified BBP gaps`() {
-    val coverage = permit(
-      recordId = 1, area = "Brooklyn Bridge Park", group = "Pier 5",
-      fieldId = "pier5-field-1", startHour = 0, endHour = 23,
-      type = BbpAvailability.COVERAGE_KIND,
-    )
+    val coverage =
+      permit(
+        recordId = 1,
+        area = "Brooklyn Bridge Park",
+        group = "Pier 5",
+        fieldId = "pier5-field-1",
+        startHour = 0,
+        endHour = 23,
+        type = BbpAvailability.COVERAGE_KIND,
+      )
     val buckets = computeAvailability(listOf(coverage), Areas.default, 18, 23)
     assertThat(buckets.fullyOpen.any { it.group.name == "Pier 5" }).isTrue()
   }

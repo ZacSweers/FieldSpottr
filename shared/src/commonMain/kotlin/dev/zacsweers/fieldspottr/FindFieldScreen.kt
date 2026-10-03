@@ -543,8 +543,12 @@ internal fun computeAvailability(
 
       val groupPermits = permitsByAreaAndGroup[area.areaName to group.name].orEmpty()
       // Unverified BBP schedules cannot be recommended as available fields.
-      if (area.areaName == "Brooklyn Bridge Park" && group.name == "Pier 5" &&
-        groupPermits.none { it.type == BbpAvailability.COVERAGE_KIND }) continue
+      if (
+        area.areaName == "Brooklyn Bridge Park" &&
+          group.name == "Pier 5" &&
+          groupPermits.none { it.type == BbpAvailability.COVERAGE_KIND }
+      )
+        continue
       val bookedHours =
         bookedHoursForGroup(
           permits = groupPermits,
