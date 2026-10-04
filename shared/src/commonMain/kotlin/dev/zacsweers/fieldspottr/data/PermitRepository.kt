@@ -285,7 +285,7 @@ class PermitRepositoryImpl(
 
   override fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>> {
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
-    val endTime = startTime + 1.days.inWholeMilliseconds
+    val endTime = date.plus(1, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
     log("permitsFlow query: date=$date, group=$group, startTime=$startTime, endTime=$endTime")
     return flow {
       emitAll(

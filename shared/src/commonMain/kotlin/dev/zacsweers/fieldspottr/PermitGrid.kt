@@ -775,14 +775,16 @@ fun PermitEvent(
 ) = SharedElementTransitionScope {
   val isOverlap = event.isOverlap
   val containerColor =
-    if (event.isBlocked) {
+    if (event.isUnavailable) {
+      MaterialTheme.colorScheme.surfaceVariant
+    } else if (event.isBlocked) {
       MaterialTheme.colorScheme.errorContainer
     } else if (isOverlap) {
       MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
     } else {
       MaterialTheme.colorScheme.secondaryContainer
     }
-  val isClickable = onEventClick != null && !isOverlap && !event.isBlocked
+  val isClickable = onEventClick != null && !isOverlap && !event.isBlocked && !event.isUnavailable
   var orgVisible by remember { mutableStateOf(false) }
   val sharedBoundsModifier =
     if (isClickable) {
@@ -817,7 +819,9 @@ fun PermitEvent(
     if (isOverlap) return@Surface
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
       val textColor =
-        if (event.isBlocked) {
+        if (event.isUnavailable) {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        } else if (event.isBlocked) {
           MaterialTheme.colorScheme.onErrorContainer
         } else {
           MaterialTheme.colorScheme.onSecondaryContainer

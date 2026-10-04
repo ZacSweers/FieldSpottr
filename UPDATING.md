@@ -113,6 +113,10 @@ https://brooklynbridgepark.org/places-to-see/pier-5/
 
 `data/bbp/pier5-current.json` is the current source pointer. It records the official page and image URLs, image hash and path, schedule year and valid date range, transcription provenance, and the field, day, and time blocks that the generator expands into availability rows. Images use immutable names in the form `data/bbp/pier5-<full-sha256>.<ext>`, and every prior hash-named image remains checked in for audit.
 
+Normal availability refreshes handle a missing, invalid, or expired BBP source by publishing explicit unavailable rows for Pier 5 over the live refresh window. Other providers can still refresh. Valid sources emit daily coverage markers only within their stated dates. The app shows "Schedule unavailable" in the day view and "Unknown" in the week view when a selected BBP date has no coverage marker, including dates outside the refresh window. It never treats missing BBP data as free time or extends expired schedule dates. Find a Field excludes BBP recommendations when coverage is missing.
+
+BBP source validation, transcription, preparation, and BBP-only previews remain strict. An invalid candidate still fails before source files can be installed.
+
 For a local check, load `KERNEL_API_KEY` and `OPENAI_API_KEY` from a secure shell environment and run:
 
 ```bash
