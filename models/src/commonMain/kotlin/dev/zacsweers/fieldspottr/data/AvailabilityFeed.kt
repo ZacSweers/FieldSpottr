@@ -54,3 +54,9 @@ data class AvailabilityFeedRow(
   @EncodeDefault(EncodeDefault.Mode.NEVER) val isOverlap: Boolean = false,
   @SerialName("advisory") val advisoryText: String? = null,
 )
+
+/** Daily markers distinguish a verified empty schedule from missing source data. */
+object BbpAvailability {
+  const val COVERAGE_KIND = "BBP schedule coverage"
+  const val UNAVAILABLE_KIND = "BBP unavailable"
+}

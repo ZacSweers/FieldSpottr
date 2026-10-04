@@ -27,7 +27,9 @@ import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.plus
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okio.buffer
@@ -247,6 +249,30 @@ class PermitRepositoryTest {
     assertThat(permits[0]).isEqualTo(morningPermit)
     assertThat(permits[1]).isEqualTo(afternoonPermit)
   }
+
+  @Test
+  fun `daily queries include the full NY date and exclude next day coverage across DST`() =
+    runTest {
+      for ((index, date) in listOf(LocalDate(2026, 3, 8), LocalDate(2026, 11, 1)).withIndex()) {
+        val nextMidnight = date.plus(1, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
+        val latePermit =
+          morningPermit.copy(
+            recordId = 100L + index * 2,
+            start = nextMidnight - 1.hours.inWholeMilliseconds / 2,
+            end = nextMidnight,
+          )
+        val nextCoverage =
+          morningPermit.copy(
+            recordId = 101L + index * 2,
+            type = BbpAvailability.COVERAGE_KIND,
+            start = nextMidnight,
+            end = nextMidnight + 24.hours.inWholeMilliseconds,
+          )
+        temporaryDatabase.db().fsdbQueries.addPermit(latePermit)
+        temporaryDatabase.db().fsdbQueries.addPermit(nextCoverage)
+        assertThat(repository.permitsFlow(date, testGroup).first()).isEqualTo(listOf(latePermit))
+      }
+    }
 
   @Test
   fun `permitsFlow with an empty db is empty`() = runTest {

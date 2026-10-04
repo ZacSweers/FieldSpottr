@@ -7,6 +7,7 @@ import androidx.compose.runtime.Stable
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.padFreeSlots
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Companion.withOverlapsFrom
 import dev.zacsweers.fieldspottr.data.Areas
+import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.util.formatAmPm
 import dev.zacsweers.fieldspottr.util.formatNoAmPm
@@ -34,6 +35,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
        * field.
        */
       val isOverlap: Boolean,
+      val isUnavailable: Boolean = false,
     ) : FieldState {
       val duration = end - start
     }
@@ -67,6 +69,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
           status = permit.status,
           isBlocked = permit.isBlocked,
           isOverlap = false,
+          isUnavailable = permit.type == BbpAvailability.UNAVAILABLE_KIND,
         )
       }
 
@@ -257,7 +260,36 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         }
       }
 
-      val displayPermits = dbPermits.filterNot { it.isAvailabilityOverlay }
+      // Missing coverage must never turn a BBP date into free availability.
+      if (
+        selectedGroup == "Pier 5" &&
+          dbPermits.none {
+            it.area == "Brooklyn Bridge Park" && it.type == BbpAvailability.COVERAGE_KIND
+          }
+      ) {
+        val group = areas.groups[selectedGroup] ?: return EMPTY
+        return PermitState(
+          group.fields.associateWith {
+            listOf(
+              FieldState.Reserved(
+                start = 0,
+                end = 24,
+                timeRange = "All day",
+                title = "Schedule unavailable",
+                org = "Brooklyn Bridge Park",
+                status = "Unknown",
+                isBlocked = false,
+                isOverlap = false,
+                isUnavailable = true,
+              )
+            )
+          }
+        )
+      }
+
+      val displayPermits = dbPermits.filterNot {
+        it.isAvailabilityOverlay || it.type == BbpAvailability.COVERAGE_KIND
+      }
       if (displayPermits.isEmpty()) return PermitState(emptyMap())
 
       val areasByName = areas.entries.associateBy { it.areaName }

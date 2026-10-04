@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,9 +38,9 @@ enum class GridViewMode {
 }
 
 /**
- * A 7-day availability overview for a field group. Subfields are collapsed into a per-hour 4-state
- * strip per day (all free / some free / booked / closed); tapping a day opens the regular day grid
- * for per-field detail. Cell colors animate so feed refreshes shift softly instead of popping.
+ * A 7-day availability overview for a field group. Subfields are collapsed into a per-hour strip
+ * per day (all free / some free / booked / closed / unknown); tapping a day opens the day grid for
+ * per-field detail. Cell colors animate so feed refreshes shift softly instead of popping.
  */
 @Composable
 fun WeekGrid(
@@ -79,15 +80,16 @@ fun WeekGrid(
       }
     }
 
-    Row(
+    FlowRow(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = spacedBy(12.dp, alignment = Alignment.CenterHorizontally),
-      verticalAlignment = Alignment.CenterVertically,
+      verticalArrangement = spacedBy(6.dp),
     ) {
       LegendItem(WeekSlotState.ALL_FREE.color(), "All free")
       LegendItem(WeekSlotState.SOME_FREE.color(), "Some free")
       LegendItem(WeekSlotState.BOOKED.color(), "Booked")
       LegendItem(WeekSlotState.CLOSED.color(), "Closed")
+      LegendItem(WeekSlotState.UNKNOWN.color(), "Unknown")
     }
   }
 }
@@ -153,6 +155,7 @@ private fun DayColumn(
 @Composable
 internal fun WeekSlotState.color(): Color {
   return when (this) {
+    WeekSlotState.UNKNOWN -> MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
     WeekSlotState.ALL_FREE -> MaterialTheme.colorScheme.secondaryContainer
     WeekSlotState.SOME_FREE -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
     WeekSlotState.BOOKED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
