@@ -6,91 +6,91 @@
       "areaName": "Baruch",
       "areaId": "baruch",
       "path": "availability/areas/baruch.json",
-      "hash": "06e1e53c93bf0821bbfaace6409645a7567feb69012e6915d48023f0a08bcbc2",
+      "hash": "8f3ae81a87e5ae4f0ca8c873a01efad5f7766b777fa44f198d5c217cab6ee831",
       "generatedAt": null
     },
     {
       "areaName": "Brooklyn Bridge Park",
       "areaId": "brooklyn-bridge-park",
       "path": "availability/areas/brooklyn-bridge-park.json",
-      "hash": "f09aa212557f149ec928283b22c739ddb89136cb1ceae6d1ed8caae6992b465c",
+      "hash": "8128a79cade36832b9cc9a8aca5a2c8e7be6faa2d57e16c5c25d0e0781531096",
       "generatedAt": null
     },
     {
       "areaName": "Bushwick Inlet Park",
       "areaId": "bushwick-inlet-park",
       "path": "availability/areas/bushwick-inlet-park.json",
-      "hash": "f207c31e8d616272b16b0883e9e04f30a08a6d1c4b166f588bfc48adccba7ccd",
+      "hash": "3e54b37971f988cdb2b8b71629038971ac3263f730093162f567ca52195c5e06",
       "generatedAt": null
     },
     {
       "areaName": "Columbus Park",
       "areaId": "columbus-park",
       "path": "availability/areas/columbus-park.json",
-      "hash": "a1430a7e19daa4b080f6f7d0ac30394b372a72b6448fbe00d7659d320e3d1d53",
+      "hash": "d22877a6726e5d38e9699ef0c4add010170511c84cfa853993a748be1039a8a5",
       "generatedAt": null
     },
     {
       "areaName": "Corlears Hook",
       "areaId": "corlears-hook",
       "path": "availability/areas/corlears-hook.json",
-      "hash": "115ad0252bf32d22391fc57a0467b14155d5d6d8a7b0a447198f3c55a5370d2a",
+      "hash": "6d426005f6a7f88e6ffede2e22458d46db656c40d74231197eb99c7a1cf033d1",
       "generatedAt": null
     },
     {
       "areaName": "ERP",
       "areaId": "erp",
       "path": "availability/areas/erp.json",
-      "hash": "01ed9e49532b7c169fc5ddc86efe4d318bd625916b0039234d05aa0327900b13",
+      "hash": "122068181e80f53ba92e5683013cdb502f28758c4016adfd009c07a03fa17350",
       "generatedAt": null
     },
     {
       "areaName": "McCarren",
       "areaId": "mccarren",
       "path": "availability/areas/mccarren.json",
-      "hash": "c59577efa0c37f930e7b9d8fea2a2be5c5890e649fcc8cd0a9be223421b58ed0",
+      "hash": "b74aa44ac18fcd9b38b56a5acdb8287549039002e3dcb706dc99e0528588d909",
       "generatedAt": null
     },
     {
       "areaName": "Murphy Brothers Playground",
       "areaId": "murphy-brothers-playground",
       "path": "availability/areas/murphy-brothers-playground.json",
-      "hash": "c3455cc5f81a85443ae9f424575dc37ad197ad6827eb1310c96208d290e5bb9c",
+      "hash": "9029d94f2e0c3e4500143b16d10e9ba524467d40abffc3454366eddbc4a759cf",
       "generatedAt": null
     },
     {
       "areaName": "Peter's Field",
       "areaId": "peter-s-field",
       "path": "availability/areas/peter-s-field.json",
-      "hash": "f2fea82c06faaae9efd38215d2902678ab94885a4dbd25ebd70a20c0267c9b08",
+      "hash": "edd5988d088c7f14dd3e8b4cb488e39d7d75d470509b47f3e7984daf6d29c551",
       "generatedAt": null
     },
     {
       "areaName": "Pier 42",
       "areaId": "pier-42",
       "path": "availability/areas/pier-42.json",
-      "hash": "f39e7aa6a1418464858eb7d8a21fd1af290f54cdaac707b494149d71c700692e",
+      "hash": "3a7289583fe7765119b6d173a6b9eeac0935d0f2eecd5290970914fe4b9a1ded",
       "generatedAt": null
     },
     {
       "areaName": "Sara D. Roosevelt Park",
       "areaId": "sara-d-roosevelt-park",
       "path": "availability/areas/sara-d-roosevelt-park.json",
-      "hash": "e8381b37018c2b975770fc08ec26c545cce9c9bfe5b957e7bd690627ee3bf227",
+      "hash": "652aa33c3eb143c0cd10d5e9619c450ec889aead093c3e04cde978c5c144d13e",
       "generatedAt": null
     },
     {
       "areaName": "St. Vartan Park",
       "areaId": "st-vartan-park",
       "path": "availability/areas/st-vartan-park.json",
-      "hash": "7d1cbb14b071702e8d09685839a6f753bd8edc7d1f275e9b726b7625ada0762c",
+      "hash": "aac1eecfca8e9ffa5f51eca13ea28ac38e85b51bb225e800244facca0b96fce9",
       "generatedAt": null
     },
     {
       "areaName": "West Side Highway",
       "areaId": "west-side-highway",
       "path": "availability/areas/west-side-highway.json",
-      "hash": "f5e3430a13598fb5d20ab569a120aff35b4467e8b6c5fd71d57be6668725ec2e",
+      "hash": "915f7288a38be3e875ea55ed5bb74334bd1425ab16c298f1220e0498b0cf95a1",
       "generatedAt": null
     }
   ]
