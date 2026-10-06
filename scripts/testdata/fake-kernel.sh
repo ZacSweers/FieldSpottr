@@ -16,11 +16,25 @@ fi
 
 case "${2:-}" in
   create)
-    echo '{"session_id":"test-session","cdp_ws_url":"signed-test-url"}'
+    if [[ "${FAKE_KERNEL_WARNING:-false}" == true ]]; then
+      echo 'CLI warning secret-token signed-test-url' >&2
+    fi
+    session_id=test-session
+    if [[ -n "${FAKE_KERNEL_SESSION_COUNTER:-}" ]]; then
+      session_count=0
+      if [[ -f "$FAKE_KERNEL_SESSION_COUNTER" ]]; then
+        session_count="$(<"$FAKE_KERNEL_SESSION_COUNTER")"
+      fi
+      session_count=$((session_count + 1))
+      printf '%s\n' "$session_count" >"$FAKE_KERNEL_SESSION_COUNTER"
+      session_id="test-session-$session_count"
+    fi
+    printf '{"session_id":"%s","cdp_ws_url":"signed-test-url"}\n' "$session_id"
     ;;
   curl)
     : "${FAKE_KERNEL_STATE:?}"
     url="${4:-}"
+    session_id="${3:-}"
     count=0
     if [[ -f "$FAKE_KERNEL_STATE" ]]; then
       count="$(<"$FAKE_KERNEL_STATE")"
@@ -40,6 +54,15 @@ case "${2:-}" in
     [[ -n "$output" ]] || exit 2
 
     case "${FAKE_KERNEL_MODE:-raw}" in
+      fail-first-session)
+        if [[ "$session_id" == test-session-1 ]]; then
+          printf '%s\n' 'secret-token secret-cookie signed-test-url' >"$output"
+          printf '%s\n' 'kernel_http_status=503' 'kernel_time_total=0.5'
+          echo 'HTTP error: 503; Set-Cookie: secret-cookie; Authorization: Bearer secret-token' >&2
+          exit 22
+        fi
+        printf '%s\n' '{"availability":{}}' >"$output"
+        ;;
       raw)
         printf '%s\n' '{"availability":{}}' >"$output"
         ;;
@@ -91,14 +114,26 @@ case "${2:-}" in
         fi
         ;;
       fail)
+        printf '%s\n' 'secret-token secret-cookie signed-test-url' >"$output"
+        printf '%s\n' 'kernel_http_status=503' 'kernel_time_total=0.5'
+        echo 'HTTP error: 503; Set-Cookie: secret-cookie; Authorization: Bearer secret-token' >&2
         exit 22
         ;;
       *)
         exit 2
         ;;
     esac
+    printf '%s\n' 'kernel_http_status=200' 'kernel_time_total=0.5'
     ;;
   playwright)
+    if [[ "${FAKE_KERNEL_WARNING:-false}" == true ]]; then
+      echo 'CLI warning secret-token signed-test-url' >&2
+    fi
+    if [[ "${FAKE_KERNEL_PLAYWRIGHT_SUCCESS:-true}" == true ]]; then
+      echo '{"success":true,"result":{"httpStatus":200}}'
+    else
+      echo '{"success":false,"error":"page.goto: net::ERR_CONNECTION_RESET secret-token secret-cookie signed-test-url"}'
+    fi
     ;;
   delete)
     if [[ "${FAKE_KERNEL_DELETE_FAIL:-false}" == "true" ]]; then

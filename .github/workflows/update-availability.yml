@@ -52,7 +52,7 @@ jobs:
           FETCH_BACKEND: kernel
           KERNEL_API_KEY: ${{ secrets.KERNEL_API_KEY }}
           REQUIRE_FRESH_LIVE_SOURCES: 'true'
-        run: scripts/update-availability.sh
+        run: scripts/update-availability-retry.sh
 
       - name: Write generated data diff
         id: diff
@@ -73,7 +73,7 @@ jobs:
 
       - name: Commit generated data
         id: commit
-        if: steps.diff.outputs.changed == 'true'
+        if: github.ref == 'refs/heads/main' && steps.diff.outputs.changed == 'true'
         run: |
           branch="automation/update-availability-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
@@ -87,7 +87,7 @@ jobs:
 
       - name: Open pull request
         id: pr
-        if: steps.commit.outputs.changed == 'true'
+        if: github.ref == 'refs/heads/main' && steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
         run: |
@@ -101,7 +101,7 @@ jobs:
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Enable auto-merge
-        if: steps.pr.outputs.url != ''
+        if: github.ref == 'refs/heads/main' && steps.pr.outputs.url != ''
         env:
           GH_TOKEN: ${{ secrets.FIELDSPOTTR_BOT_TOKEN }}
         run: gh pr merge --auto --squash --delete-branch "${{ steps.pr.outputs.url }}"
@@ -117,6 +117,15 @@ jobs:
             build/hrp/**
             build/nyc-live/**
             generator/build/reports/**
+
+      - name: Upload fetch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: availability-fetch-diagnostics
+          if-no-files-found: ignore
+          retention-days: 14
+          path: build/availability-diagnostics/**
 
       - name: Upload generated data diff
         if: always()
