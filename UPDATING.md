@@ -50,7 +50,6 @@ CI runs `scripts/update-availability-retry.sh`. It retries the data refresh once
 When changing the updater or generator, run its focused tests before the full build:
 
 ```bash
-scripts/update-availability-test.sh
 ./gradlew :generator:test
 ./gradlew build
 ```

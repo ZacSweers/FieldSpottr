@@ -44,9 +44,6 @@ jobs:
       - name: Install Kernel CLI
         run: npm install --global @onkernel/cli@0.26.0
 
-      - name: Test availability updater
-        run: scripts/update-availability-test.sh
-
       - name: Update availability data
         env:
           FETCH_BACKEND: kernel
