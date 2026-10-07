@@ -27,7 +27,7 @@
       "areaName": "Columbus Park",
       "areaId": "columbus-park",
       "path": "availability/areas/columbus-park.json",
-      "hash": "7c7a0249dc41cf71edc13f9e9b3ff8efad42b935c9b7e63e34d3e40a2d19e911",
+      "hash": "bdc405c47a77a40c35d8b93938c5058b22986466464ed076ab30c68582b475ac",
       "generatedAt": null
     },
     {
@@ -41,7 +41,7 @@
       "areaName": "ERP",
       "areaId": "erp",
       "path": "availability/areas/erp.json",
-      "hash": "c9d310fdf8a223a4071bca74f3c8709152dcd7ab149badabe049e9f31a8e3925",
+      "hash": "01354063ae334d5eef3aae0b334e27e670b454ff585262a74b2b1a00bc5dcd29",
       "generatedAt": null
     },
     {
@@ -62,7 +62,7 @@
       "areaName": "Peter's Field",
       "areaId": "peter-s-field",
       "path": "availability/areas/peter-s-field.json",
-      "hash": "8c78c23a845461fe330f4dfae23f460966bc443e97e0d035ea618304433a12f1",
+      "hash": "1f4208a228b6d947d16b86eabc77b887456a680358a8f572b91cf18df9557ef1",
       "generatedAt": null
     },
     {
@@ -76,7 +76,7 @@
       "areaName": "Sara D. Roosevelt Park",
       "areaId": "sara-d-roosevelt-park",
       "path": "availability/areas/sara-d-roosevelt-park.json",
-      "hash": "d9dc5e5f327d59ee19ad5c3d250e5a9064e6f7e8048676cc4258d4f0688726d6",
+      "hash": "a299e139cc9edff01f08bee2909fd6e3d34fc86be4b3455b31af58c4b3dc9801",
       "generatedAt": null
     },
     {
