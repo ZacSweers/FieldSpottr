@@ -60,9 +60,7 @@ discard_invalid_json_dump() {
   fi
 
   if [[ -s "$file" ]]; then
-    local preview
-    preview="$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$file" | cut -c1-120)"
-    echo "$fetcher wrote a non-JSON response for $url: $preview" >&2
+    echo "$fetcher wrote a non-JSON response for $url" >&2
   else
     echo "$fetcher wrote an empty response for $url" >&2
   fi
@@ -243,6 +241,11 @@ fetch_nyc_live_sources() {
           discard_invalid_json_dump "$output" "$url" "Kernel Browser Curl" || true
         else
           rm -f "$output"
+        fi
+
+        if [[ "$REQUIRE_FRESH_LIVE_SOURCES" == true && ! -s "$output" ]]; then
+          echo "Strict refresh requires a fresh NYC live source for $api_location_id on $live_date." >&2
+          return 1
         fi
 
         offset=$((offset + 7))

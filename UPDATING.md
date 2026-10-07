@@ -23,7 +23,7 @@ brew install kernel/tap/kernel
 FETCH_BACKEND=kernel scripts/update-availability.sh
 ```
 
-Kernel mode creates one headful stealth browser session for the refresh. HRP and NYC requests run sequentially through Browser Curl without custom browser headers. If Kernel encounters a Cloudflare challenge or an HTTP failure that may hide one, the script navigates to the URL with Playwright, waits for challenge handling, and retries Browser Curl with the same session and cookies. The script deletes the session when it exits, and the five-minute server timeout is a fallback if local cleanup cannot run.
+Kernel mode creates one headful stealth browser session for the refresh. HRP and NYC requests run sequentially through Browser Curl without custom browser headers. If Kernel encounters a Cloudflare challenge or an HTTP failure that may hide one, the script navigates to the URL with Playwright, waits for challenge handling, and retries Browser Curl with the same session and cookies. Failed navigation rejects that fetch, including when the CLI exits zero but reports `success=false`. The script deletes the session when it exits, and the five-minute server timeout is a fallback if local cleanup cannot run.
 
 Useful environment overrides:
 
@@ -43,12 +43,13 @@ NYC_CLOSURES_SOURCE_FILE=/path/to/closures.json scripts/update-availability.sh
 
 `REQUIRE_FRESH_LIVE_SOURCES=true` enables the strict mode used by CI. Strict mode requires HRP to parse after its fallback and requires every expected NYC live response to exist and parse. A strict failure exits nonzero before CI can create a pull request. Without strict mode, failed live sources retain their existing preservation behavior.
 
+CI runs `scripts/update-availability-retry.sh`. It retries the data refresh once after 15 seconds in a separate process with a fresh browser session. Strict mode stops at the first failed NYC fetch. Commit and pull request creation run only after a successful refresh and are outside the retry. Sanitized Kernel diagnostics under `build/availability-diagnostics/attempt-<n>/` contain operation success, CLI exit code, HTTP status, duration, and fixed error categories. They exclude raw CLI output, responses, URLs, headers, cookies, and session credentials. CI uploads them even when the second attempt succeeds. Manual workflow runs on other branches fetch and generate a reviewable diff but skip publication. Only `main` can publish data.
+
 `HRP_SOURCE_FILE`, `NYC_CSV_SOURCE_DIR`, and `NYC_CLOSURES_SOURCE_FILE` let you rerun with manually saved upstream dumps. NYC CSV and closure sources remain best-effort even in strict mode. There is no known current automatic NYC Parks closures feed; without `NYC_CLOSURES_SOURCE_FILE`, existing closure rows are preserved.
 
 When changing the updater or generator, run its focused tests before the full build:
 
 ```bash
-scripts/update-availability-test.sh
 ./gradlew :generator:test
 ./gradlew build
 ```

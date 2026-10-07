@@ -49,6 +49,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Test BBP schedule updater
+        run: scripts/update-bbp-schedule-test.sh
+
       - name: Build and run checks
         id: gradle-build
         run: |

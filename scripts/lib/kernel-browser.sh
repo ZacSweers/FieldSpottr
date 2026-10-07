@@ -5,6 +5,85 @@
 KERNEL_CLI="${KERNEL_CLI:-kernel}"
 readonly KERNEL_MIN_VERSION="0.26.0"
 KERNEL_SESSION_ID="${KERNEL_SESSION_ID:-}"
+KERNEL_DIAGNOSTIC_SEQUENCE=0
+
+# Only fixed categories and numeric metadata may reach logs or artifacts.
+kernel_error_kind() {
+  local message="$1"
+  local fallback="$2"
+
+  if LC_ALL=C grep -Eiq 'timeout|timed out|deadline exceeded' <<<"$message"; then
+    printf '%s\n' timeout
+  elif LC_ALL=C grep -Eiq 'x509|certificate|TLS' <<<"$message"; then
+    printf '%s\n' tls_error
+  elif LC_ALL=C grep -Eiq 'net::ERR_|connection|dial tcp|no such host' <<<"$message"; then
+    printf '%s\n' network_error
+  else
+    printf '%s\n' "$fallback"
+  fi
+}
+
+kernel_record_diagnostic() {
+  local operation="$1"
+  local cli_exit_code="$2"
+  local success="$3"
+  local http_status="$4"
+  local error_kind="$5"
+  local duration="${6:-null}"
+
+  if [[ "$success" != true ]]; then
+    echo "Kernel $operation failed (CLI exit=$cli_exit_code, HTTP=$http_status, reason=$error_kind)." >&2
+  fi
+  if [[ -z "${KERNEL_DIAGNOSTICS_DIR:-}" ]]; then
+    return 0
+  fi
+
+  KERNEL_DIAGNOSTIC_SEQUENCE=$((KERNEL_DIAGNOSTIC_SEQUENCE + 1))
+  if ! mkdir -p "$KERNEL_DIAGNOSTICS_DIR" ||
+    ! jq -n \
+      --arg operation "$operation" \
+      --argjson cliExitCode "$cli_exit_code" \
+      --argjson success "$success" \
+      --argjson httpStatus "$http_status" \
+      --arg errorKind "$error_kind" \
+      --argjson durationSeconds "$duration" \
+      '{operation: $operation, cliExitCode: $cliExitCode, success: $success,
+        httpStatus: (if $httpStatus == 0 then null else $httpStatus end),
+        errorKind: (if $errorKind == "" then null else $errorKind end),
+        durationSeconds: $durationSeconds}' \
+      >"$KERNEL_DIAGNOSTICS_DIR/$KERNEL_DIAGNOSTIC_SEQUENCE-$operation.json"; then
+    echo "Warning: Could not write Kernel diagnostic metadata." >&2
+  fi
+}
+
+kernel_curl_attempt() {
+  local url="$1"
+  local candidate="$2"
+  local command_output cli_exit_code http_status duration error_kind success
+
+  if command_output="$(
+    "$KERNEL_CLI" browsers curl "$KERNEL_SESSION_ID" "$url" \
+      --fail --max-time 45 --output "$candidate" \
+      --write-out $'kernel_http_status=%{http_code}\nkernel_time_total=%{time_total}\n' \
+      2>&1
+  )"; then
+    cli_exit_code=0
+    success=true
+    error_kind=""
+  else
+    cli_exit_code=$?
+    success=false
+    error_kind="$(kernel_error_kind "$command_output" request_failed)"
+  fi
+  http_status="$(printf '%s\n' "$command_output" | sed -nE 's/^kernel_http_status=([0-9]{3})$/\1/p' | tail -n 1)"
+  http_status=$((10#${http_status:-0}))
+  duration="$(printf '%s\n' "$command_output" | sed -nE 's/^kernel_time_total=([0-9]+\.[0-9]+)$/\1/p' | tail -n 1)"
+  if [[ "$success" == false && "$http_status" -ge 400 ]]; then
+    error_kind=http_error
+  fi
+  kernel_record_diagnostic curl "$cli_exit_code" "$success" "$http_status" "$error_kind" "${duration:-null}"
+  return "$cli_exit_code"
+}
 
 kernel_semver_at_least() {
   local current="$1"
@@ -106,19 +185,28 @@ kernel_start_session() {
   kernel_require_configuration || return 1
   kernel_install_exit_traps
 
-  local session_json
-  if ! session_json="$(
-    "$KERNEL_CLI" browsers create --stealth --timeout 300 --output json --no-color
+  local session_json cli_exit_code error_kind
+  if session_json="$(
+    "$KERNEL_CLI" browsers create --stealth --timeout 300 --output json --no-color \
+    2>/dev/null
   )"; then
+    cli_exit_code=0
+  else
+    cli_exit_code=$?
+    error_kind="$(kernel_error_kind "$session_json" session_creation_failed)"
+    kernel_record_diagnostic create "$cli_exit_code" false 0 "$error_kind"
     echo "Failed to create a Kernel browser session." >&2
     return 1
   fi
   if ! KERNEL_SESSION_ID="$(
     printf '%s' "$session_json" | jq -er '.session_id | strings | select(length > 0)'
   )"; then
+    kernel_record_diagnostic create "$cli_exit_code" false 0 invalid_response
     echo "Kernel browser creation returned no session ID." >&2
     return 1
   fi
+
+  kernel_record_diagnostic create "$cli_exit_code" true 0 ""
 
   echo "Using one Kernel stealth browser session for this refresh"
 }
@@ -131,10 +219,25 @@ kernel_navigate_for_challenge() {
   local url="$1"
   local quoted_url
   local code
+  local result cli_exit_code http_status error_kind
 
   quoted_url="$(jq -Rn --arg url "$url" '$url')"
-  code="const target = $quoted_url; await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForFunction(() => { const text = document.title + ' ' + (document.body?.innerText ?? ''); return !/(Just a moment|Verify you are human|Attention Required|cf-chl|Cloudflare Ray ID)/i.test(text); }, undefined, { timeout: 60000 }).catch(() => {}); await page.waitForTimeout(2000);"
-  "$KERNEL_CLI" browsers playwright execute "$KERNEL_SESSION_ID" "$code" --timeout 90 >/dev/null
+  code="const target = $quoted_url; const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForFunction(() => { const text = document.title + ' ' + (document.body?.innerText ?? ''); return !/(Just a moment|Verify you are human|Attention Required|cf-chl|Cloudflare Ray ID)/i.test(text); }, undefined, { timeout: 60000 }); await page.waitForTimeout(2000); return { httpStatus: response?.status() ?? null };"
+  if result="$("$KERNEL_CLI" browsers playwright execute "$KERNEL_SESSION_ID" "$code" --timeout 90 --output json --no-color 2>/dev/null)"; then
+    cli_exit_code=0
+  else
+    cli_exit_code=$?
+  fi
+  http_status="$(printf '%s' "$result" | jq -r '(.result.httpStatus // 0) | select(type == "number" and . >= 100 and . <= 599 and . == floor)' 2>/dev/null)" || http_status=0
+  if [[ "$cli_exit_code" -eq 0 ]] &&
+    printf '%s' "$result" | jq -e '.success == true' >/dev/null 2>&1; then
+    kernel_record_diagnostic playwright "$cli_exit_code" true "${http_status:-0}" ""
+    return 0
+  fi
+
+  error_kind="$(kernel_error_kind "$result" navigation_failed)"
+  kernel_record_diagnostic playwright "$cli_exit_code" false "${http_status:-0}" "$error_kind"
+  return 1
 }
 
 kernel_candidate_needs_challenge_retry() {
@@ -165,11 +268,7 @@ kernel_browser_fetch() {
   fi
 
   rm -f "$output" "$candidate"
-  if ! "$KERNEL_CLI" browsers curl "$KERNEL_SESSION_ID" "$url" \
-    --fail \
-    --silent \
-    --max-time 45 \
-    --output "$candidate"; then
+  if ! kernel_curl_attempt "$url" "$candidate"; then
     should_retry=true
   elif kernel_candidate_needs_challenge_retry "$candidate" "$mode"; then
     should_retry=true
@@ -179,13 +278,10 @@ kernel_browser_fetch() {
     rm -f "$candidate"
     echo "  Retrying through the Kernel browser after challenge handling"
     if ! kernel_navigate_for_challenge "$url"; then
-      echo "Kernel Playwright navigation failed for $url; retrying Browser Curl anyway." >&2
+      echo "Kernel Playwright navigation failed; discarding this response." >&2
+      return 1
     fi
-    if ! "$KERNEL_CLI" browsers curl "$KERNEL_SESSION_ID" "$url" \
-      --fail \
-      --silent \
-      --max-time 45 \
-      --output "$candidate"; then
+    if ! kernel_curl_attempt "$url" "$candidate"; then
       echo "Kernel Browser Curl failed after browser navigation for $url" >&2
       rm -f "$candidate"
       return 1
@@ -193,11 +289,13 @@ kernel_browser_fetch() {
   fi
 
   if [[ ! -s "$candidate" ]]; then
+    kernel_record_diagnostic response 0 false 0 empty_response
     echo "Kernel Browser Curl wrote an empty response for $url" >&2
     rm -f "$candidate"
     return 1
   fi
   if kernel_candidate_needs_challenge_retry "$candidate" "$mode"; then
+    kernel_record_diagnostic response 0 false 0 cloudflare_challenge
     echo "Kernel Browser Curl was still blocked after browser navigation for $url" >&2
     rm -f "$candidate"
     return 1
