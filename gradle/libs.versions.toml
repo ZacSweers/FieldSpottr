@@ -1,5 +1,5 @@
 [versions]
-aboutLicenses = "15.2.0"
+aboutLicenses = "15.3.0"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.8.0"
 androidx-compose-runtime = "1.12.1"
@@ -8,7 +8,7 @@ androidx-datastore = "1.2.1"
 assertk = "0.28.1"
 calf = "0.14.0"
 circuit = "0.39.0"
-compose-jb = "1.12.1"
+compose-jb = "1.12.2"
 androidCompileSdk = "37"
 jdk = "25"
 jvmTarget = "11"
@@ -47,7 +47,7 @@ androidx-splash = "androidx.core:core-splashscreen:1.2.0"
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
-bugsnag-android = "com.bugsnag:bugsnag-android:6.27.1"
+bugsnag-android = "com.bugsnag:bugsnag-android:6.28.0"
 calf-ui = { module = "com.mohamedrejeb.calf:calf-ui", version.ref = "calf" }
 circuit-foundation = { module = "com.slack.circuit:circuit-foundation", version.ref = "circuit" }
 circuit-overlay = { module = "com.slack.circuit:circuit-overlay", version.ref = "circuit" }
@@ -84,7 +84,7 @@ ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }
 
-lints-compose = "com.slack.lint.compose:compose-lint-checks:1.6.0"
+lints-compose = "com.slack.lint.compose:compose-lint-checks:1.6.1"
 
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }

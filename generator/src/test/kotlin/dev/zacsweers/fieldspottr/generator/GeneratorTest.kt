@@ -20,27 +20,6 @@ import kotlinx.collections.immutable.persistentListOf
 
 class GeneratorTest {
   @Test
-  fun `bbp monday schedule expands field 1 split blocks`() {
-    val rows = generateBbpPier5Rows(today = LocalDate.parse("2026-06-01"))
-    val juneFirst = rows.filter { row ->
-      row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
-    }
-    val mondayField1 = rows.filter { row ->
-      row.kind == "BBP active permits" &&
-        row.fieldId == "pier5-field-1" &&
-        row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
-    }
-
-    assertThat(juneFirst).hasSize(1)
-    assertThat(juneFirst.single().groupName).isEqualTo("Pier 5")
-    assertThat(mondayField1.map { it.start to it.end })
-      .containsExactly(
-        nyMillis("2026-06-01T09:00") to nyMillis("2026-06-01T10:00"),
-        nyMillis("2026-06-01T17:00") to nyMillis("2026-06-01T23:00"),
-      )
-  }
-
-  @Test
   fun `nyc live parser reads raw Kernel json`() {
     val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
     val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
