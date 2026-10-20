@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.generator
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.containsExactly
+import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotEqualTo
@@ -38,6 +39,33 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
 class BbpTest {
+  @Test
+  fun `bbp monday schedule expands field 1 split blocks`() {
+    val fixture = sourceFixture()
+    val rows =
+      generateBbpPier5Rows(
+        sourceFile = fixture.sourceFile,
+        imageRoot = fixture.root,
+        today = LocalDate.parse("2026-06-01"),
+      )
+    val juneFirst = rows.filter { row ->
+      row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
+    }
+    val mondayField1 = rows.filter { row ->
+      row.kind == "BBP active permits" &&
+        row.fieldId == "pier5-field-1" &&
+        row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
+    }
+
+    assertThat(juneFirst).hasSize(1)
+    assertThat(juneFirst.single().groupName).isEqualTo("Pier 5")
+    assertThat(mondayField1.map { it.start to it.end })
+      .containsExactly(
+        nyMillis("2026-06-01T09:00") to nyMillis("2026-06-01T10:00"),
+        nyMillis("2026-06-01T17:00") to nyMillis("2026-06-01T23:00"),
+      )
+  }
+
   @Test
   fun `source decoder rejects unknown keys`() {
     val fixture = sourceFixture()
