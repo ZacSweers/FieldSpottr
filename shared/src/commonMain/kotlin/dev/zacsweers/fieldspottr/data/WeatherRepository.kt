@@ -196,7 +196,7 @@ internal constructor(
   val forecast: Flow<WeatherForecast?> = query.data.values().map { it?.toWeatherForecast() }
 
   /** Fetches now, even when the stored forecast is fresh. */
-  fun refresh(): Operation = query.refresh()
+  fun refresh(): Operation = query.requestFetch(force = true)
 
   private suspend fun fetchForecast(): OpenMeteoResponse {
     val response = client.value.get(OPEN_METEO_URL)

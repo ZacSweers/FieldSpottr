@@ -79,8 +79,8 @@ class KeyedDataQueriesTest {
     values.data(keys).first { loaded -> loaded.values.none { it == null } }
     clock.now = START + 10.minutes
     values.data(keys).first { loaded -> loaded["today"]?.value == "today#2" }
-    // A refresh queues behind later's staleness check, so this counts only its own fetch
-    values.refresh(listOf("later")).await()
+    // A forced request queues behind later's staleness check, so this counts only its own fetch
+    values.requestFetch(listOf("later"), force = true).await()
     assertThat(fetched.count { it == "today" }).isEqualTo(2)
     assertThat(fetched.count { it == "later" }).isEqualTo(2)
   }
@@ -156,8 +156,8 @@ class KeyedDataQueriesTest {
     testScheduler.runCurrent()
     // The unused query was dropped once its fetch settled, so this builds a new one over the store
     assertThat(values.data("a").first()!!.value).isEqualTo("a#1")
-    // A refresh queues behind that collector's staleness check, so only the refresh fetches here
-    values.refresh("a").await()
+    // A forced request queues behind that collector's staleness check, so only it fetches here
+    values.requestFetch("a", force = true).await()
     assertThat(fetched).containsExactly("a", "a")
   }
 
@@ -197,53 +197,59 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `fetchIfStale fetches only the stale keys`() = runTest {
+  fun `an unforced request fetches only the stale keys`() = runTest {
     val values = values()
 
     values.data("a").first { it != null }
     testScheduler.runCurrent()
-    assertThat(values.fetchIfStale(listOf("a", "b")).await()).isEqualTo(OperationState.Succeeded)
+    assertThat(values.requestFetch(listOf("a", "b"), force = false).await())
+      .isEqualTo(OperationState.Succeeded)
     assertThat(fetched).containsExactly("a", "b")
 
     clock.now = START + 2.hours
-    assertThat(values.fetchIfStale(listOf("a", "b")).await()).isEqualTo(OperationState.Succeeded)
+    assertThat(values.requestFetch(listOf("a", "b"), force = false).await())
+      .isEqualTo(OperationState.Succeeded)
     assertThat(fetched).containsExactlyInAnyOrder("a", "b", "a", "b")
-    assertThat(values.fetchIfStale(emptyList()).await()).isEqualTo(OperationState.Succeeded)
+    assertThat(values.requestFetch(emptyList(), force = false).await())
+      .isEqualTo(OperationState.Succeeded)
   }
 
   @Test
-  fun `refresh fetches a fresh key again`() = runTest {
+  fun `a forced request fetches a fresh key again`() = runTest {
     val values = values()
 
     values.data("a").first { it != null }
-    assertThat(values.refresh("a").await()).isEqualTo(OperationState.Succeeded)
+    assertThat(values.requestFetch("a", force = true).await()).isEqualTo(OperationState.Succeeded)
     assertThat(values.data("a").first()!!.value).isEqualTo("a#2")
   }
 
   @Test
-  fun `a refresh keeps its key's query until it settles`() = runTest {
+  fun `a forced request keeps its key's query until it settles`() = runTest {
     gate = CompletableDeferred()
     val values = values()
 
-    val refresh = values.refresh("a")
+    val request = values.requestFetch("a", force = true)
     testScheduler.runCurrent()
     // A dropped query would leave a new one here that reports Idle
-    assertThat(values.status("a").first()).isEqualTo(FetchStatus.Fetching(isRefresh = true))
+    assertThat(values.status("a").first()).isEqualTo(FetchStatus.Fetching(forced = true))
     gate.complete(Unit)
-    assertThat(refresh.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(request.await()).isEqualTo(OperationState.Succeeded)
   }
 
   @Test
-  fun `refresh over many keys settles once all have`() = runTest {
+  fun `a forced request over many keys settles once all have`() = runTest {
     val values = values()
 
     values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
-    assertThat(values.refresh(listOf("a", "b")).await()).isEqualTo(OperationState.Succeeded)
+    assertThat(values.requestFetch(listOf("a", "b"), force = true).await())
+      .isEqualTo(OperationState.Succeeded)
     assertThat(fetched).containsExactlyInAnyOrder("a", "b", "a", "b")
 
     failing += "b"
-    assertThat(values.refresh(listOf("a", "b")).await()).isInstanceOf<OperationState.Failed>()
-    assertThat(values.refresh(emptyList()).await()).isEqualTo(OperationState.Succeeded)
+    assertThat(values.requestFetch(listOf("a", "b"), force = true).await())
+      .isInstanceOf<OperationState.Failed>()
+    assertThat(values.requestFetch(emptyList(), force = true).await())
+      .isEqualTo(OperationState.Succeeded)
   }
 
   private companion object {

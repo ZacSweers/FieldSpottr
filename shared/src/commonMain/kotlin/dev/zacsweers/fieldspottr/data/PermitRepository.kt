@@ -307,13 +307,9 @@ internal constructor(
     log("Starting sync with force=$force")
     // The catalog and the manifest load together. Feeds wait for both, since they decide which
     // feeds exist.
-    val catalog =
-      if (force) {
-        Operation.all(listOf(areasQuery.refresh(), manifestQuery.refresh()))
-      } else {
-        Operation.all(listOf(areasQuery.fetchIfStale(), manifestQuery.fetchIfStale()))
-      }
-    val catalogState = catalog.await()
+    val catalogState =
+      Operation.all(listOf(areasQuery.requestFetch(force), manifestQuery.requestFetch(force)))
+        .await()
 
     // A failed download leaves the stored catalog and manifest in place, so feeds still sync
     val areaNames =
@@ -324,13 +320,7 @@ internal constructor(
         null
       } else {
         val keys = manifest.areas.filter { it.resolvedAreaName in areaNames }
-        val feedsSync =
-          if (force) {
-            feeds.refresh(keys)
-          } else {
-            feeds.fetchIfStale(keys)
-          }
-        feedsSync.await()
+        feeds.requestFetch(keys, force).await()
       }
 
     val failure =

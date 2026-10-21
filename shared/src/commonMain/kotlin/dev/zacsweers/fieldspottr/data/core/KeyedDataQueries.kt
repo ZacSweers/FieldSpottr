@@ -74,7 +74,7 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
     val entry = acquire(key)
     try {
       // Pinned, so the entry outlives the fetch even if this collector leaves first
-      entry.pin(entry.query.fetchIfStale())
+      entry.pin(entry.query.requestFetch(force = false))
       emitAll(entry.query.data)
     } finally {
       release(key, entry)
@@ -122,34 +122,24 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   }
 
   /**
-   * Fetches [key] if its stored data is stale, joining a fetch already in flight. For work that
-   * needs a key's data fresh without collecting it, like a sync.
+   * [DataQuery.requestFetch] for [key]. A forced request fetches now, even when the data is fresh.
+   * An unforced one joins a fetch already in flight, else fetches only if the stored data is stale,
+   * for work that needs a key's data fresh without collecting it, like a sync.
    */
-  fun fetchIfStale(key: K): Operation {
+  fun requestFetch(key: K, force: Boolean): Operation {
     val entry = acquire(key)
     try {
-      return entry.query.fetchIfStale().also(entry::pin)
+      return entry.query.requestFetch(force).also(entry::pin)
     } finally {
       release(key, entry)
     }
   }
 
-  /** Fetches every stale key. The handle settles once every check has, failed if any failed. */
-  fun fetchIfStale(keys: Collection<K>): Operation =
-    Operation.all(keys.distinct().map { fetchIfStale(it) })
-
-  /** Fetches [key] now, even when its data is fresh. */
-  fun refresh(key: K): Operation {
-    val entry = acquire(key)
-    try {
-      return entry.query.refresh().also(entry::pin)
-    } finally {
-      release(key, entry)
-    }
-  }
-
-  /** Fetches every key now. The handle settles once every refresh has, failed if any failed. */
-  fun refresh(keys: Collection<K>): Operation = Operation.all(keys.distinct().map { refresh(it) })
+  /**
+   * [requestFetch] for every key. The handle settles once every request has, failed if any failed.
+   */
+  fun requestFetch(keys: Collection<K>, force: Boolean): Operation =
+    Operation.all(keys.distinct().map { requestFetch(it, force) })
 
   /**
    * Marks [key]'s stored data stale without fetching, so its next collector fetches. The mark lives

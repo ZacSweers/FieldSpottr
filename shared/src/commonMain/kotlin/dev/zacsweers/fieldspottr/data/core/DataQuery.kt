@@ -21,7 +21,8 @@ import kotlinx.coroutines.flow.onEach
 sealed interface FetchStatus {
   data object Idle : FetchStatus
 
-  data class Fetching(val isRefresh: Boolean) : FetchStatus
+  /** A fetch is running. [forced] is true when a forced [DataQuery.requestFetch] started it. */
+  data class Fetching(val forced: Boolean) : FetchStatus
 
   data class Failed(val cause: Throwable) : FetchStatus
 }
@@ -53,14 +54,14 @@ internal class DynamicFreshness(val isStale: (fetchedAt: Instant, now: Instant) 
  * [Factory.create].
  *
  * ```
- * collecting data --+
- *                   +--> fetchIfStale() --> joins a fetch in flight, or checks the stored
- * callers ----------+         |             fetch time against freshness and the clock
- *                             | stale
- *                             v
- * refresh() -------------> fetch() --> store.write(value, fetchedAt) --> store.data --> data
- *   cancels an older          |
- *   refresh                   +--> status: Fetching, then Idle or Failed
+ * collecting data -------------+
+ *                              +--> joins a fetch in flight, or checks the stored
+ * requestFetch(force = false) -+    fetch time against freshness and the clock
+ *                                   | stale
+ *                                   v
+ * requestFetch(force = true) --> fetch() --> store.write(value, fetchedAt) --> data
+ *   cancels an older forced         |
+ *   fetch                           +--> status: Fetching, then Idle or Failed
  * ```
  *
  * Checks and fetches run one at a time on the query's own key, so a check never races a fetch.
@@ -98,17 +99,33 @@ internal constructor(
   val status: StateFlow<FetchStatus>
     field = MutableStateFlow<FetchStatus>(FetchStatus.Idle)
 
-  /** Fetches now. Cancels an older refresh and queues behind a stale fetch that already started. */
-  fun refresh(): Operation {
-    val next =
-      actions.prepare(Ordering.Keyed(key, OnPrevious.Cancel)) { fetchOnce(isRefresh = true) }
-    // Subscribers from here on join the refresh
+  /**
+   * Runs this query's fetch when [force] is true or the stored data is stale.
+   *
+   * Force it when the user asks for new data, like a pull to refresh. A forced request fetches now,
+   * cancels an older forced fetch and queues behind an unforced fetch that already started. Its
+   * status shows as `Fetching(forced = true)`.
+   *
+   * An unforced request is single flight. It joins the fetch in flight, else checks the stored time
+   * and fetches only if the data is stale.
+   */
+  fun requestFetch(force: Boolean): Operation =
+    if (force) {
+      fetchNow()
+    } else {
+      fetchIfStale()
+    }
+
+  /** Fetches now. Cancels an older forced fetch and queues behind an unforced one that started. */
+  private fun fetchNow(): Operation {
+    val next = actions.prepare(Ordering.Keyed(key, OnPrevious.Cancel)) { fetchOnce(forced = true) }
+    // Requests from here on join this fetch
     inFlight.store(next.operation)
     return next.commit()
   }
 
   /** Single flight. Joins the fetch in flight, else checks the stored time and fetches if stale. */
-  fun fetchIfStale(): Operation {
+  private fun fetchIfStale(): Operation {
     while (true) {
       val current = inFlight.load()
       if (current != null && current.state.value !is OperationState.Terminal) {
@@ -118,7 +135,7 @@ internal constructor(
       val next =
         actions.prepare(Ordering.Keyed(key)) {
           if (isStale(store.data.first()?.fetchedAt)) {
-            fetchOnce(isRefresh = false)
+            fetchOnce(forced = false)
           }
         }
       if (inFlight.compareAndSet(current, next.operation)) {
@@ -132,7 +149,8 @@ internal constructor(
   /**
    * Marks the stored data stale without fetching, so the next collector fetches. Runs on this
    * query's key after any fetch already in flight, so a fetch that started before a write cannot
-   * leave the old data marked fresh. Use [refresh] instead when the data is on screen.
+   * leave the old data marked fresh. Use a forced [requestFetch] instead when the data is on
+   * screen.
    */
   fun invalidate(): Operation = actions.run(Ordering.Keyed(key)) { store.invalidate() }
 
@@ -149,14 +167,14 @@ internal constructor(
       }
   }
 
-  private suspend fun fetchOnce(isRefresh: Boolean) {
-    status.value = FetchStatus.Fetching(isRefresh)
+  private suspend fun fetchOnce(forced: Boolean) {
+    status.value = FetchStatus.Fetching(forced)
     try {
       val fetchedAt = clock.now()
       store.write(fetch(), fetchedAt)
       status.value = FetchStatus.Idle
     } catch (t: Throwable) {
-      // Cancelled by a newer refresh, which owns the status
+      // Cancelled by a newer forced fetch, which owns the status
       currentCoroutineContext().ensureActive()
       status.value = FetchStatus.Failed(t)
       // The handle settles Failed and the failure reporter hears it

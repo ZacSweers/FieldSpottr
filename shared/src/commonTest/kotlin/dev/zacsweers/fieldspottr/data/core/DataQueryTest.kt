@@ -55,7 +55,7 @@ class DataQueryTest {
 
     assertThat(query.data.values().first()).isEqualTo(1)
     // Joins the check the collector started. advanceUntilIdle() skips backgroundScope work.
-    query.fetchIfStale().await()
+    query.requestFetch(force = false).await()
     assertThat(fetches).isEqualTo(0)
   }
 
@@ -106,7 +106,7 @@ class DataQueryTest {
       )
 
     query.data.first()
-    query.fetchIfStale().await()
+    query.requestFetch(force = false).await()
     assertThat(fetches).isEqualTo(0)
     assertThat(checkedAt).isEqualTo(START)
 
@@ -128,11 +128,11 @@ class DataQueryTest {
   }
 
   @Test
-  fun `refresh fetches even when the data is fresh`() = runTest {
+  fun `a forced request fetches even when the data is fresh`() = runTest {
     stored.value = Fetched(1, START - 10.minutes)
     val query = dataQuery()
 
-    assertThat(query.refresh().await()).isEqualTo(OperationState.Succeeded)
+    assertThat(query.requestFetch(force = true).await()).isEqualTo(OperationState.Succeeded)
     assertThat(fetches).isEqualTo(1)
     assertThat(stored.value).isEqualTo(Fetched(2, START))
   }
@@ -142,7 +142,7 @@ class DataQueryTest {
     fetchFails = true
     val query = dataQuery()
 
-    assertThat(query.refresh().await()).isInstanceOf<OperationState.Failed>()
+    assertThat(query.requestFetch(force = true).await()).isInstanceOf<OperationState.Failed>()
     assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
     assertThat(failures).hasSize(1)
     assertThat(stored.value).isEqualTo(null)
@@ -165,7 +165,7 @@ class DataQueryTest {
     gate = CompletableDeferred()
     val query = dataQuery()
 
-    val fetch = query.fetchIfStale()
+    val fetch = query.requestFetch(force = false)
     testScheduler.runCurrent()
     val invalidate = query.invalidate()
     gate.complete(Unit)
@@ -202,14 +202,16 @@ class DataQueryTest {
     val query = dataQuery()
 
     assertThat(Operation.all(emptyList()).await()).isEqualTo(OperationState.Succeeded)
-    // Holds the first refresh so the second cancels it mid-fetch
+    // Holds the first forced fetch so the second cancels it mid-fetch
     gate = CompletableDeferred()
-    val both = Operation.all(listOf(query.refresh(), query.refresh()))
+    val both =
+      Operation.all(listOf(query.requestFetch(force = true), query.requestFetch(force = true)))
     testScheduler.runCurrent()
     gate.complete(Unit)
     assertThat(both.await()).isEqualTo(OperationState.Cancelled)
     fetchFails = true
-    assertThat(Operation.all(listOf(query.refresh())).await()).isInstanceOf<OperationState.Failed>()
+    assertThat(Operation.all(listOf(query.requestFetch(force = true))).await())
+      .isInstanceOf<OperationState.Failed>()
   }
 
   private companion object {
