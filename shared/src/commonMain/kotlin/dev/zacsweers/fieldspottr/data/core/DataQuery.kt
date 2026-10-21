@@ -137,7 +137,7 @@ internal constructor(
   fun invalidate(): Operation = actions.run(Ordering.Keyed(key)) { store.invalidate() }
 
   private fun isStale(at: Instant?): Boolean {
-    if (at == null || at <= INVALIDATED) {
+    if (at == null || at <= QueryStore.INVALIDATED) {
       return true
     }
     val now = clock.now()

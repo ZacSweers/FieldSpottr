@@ -12,7 +12,7 @@ fun <T> DataStore<Fetched<T>?>.asQueryStore(): QueryStore<T> =
   QueryStore.of(
     data,
     clear = { updateData { null } },
-    invalidate = { updateData { it?.copy(fetchedAt = INVALIDATED) } },
+    invalidate = { updateData { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
   ) { value, fetchedAt ->
     updateData { Fetched(value, fetchedAt) }
   }

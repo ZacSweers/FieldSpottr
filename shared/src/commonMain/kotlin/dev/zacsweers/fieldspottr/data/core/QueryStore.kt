@@ -19,14 +19,12 @@ data class Fetched<out T>(val value: T, val fetchedAt: Instant)
 fun <T> Flow<Fetched<T>?>.values(): Flow<T?> = map { it?.value }
 
 /**
- * The fetch time an invalidated value is stored with. It is stale under every freshness rule and
- * survives a store that keeps only epoch milliseconds.
- */
-internal val INVALIDATED: Instant = Instant.fromEpochSeconds(0)
-
-/**
  * Where a [DataQuery] keeps its data, along with when it was fetched. The query decides freshness
  * from the stored time, so a store that outlives the process keeps its data fresh across restarts.
+ *
+ * One query calls its store one write at a time, since its writes run in order on its own key.
+ * Different queries do not coordinate, so stores over one shared resource, like a database, see
+ * concurrent calls and must allow them or take turns themselves.
  */
 interface QueryStore<T> {
   /** The stored value and its fetch time, or null when nothing is stored. Emits on every change. */
@@ -42,6 +40,13 @@ interface QueryStore<T> {
   suspend fun invalidate()
 
   companion object {
+    /**
+     * The fetch time an invalidated value is stored with. It is stale under every freshness rule
+     * and survives a store that keeps only epoch milliseconds. A custom store writes it to mark its
+     * data stale, and reads it back for data with no usable fetch time.
+     */
+    val INVALIDATED: Instant = Instant.fromEpochSeconds(0)
+
     /** One value held in memory, lost with the process. */
     fun <T> inMemory(): QueryStore<T> {
       val stored = MutableStateFlow<Fetched<T>?>(null)
@@ -110,7 +115,7 @@ class InMemoryStores<K : Any, T> internal constructor(private val maxEntries: In
       invalidate = {
         entries.update { current ->
           val stored = current[key] ?: return@update current
-          current.putting(key, stored.copy(fetchedAt = INVALIDATED))
+          current.putting(key, stored.copy(fetchedAt = QueryStore.INVALIDATED))
         }
       },
     ) { value, fetchedAt ->

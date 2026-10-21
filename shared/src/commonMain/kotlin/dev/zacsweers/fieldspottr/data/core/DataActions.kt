@@ -143,7 +143,7 @@ class DataActions(private val scope: CoroutineScope, private val onFailure: (Thr
         }
         break
       }
-      // Never runs
+      // A superseded entry never runs
       if (target.claim.load() == Claim.Superseded) {
         cursor = target.awaitPredecessor()
         continue

@@ -30,7 +30,7 @@ fun <K : Any, T> DataQuery.Factory.keyed(
  * One [DataQuery] per key, each over the [store] for that key, shared by every caller for the key
  * so concurrent collectors share its fetches and its status. [freshness] can differ per key, like a
  * shorter window for today than for later dates. [maxFetches] caps the fetches in flight across all
- * keys.
+ * keys. It does not cap store writes, which still run at the same time for different keys.
  *
  * A key's query is dropped once nothing uses it and no fetch it started is still running. Its data
  * stays in its store, so the next query for the key picks up the stored value and fetch time.
