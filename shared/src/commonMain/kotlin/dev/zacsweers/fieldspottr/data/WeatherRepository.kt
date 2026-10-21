@@ -17,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.asQueryStore
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
@@ -31,9 +32,9 @@ import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.plus
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.SerialName
@@ -178,10 +179,11 @@ internal constructor(
   @Inject
   constructor(
     queries: DataQuery.Factory,
+    @ForScope(AppScope::class) scope: CoroutineScope,
     appDirs: FSAppDirs,
     json: Json,
     client: Lazy<HttpClient>,
-  ) : this(queries, weatherStore(appDirs, json), json, client)
+  ) : this(queries, weatherStore(appDirs, json, scope + Dispatchers.IO), json, client)
 
   private val query =
     queries.create(
@@ -205,12 +207,12 @@ internal constructor(
 
 /**
  * DataStore allows one active instance per file, which the repository's graph scoping guarantees.
- * Cancelling [scope] releases the file.
+ * The file's reads and writes run in [scope], and cancelling it releases the file.
  */
 internal fun weatherStore(
   appDirs: FSAppDirs,
   json: Json,
-  scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+  scope: CoroutineScope,
 ): DataStore<Fetched<OpenMeteoResponse>?> =
   DataStoreFactory.create(
     storage =
