@@ -22,6 +22,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
+import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.time.Clock.System
@@ -29,27 +30,34 @@ import kotlin.time.Duration.Companion.hours
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.plus
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okio.FileSystem
+import okio.Path.Companion.toOkioPath
 import okio.buffer
-import okio.fakefilesystem.FakeFileSystem
 import org.junit.Rule
 
 class PermitRepositoryTest {
 
   @get:Rule val temporaryDatabase = TemporaryDatabase()
 
-  private val fakeFileSystem = FakeFileSystem()
+  // A real directory, since the repository's queries use files from several threads at once
+  private val fileSystem = FileSystem.SYSTEM
+  private val root = Files.createTempDirectory("permits").toOkioPath()
   private val json = Json { ignoreUnknownKeys = true }
-  private val appDirs = FakeFSAppDirs(fakeFileSystem)
+  private val appDirs = FakeFSAppDirs(fileSystem, root)
   private val httpClient =
     HttpClient(
       MockEngine { request ->
@@ -75,6 +83,7 @@ class PermitRepositoryTest {
   fun closeHttpClient() {
     httpClient.close()
     idleScope.cancel()
+    fileSystem.deleteRecursively(root)
   }
 
   private val testDate = LocalDate(2025, 9, 18)
@@ -197,8 +206,8 @@ class PermitRepositoryTest {
 
   private fun writeCachedAreas(areaName: String = "TestArea") {
     val path = appDirs.userData / "areas.json"
-    fakeFileSystem.createDirectories(path.parent!!)
-    fakeFileSystem.sink(path).buffer().use { it.writeUtf8(testAreasJson(areaName)) }
+    fileSystem.createDirectories(path.parent!!)
+    fileSystem.sink(path).buffer().use { it.writeUtf8(testAreasJson(areaName)) }
   }
 
   private fun cachedManifest(hash: String): AvailabilityManifest {
@@ -216,8 +225,8 @@ class PermitRepositoryTest {
 
   private fun writeCachedManifest(hash: String) {
     val path = appDirs.userData / "availability" / "manifest.json"
-    fakeFileSystem.createDirectories(path.parent!!)
-    fakeFileSystem.sink(path).buffer().use {
+    fileSystem.createDirectories(path.parent!!)
+    fileSystem.sink(path).buffer().use {
       it.writeUtf8(json.encodeToString(cachedManifest(hash)))
     }
   }
@@ -378,7 +387,7 @@ class PermitRepositoryTest {
   fun `cached areas with older version load built-in areas`() {
     val areasPath = appDirs.userData / "areas.json"
     val oldAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION - 1)
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(oldAreas)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(oldAreas)) }
 
     val loaded = repository.loadLocalAreas()
     assertThat(loaded).isSameInstanceAs(Areas.default)
@@ -393,7 +402,7 @@ class PermitRepositoryTest {
   fun `cached areas with current version is not stale`() {
     val areasPath = appDirs.userData / "areas.json"
     val currentAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION)
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(currentAreas)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(currentAreas)) }
 
     val loaded = repository.loadLocalAreas()
     assertThat(loaded.version).isEqualTo(Areas.VERSION)
@@ -454,7 +463,7 @@ class PermitRepositoryTest {
     // Write a cached areas.json with only the first two entries
     val subset = Areas.default.copy(entries = Areas.default.entries.take(2).toImmutableList())
     val areasPath = appDirs.userData / "areas.json"
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(subset)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(subset)) }
 
     val loaded = repository.loadLocalAreas()
 
@@ -684,6 +693,96 @@ class PermitRepositoryTest {
   }
 
   @Test
+  fun `refresh writes several area feeds at once`() = runTest {
+    val areaNames = listOf("TestArea", "OtherArea")
+    val areas =
+      Areas(
+        entries =
+          areaNames
+            .map { Area(areaName = it, displayName = it, fieldGroups = persistentListOf()) }
+            .toImmutableList(),
+        version = Areas.VERSION,
+      )
+    val manifest =
+      AvailabilityManifest(
+        areas =
+          areaNames.map { name ->
+            AvailabilityManifestArea(
+              areaName = name,
+              path = "availability/areas/$name.json",
+              hash = "hash-$name",
+            )
+          }
+      )
+    val routes =
+      mutableMapOf(
+        rawGithubPath("areas.json") to TestResponse(json.encodeToString(areas)),
+        rawGithubPath("availability/manifest.json") to TestResponse(json.encodeToString(manifest)),
+      )
+    for (name in areaNames) {
+      val feed =
+        AvailabilityAreaFeed(
+          areaName = name,
+          rows =
+            listOf(
+              AvailabilityFeedRow(
+                groupName = testGroup,
+                fieldId = "Soccer-01",
+                start = 9.am,
+                end = 11.am,
+                title = "$name Permit",
+              )
+            ),
+        )
+      routes[rawGithubPath("availability/areas/$name.json")] =
+        TestResponse(json.encodeToString(feed))
+    }
+    val (refreshRepository, client) = testRepository(routes)
+    try {
+      assertThat(refreshRepository.refresh().await()).isEqualTo(OperationState.Succeeded)
+
+      val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+      assertThat(permits.map { it.name }.toSet())
+        .isEqualTo(setOf("TestArea Permit", "OtherArea Permit"))
+    } finally {
+      client.close()
+    }
+  }
+
+  @Test
+  fun `concurrent area feed imports all land`() = runTest {
+    val areaNames = List(20) { "Area$it" }
+
+    // On IO threads, the way feed writes run, so the database sees them together
+    withContext(Dispatchers.IO) {
+      for (name in areaNames) {
+        launch {
+          repository.importAreaFeed(
+            AvailabilityAreaFeed(
+              areaName = name,
+              rows =
+                listOf(
+                  AvailabilityFeedRow(
+                    groupName = testGroup,
+                    fieldId = "Soccer-01",
+                    start = 9.am,
+                    end = 11.am,
+                    title = "$name Permit",
+                  )
+                ),
+            ),
+            AvailabilityManifestArea(areaName = name, hash = "hash-$name"),
+            fetchedAt = 300L,
+          )
+        }
+      }
+    }
+
+    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+    assertThat(permits.map { it.area }.toSet()).isEqualTo(areaNames.toSet())
+  }
+
+  @Test
   fun `refresh failed area feed keeps prior area rows`() = runTest {
     temporaryDatabase.db().fsdbQueries.addPermit(morningPermit)
     val routes =
@@ -888,7 +987,7 @@ class PermitRepositoryTest {
         version = Areas.VERSION,
       )
     val areasPath = appDirs.userData / "areas.json"
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(cachedAreas)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(cachedAreas)) }
     val routes =
       mutableMapOf(
         rawGithubPath("areas.json") to TestResponse("{"),
@@ -901,7 +1000,7 @@ class PermitRepositoryTest {
 
       assertThat(refreshRepository.areas.first().entries.map { it.areaName }.contains("CachedArea"))
         .isTrue()
-      assertThat(fakeFileSystem.source(areasPath).buffer().use { it.readUtf8() })
+      assertThat(fileSystem.source(areasPath).buffer().use { it.readUtf8() })
         .isEqualTo(json.encodeToString(cachedAreas))
     } finally {
       client.close()

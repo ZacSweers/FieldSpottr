@@ -155,7 +155,7 @@ class DataQueryTest {
 
     assertThat(query.invalidate().await()).isEqualTo(OperationState.Succeeded)
     assertThat(fetches).isEqualTo(0)
-    assertThat(stored.value).isEqualTo(Fetched(1, INVALIDATED))
+    assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
     assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
     assertThat(fetches).isEqualTo(1)
   }
@@ -172,7 +172,7 @@ class DataQueryTest {
     fetch.await()
     invalidate.await()
     // The fetch's write came first, so the value it stored is the one marked stale
-    assertThat(stored.value).isEqualTo(Fetched(1, INVALIDATED))
+    assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
   }
 
   @Test
@@ -180,7 +180,7 @@ class DataQueryTest {
     val single = QueryStore.inMemory<Int>()
     single.write(1, START)
     single.invalidate()
-    assertThat(single.data.first()).isEqualTo(Fetched(1, INVALIDATED))
+    assertThat(single.data.first()).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
     single.clear()
     assertThat(single.data.first()).isEqualTo(null)
 
@@ -188,7 +188,7 @@ class DataQueryTest {
     byKey("a").write(1, START)
     byKey("b").write(2, START)
     byKey("a").invalidate()
-    assertThat(byKey("a").data.first()).isEqualTo(Fetched(1, INVALIDATED))
+    assertThat(byKey("a").data.first()).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
     assertThat(byKey("b").data.first()).isEqualTo(Fetched(2, START))
     byKey("b").clear()
     assertThat(byKey("b").data.first()).isEqualTo(null)

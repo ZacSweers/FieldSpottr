@@ -6,7 +6,6 @@ import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOne
 import app.cash.sqldelight.coroutines.mapToOneOrNull
-import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbArea
@@ -24,8 +23,6 @@ import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.keyed
-import dev.zacsweers.fieldspottr.delete
-import dev.zacsweers.fieldspottr.touch
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.hashOf
 import dev.zacsweers.fieldspottr.util.toNyInstant
@@ -36,13 +33,13 @@ import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import dev.zacsweers.metro.SuspendLazy
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.prepareGet
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
-import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.readBuffer
+import io.ktor.http.isSuccess
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.collections.immutable.toImmutableList
@@ -55,13 +52,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
@@ -70,26 +67,14 @@ import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
-import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
-import okio.Path
-import okio.buffer
-import okio.use
 
-/** The default buffer size when working with buffered streams. */
-private const val DEFAULT_BUFFER_SIZE: Int = 8 * 1024
 private val REPO_DATA_REFRESH_INTERVAL = 1.hours
+private val REFRESHING_MESSAGE_DELAY = 300.milliseconds
 private const val LAST_AREAS_FETCH_AT = "last_areas_fetch_at"
 private const val LAST_AREAS_APP_VERSION = "last_areas_app_version"
 private const val LAST_MANIFEST_FETCH_AT = "last_manifest_fetch_at"
 private const val LAST_MANIFEST_APP_VERSION = "last_manifest_app_version"
-
-/** The fetch time of stored data with no usable one. It is stale under every freshness rule. */
-private val UNKNOWN_FETCH_TIME = Instant.fromEpochMilliseconds(0)
-
-internal fun SqlDriver.createFSDatabase(): FSDatabase {
-  return FSDatabase(this)
-}
 
 // Really abstracted just for Metro testing
 interface PermitRepository {
@@ -187,14 +172,15 @@ internal constructor(
 
   private val areasJson by lazy { appDirs.userData / "areas.json" }
   private val manifestJson by lazy { appDirs.userData / "availability" / "manifest.json" }
-  private val areaFeedsDir by lazy { appDirs.userData / "availability" / "areas" }
 
   // Each fetch reports its own failure, so a failed sync only summarizes them
   private val actions = DataActions(scope) { logger.w(it) { "Permit data sync failed" } }
 
   private val areasStore =
-    fileStore(
+    StampedFileStore(
+      fs = appDirs.fs,
       path = areasJson,
+      db = db,
       fetchedAtKey = LAST_AREAS_FETCH_AT,
       appVersionKey = LAST_AREAS_APP_VERSION,
       decode = ::decodeAreas,
@@ -210,8 +196,10 @@ internal constructor(
     )
 
   private val manifestStore =
-    fileStore(
+    StampedFileStore(
+      fs = appDirs.fs,
       path = manifestJson,
+      db = db,
       fetchedAtKey = LAST_MANIFEST_FETCH_AT,
       appVersionKey = LAST_MANIFEST_APP_VERSION,
       decode = ::decodeManifest,
@@ -252,18 +240,22 @@ internal constructor(
   override val loadingMessage: Flow<String?> =
     latestSync
       .flatMapLatest { sync -> sync?.state ?: flowOf(null) }
-      .map { state ->
+      .transformLatest { state ->
         when (state) {
           null,
           OperationState.Succeeded,
-          OperationState.Cancelled -> null
+          OperationState.Cancelled -> emit(null)
           OperationState.Queued,
-          OperationState.Running -> "Refreshing availability..."
+          OperationState.Running -> {
+            // A sync that finds everything fresh settles inside this, so its message never shows
+            delay(REFRESHING_MESSAGE_DELAY)
+            emit("Refreshing availability...")
+          }
           is OperationState.Failed ->
             if (hasAnyPermits()) {
-              null
+              emit(null)
             } else {
-              "Failed to fetch areas. Please check connection and try again."
+              emit("Failed to fetch areas. Please check connection and try again.")
             }
         }
       }
@@ -274,7 +266,8 @@ internal constructor(
 
   /** The stored catalog merged with the built-in one, read straight from disk. */
   internal fun loadLocalAreas(): Areas {
-    return readFile(areasJson)?.let(::decodeAreas)?.let(::mergeWithDefaults) ?: Areas.default
+    return appDirs.fs.readTextOrNull(areasJson)?.let(::decodeAreas)?.let(::mergeWithDefaults)
+      ?: Areas.default
   }
 
   override fun useBuiltInAreas() {
@@ -400,8 +393,18 @@ internal constructor(
 
   private fun windowBoundaryMillis(date: LocalDate, hour: Int): Long {
     require(hour in 0..24) { "Hour must be in 0..24: $hour" }
-    val boundaryDate = if (hour == 24) date.plus(1, DateTimeUnit.DAY) else date
-    val boundaryHour = if (hour == 24) 0 else hour
+    val boundaryDate =
+      if (hour == 24) {
+        date.plus(1, DateTimeUnit.DAY)
+      } else {
+        date
+      }
+    val boundaryHour =
+      if (hour == 24) {
+        0
+      } else {
+        hour
+      }
     return LocalDateTime(boundaryDate, LocalTime(boundaryHour, 0))
       .toNyInstant()
       .toEpochMilliseconds()
@@ -454,26 +457,18 @@ internal constructor(
   }
 
   private suspend fun downloadAreas(): Areas {
-    val text = downloadText("${BuildConfig.REPO_DATA_BASE_URL}/areas.json", tempPathFor(areasJson))
+    val text = downloadText("${BuildConfig.REPO_DATA_BASE_URL}/areas.json")
     return checkNotNull(decodeAreas(text)) { "Downloaded areas.json is unreadable" }
   }
 
   private suspend fun downloadManifest(): AvailabilityManifest {
-    val text =
-      downloadText(
-        "${BuildConfig.REPO_DATA_BASE_URL}/availability/manifest.json",
-        tempPathFor(manifestJson),
-      )
+    val text = downloadText("${BuildConfig.REPO_DATA_BASE_URL}/availability/manifest.json")
     return checkNotNull(decodeManifest(text)) { "Downloaded availability manifest is unreadable" }
   }
 
   private suspend fun downloadFeed(area: AvailabilityManifestArea): AreaFeed {
     val areaName = area.resolvedAreaName
-    val text =
-      downloadText(
-        "${BuildConfig.REPO_DATA_BASE_URL}/${area.resolvedPath}",
-        tempPathFor(areaFeedsDir / "$areaName.json"),
-      )
+    val text = downloadText("${BuildConfig.REPO_DATA_BASE_URL}/${area.resolvedPath}")
     val feed = json.decodeFromString<AvailabilityAreaFeed>(text)
     check(feed.areaName == areaName) {
       "Feed for ${feed.areaName} does not match manifest area $areaName"
@@ -481,16 +476,23 @@ internal constructor(
     return AreaFeed(hash = area.hash, generatedAt = feed.generatedAt, rows = feed.rows)
   }
 
-  /** The text at [url], downloaded through [tempPath]. Nothing stays on disk. */
-  private suspend fun downloadText(url: String, tempPath: Path): String {
-    return withContext(Dispatchers.IO) {
-      try {
-        check(downloadFile(url, tempPath)) { "Failed to download $url" }
-        appDirs.fs.source(tempPath).buffer().use { it.readUtf8() }
-      } finally {
-        appDirs.delete(tempPath)
-      }
+  /**
+   * The text at [url]. A 202 means the server is still preparing it, so this waits as long as the
+   * server asks, up to [maxAttempts] times.
+   */
+  private suspend fun downloadText(url: String, attempt: Int = 0, maxAttempts: Int = 5): String {
+    val response = client.value.get(url)
+    if (response.status == HttpStatusCode.Accepted) {
+      check(attempt < maxAttempts) { "Too many retries for $url, giving up" }
+      val retryAfterSec = response.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
+      // Some servers hint a follow-up endpoint while work completes
+      val next = response.headers[HttpHeaders.Location] ?: url
+      log("Retrying $next after $retryAfterSec seconds")
+      delay(retryAfterSec?.seconds ?: 2.seconds)
+      return downloadText(next, attempt + 1, maxAttempts)
     }
+    check(response.status.isSuccess()) { "Failed to download $url: ${response.status}" }
+    return response.bodyAsText()
   }
 
   /** The raw catalog, or null when it is unreadable or from a newer catalog version. */
@@ -522,68 +524,6 @@ internal constructor(
   }
 
   /**
-   * A JSON file whose fetch time and app version live in the metadata table, held in memory once
-   * read. A file with no fetch time, or written by another app version, reads as stale.
-   */
-  private fun <T : Any> fileStore(
-    path: Path,
-    fetchedAtKey: String,
-    appVersionKey: String,
-    decode: (String) -> T?,
-    encode: (T) -> String,
-  ): QueryStore<T> {
-    // Null until the first read loads the file
-    val loaded = MutableStateFlow<Loaded<T>?>(null)
-    return QueryStore.of(
-      data =
-        flow {
-          if (loaded.value == null) {
-            val fromDisk = readStamped(path, fetchedAtKey, appVersionKey, decode)
-            // A write that lands first wins, so a slow read never replaces newer data
-            loaded.compareAndSet(null, Loaded(fromDisk))
-          }
-          emitAll(loaded.filterNotNull().map { it.fetched })
-        },
-      clear = {
-        withContext(Dispatchers.IO) { appDirs.delete(path) }
-        loaded.value = Loaded(null)
-      },
-    ) { value, fetchedAt ->
-      withContext(Dispatchers.IO) {
-        writeAtomically(path, encode(value))
-        val database = db.await()
-        database.transaction {
-          database.fsdbQueries.setMetadata(fetchedAtKey, fetchedAt.toEpochMilliseconds().toString())
-          database.fsdbQueries.setMetadata(appVersionKey, BuildConfig.VERSION_CODE.toString())
-        }
-      }
-      loaded.value = Loaded(Fetched(value, fetchedAt))
-    }
-  }
-
-  private suspend fun <T : Any> readStamped(
-    path: Path,
-    fetchedAtKey: String,
-    appVersionKey: String,
-    decode: (String) -> T?,
-  ): Fetched<T>? {
-    return withContext(Dispatchers.IO) {
-      val value = readFile(path)?.let(decode) ?: return@withContext null
-      val queries = db.await().fsdbQueries
-      val fetchedAt = queries.getMetadata(fetchedAtKey).executeAsOneOrNull()?.toLongOrNull()
-      val appVersion = queries.getMetadata(appVersionKey).executeAsOneOrNull()?.toLongOrNull()
-      // A new app version may read the data differently, so it fetches again
-      val stamp =
-        if (fetchedAt != null && appVersion == BuildConfig.VERSION_CODE) {
-          Instant.fromEpochMilliseconds(fetchedAt)
-        } else {
-          UNKNOWN_FETCH_TIME
-        }
-      Fetched(value, stamp)
-    }
-  }
-
-  /**
    * The stored feed for [area], read from the area feed table. Its permits are written in the same
    * transaction as its row there.
    */
@@ -604,82 +544,6 @@ internal constructor(
     }
   }
 
-  private fun readFile(path: Path): String? {
-    if (!appDirs.fs.exists(path)) {
-      return null
-    }
-    return appDirs.fs.source(path).buffer().use { it.readUtf8() }
-  }
-
-  private fun writeAtomically(path: Path, text: String) {
-    val tempPath = tempPathFor(path)
-    path.parent?.let(appDirs.fs::createDirectories)
-    appDirs.fs.sink(tempPath).buffer().use { it.writeUtf8(text) }
-    replaceFile(tempPath, path)
-  }
-
-  private suspend fun downloadFile(
-    url: String,
-    targetPath: Path,
-    attempt: Int = 0,
-    maxAttempts: Int = 5,
-  ): Boolean {
-    var successful = true
-    try {
-      if (appDirs.fs.exists(targetPath)) {
-        appDirs.delete(targetPath)
-      }
-      appDirs.touch(targetPath)
-      appDirs.fs.sink(targetPath).buffer().use { sink ->
-        client.value.prepareGet(url).execute { httpResponse ->
-          if (httpResponse.status == HttpStatusCode.Accepted) {
-            if (attempt == maxAttempts) {
-              error("Too many retries for $url, giving up")
-            }
-            val retryAfterSec = httpResponse.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
-            val wait = retryAfterSec?.seconds ?: 2.seconds
-            var url = url
-            // Some servers hint a follow-up endpoint while work completes.
-            httpResponse.headers[HttpHeaders.Location]?.let { url = it }
-            log("Retrying $url after $retryAfterSec seconds")
-            delay(wait)
-            successful = downloadFile(url, targetPath, attempt + 1, maxAttempts)
-            return@execute
-          }
-          if (httpResponse.status.value !in 200..299) {
-            successful = false
-            return@execute
-          }
-          val channel = httpResponse.body<ByteReadChannel>()
-          while (!channel.isClosedForRead) {
-            val packet = channel.readBuffer(DEFAULT_BUFFER_SIZE.toLong())
-            while (!packet.exhausted()) {
-              val bytes = packet.readByteArray()
-              sink.write(bytes)
-            }
-          }
-        }
-      }
-    } catch (e: Exception) {
-      logger.e(e) { "Failed to download file" }
-      return false
-    }
-
-    return successful
-  }
-
-  private fun tempPathFor(targetPath: Path): Path {
-    return targetPath.parent!! / "${targetPath.name}.tmp"
-  }
-
-  private fun replaceFile(tempPath: Path, targetPath: Path) {
-    targetPath.parent?.let(appDirs.fs::createDirectories)
-    if (appDirs.fs.exists(targetPath)) {
-      appDirs.delete(targetPath)
-    }
-    appDirs.fs.atomicMove(tempPath, targetPath)
-  }
-
   private suspend fun hasAnyPermits(): Boolean {
     return withContext(Dispatchers.IO) {
       db.await().fsdbQueries.permitDateRange().executeAsOne().minDate != null
@@ -691,13 +555,15 @@ internal constructor(
     manifestArea: AvailabilityManifestArea,
     fetchedAt: Long,
   ) {
-    db
-      .await()
-      .replaceAreaFeed(
-        manifestArea,
-        AreaFeed(hash = manifestArea.hash, generatedAt = feed.generatedAt, rows = feed.rows),
-        fetchedAt,
-      )
+    withContext(Dispatchers.IO) {
+      db
+        .await()
+        .replaceAreaFeed(
+          manifestArea,
+          AreaFeed(hash = manifestArea.hash, generatedAt = feed.generatedAt, rows = feed.rows),
+          fetchedAt,
+        )
+    }
   }
 
   /** Replaces [area]'s permits and its feed row in one transaction. */
@@ -735,7 +601,12 @@ internal constructor(
             name = row.title,
             org = row.org,
             status = row.status,
-            isOverlap = if (row.isOverlap) 1L else 0L,
+            isOverlap =
+              if (row.isOverlap) {
+                1L
+              } else {
+                0L
+              },
             advisory = row.advisoryText,
           )
         )
@@ -763,7 +634,8 @@ internal constructor(
   private suspend fun FSDatabase.invalidateAreaFeed(name: String) {
     transaction {
       val row = fsdbQueries.getAreaFeed(name).executeAsOneOrNull() ?: return@transaction
-      fsdbQueries.upsertAreaFeed(row.copy(feedFetchedAt = UNKNOWN_FETCH_TIME.toEpochMilliseconds()))
+      val stale = row.copy(feedFetchedAt = QueryStore.INVALIDATED.toEpochMilliseconds())
+      fsdbQueries.upsertAreaFeed(stale)
     }
   }
 
@@ -785,9 +657,6 @@ internal data class AreaFeed(
   val generatedAt: Long?,
   val rows: List<AvailabilityFeedRow>?,
 )
-
-/** A file store's contents once read. [fetched] is null when the file holds nothing usable. */
-private class Loaded<T>(val fetched: Fetched<T>?)
 
 /**
  * Merges [remote] areas with [Areas.default]. Remote is authoritative for areas it includes, but

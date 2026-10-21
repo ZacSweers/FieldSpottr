@@ -15,8 +15,8 @@ import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.SqlDriverFactory
+import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.data.core.DataQuery
-import dev.zacsweers.fieldspottr.data.createFSDatabase
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
