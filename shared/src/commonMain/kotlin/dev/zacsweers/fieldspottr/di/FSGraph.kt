@@ -15,13 +15,18 @@ import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.SqlDriverFactory
+import dev.zacsweers.fieldspottr.data.core.DataQuery
 import dev.zacsweers.fieldspottr.data.createFSDatabase
 import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okio.FileSystem
@@ -46,6 +51,28 @@ interface FSGraph {
     withContext(Dispatchers.IO) {
       sqlDriverFactory.create(FSDatabase.Schema, "fs.db").createFSDatabase()
     }
+
+  @Provides
+  @SingleIn(AppScope::class)
+  @ForScope(AppScope::class)
+  fun provideAppCoroutineScope(logger: Logger): CoroutineScope {
+    val log = logger.withTag("AppScope")
+    return CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, t -> log.e(t) { "Uncaught error" } }
+    )
+  }
+
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideDataQueryFactory(
+    @ForScope(AppScope::class) appScope: CoroutineScope,
+    logger: Logger,
+  ): DataQuery.Factory {
+    val log = logger.withTag("DataQuery")
+    return DataQuery.Factory(appScope, onFailure = { log.e(it) { "Fetch failed" } })
+  }
 
   @Provides
   @SingleIn(AppScope::class)
