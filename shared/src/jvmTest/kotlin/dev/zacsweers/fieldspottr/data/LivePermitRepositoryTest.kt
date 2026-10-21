@@ -3,16 +3,36 @@
 package dev.zacsweers.fieldspottr.data
 
 import assertk.assertThat
+import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
+import co.touchlab.kermit.Logger
+import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.FakeClock
+import dev.zacsweers.fieldspottr.data.core.FetchStatus
 import dev.zacsweers.fieldspottr.util.toNyInstant
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import java.util.Collections
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableMap
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
@@ -29,6 +49,47 @@ class LivePermitRepositoryTest {
       sharedFields = persistentSetOf("field1"),
       apiLocationId = "M165-FOOTBALL-1",
     )
+  private val softball =
+    Field(
+      name = "Softball-01",
+      displayName = "Softball 1",
+      group = "Baruch",
+      sharedFields = persistentSetOf("field1"),
+      apiLocationId = "M165-BASEBALL-1",
+    )
+  private val group =
+    FieldGroup(
+      name = "Baruch",
+      fields = persistentListOf(softball, field),
+      area = "Baruch",
+      location = Location("", ""),
+    )
+
+  private val clock = FakeClock(START)
+  private val failures = mutableListOf<Throwable>()
+  private val requested: MutableList<String> = Collections.synchronizedList(mutableListOf())
+  private val failingLocations = mutableSetOf<String>()
+  private val client =
+    HttpClient(
+      MockEngine { request ->
+        val location = request.url.parameters["location"]!!
+        requested += location
+        if (location in failingLocations) {
+          respond("unavailable", HttpStatusCode.InternalServerError)
+        } else {
+          respond(
+            liveResponse(location),
+            HttpStatusCode.OK,
+            headersOf(HttpHeaders.ContentType, "application/json"),
+          )
+        }
+      }
+    )
+
+  @AfterTest
+  fun closeHttpClient() {
+    client.close()
+  }
 
   @Test
   fun `pending final approval blocks the slot`() {
@@ -298,6 +359,112 @@ class LivePermitRepositoryTest {
     assertThat(softballBlock.isOverlap).isEqualTo(true)
   }
 
+  @Test
+  fun `availability loads each live field once and merges overlaps`() = runTest {
+    val repository = repository()
+
+    val availability = repository.availability(group, date).first()
+    assertThat(availability.checkedAt).isEqualTo(START)
+    assertThat(availability.fields[field]!!.blocks.single().title).isEqualTo("Pending approval")
+    assertThat(availability.fields[softball]!!.blocks.single().isOverlap).isEqualTo(true)
+    assertThat(requested).containsExactlyInAnyOrder(field.apiLocationId, softball.apiLocationId)
+  }
+
+  @Test
+  fun `fresh field data is shared across collectors and groups`() = runTest {
+    val repository = repository()
+    val soccerOnly =
+      FieldGroup(
+        name = "Soccer",
+        fields = persistentListOf(field),
+        area = "Baruch",
+        location = Location("", ""),
+      )
+
+    repository.availability(group, date).first()
+    repository.availability(group, date).first()
+    // Later collectors find the fields fresh before starting any work
+    repository.availability(soccerOnly, date).first()
+    assertThat(requested).hasSize(2)
+  }
+
+  @Test
+  fun `field data older than the TTL is fetched again`() = runTest {
+    val repository = repository()
+    repository.availability(group, date).first()
+
+    clock.now = START + 16.minutes
+    repository.availability(group, date).first { it.checkedAt == START + 16.minutes }
+    assertThat(requested).hasSize(4)
+  }
+
+  @Test
+  fun `a failing field holds availability back and fails the status`() = runTest {
+    failingLocations += softball.apiLocationId!!
+    val repository = repository()
+
+    val emissions = mutableListOf<LiveGroupAvailability>()
+    backgroundScope.launch { repository.availability(group, date).collect { emissions += it } }
+    assertThat(repository.status(group, date).first { it is FetchStatus.Failed })
+      .isInstanceOf<FetchStatus.Failed>()
+    assertThat(failures).hasSize(1)
+    assertThat(emissions).isEmpty()
+  }
+
+  @Test
+  fun `groups without live fields emit empty availability`() = runTest {
+    val repository = repository()
+    val noLiveFields =
+      FieldGroup(
+        name = "Pier 42",
+        fields =
+          persistentListOf(
+            Field(
+              name = "Field-01",
+              displayName = "Field 1",
+              group = "Pier 42",
+              sharedFields = persistentSetOf(),
+              apiLocationId = null,
+            )
+          ),
+        area = "Pier 42",
+        location = Location("", ""),
+      )
+
+    assertThat(repository.availability(noLiveFields, date).first().fields).isEmpty()
+    assertThat(repository.status(noLiveFields, date).first()).isEqualTo(FetchStatus.Idle)
+    assertThat(requested).isEmpty()
+  }
+
+  private fun TestScope.repository(): LivePermitRepository =
+    LivePermitRepository(
+      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock),
+      json,
+      client,
+      Logger,
+    )
+
+  private fun liveResponse(location: String): String {
+    if (location != field.apiLocationId) return response()
+    return response(
+      slot(
+        hour = 18,
+        minute = 0,
+        """
+          {
+            "in_season": true,
+            "permit_is_for_overlapping_field": false,
+            "num_pending_permits": 0,
+            "permit_number": 940103,
+            "is_issued": false,
+            "permit_holder": "Bard High School Early College Manhattan",
+            "permit_type": "Sport - Youth"
+          }
+        """,
+      )
+    )
+  }
+
   private fun response(vararg slots: Pair<Long, String>): String {
     return buildString {
       append("""{"availability":{""")
@@ -312,5 +479,9 @@ class LivePermitRepositoryTest {
   private fun slot(hour: Int, minute: Int, value: String): Pair<Long, String> {
     val epochSeconds = LocalDateTime(date, LocalTime(hour, minute)).toNyInstant().epochSeconds
     return epochSeconds to value
+  }
+
+  private companion object {
+    val START = Instant.parse("2026-06-02T12:00:00Z")
   }
 }
