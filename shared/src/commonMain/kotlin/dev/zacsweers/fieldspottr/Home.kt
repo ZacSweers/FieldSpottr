@@ -63,12 +63,12 @@ data object HomeScreen : Screen {
 fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScreen.State {
   var selectedTabIndex by retain { mutableStateOf(0) }
 
-  // Trigger initial DB population
-  var populateDb by retain { mutableStateOf(true) }
-  if (populateDb) {
+  // Sync whatever is stale, once
+  var prewarmPending by retain { mutableStateOf(true) }
+  if (prewarmPending) {
     LaunchedEffect(Unit) {
-      repository.populateDb(forceRefresh = false)
-      populateDb = false
+      repository.prewarm()
+      prewarmPending = false
     }
   }
 

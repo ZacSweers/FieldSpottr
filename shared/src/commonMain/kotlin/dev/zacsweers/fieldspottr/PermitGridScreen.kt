@@ -131,8 +131,7 @@ fun PermitGridPresenter(
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): PermitGridScreen.State {
-  val areasFlow = retain { repository.areasFlow() }
-  val areas by areasFlow.collectAsRetainedState()
+  val areas by repository.areas.collectAsRetainedState(Areas.default)
 
   var gridDate by retain {
     mutableStateOf(System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date)
@@ -189,8 +188,7 @@ fun PermitGridPresenter(
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
   // Weather
-  val weather by weatherRepository.forecast.collectAsRetainedState()
-  LaunchedEffect(Unit) { weatherRepository.refresh() }
+  val weather by weatherRepository.forecast.collectAsRetainedState(null)
 
   // Week view
   var viewMode by retain { mutableStateOf(GridViewMode.DAY) }
@@ -224,8 +222,8 @@ fun PermitGridPresenter(
   ) { event ->
     when (event) {
       PermitGridScreen.Event.Refresh -> {
-        scope.launch { repository.populateDb(forceRefresh = true) }
-        scope.launch { weatherRepository.refresh(forceRefresh = true) }
+        repository.refresh()
+        weatherRepository.refresh()
       }
       PermitGridScreen.Event.UseBuiltInAreas -> repository.useBuiltInAreas()
       PermitGridScreen.Event.ToggleViewMode -> {
