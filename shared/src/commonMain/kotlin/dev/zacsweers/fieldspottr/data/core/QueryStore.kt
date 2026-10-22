@@ -6,7 +6,7 @@ import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -47,17 +47,12 @@ interface QueryStore<T> {
      */
     val INVALIDATED: Instant = Instant.fromEpochSeconds(0)
 
-    /** One value held in memory, lost with the process. */
-    fun <T> inMemory(): QueryStore<T> {
-      val stored = MutableStateFlow<Fetched<T>?>(null)
-      return of(
-        stored.asStateFlow(),
-        clear = { stored.value = null },
-        invalidate = { stored.update { it?.copy(fetchedAt = INVALIDATED) } },
-      ) { value, fetchedAt ->
-        stored.value = Fetched(value, fetchedAt)
-      }
-    }
+    /**
+     * One value held in memory, lost with the process. [initial] seeds it, like a cached value
+     * stored with [INVALIDATED] so it shows at once and still fetches on the first collect.
+     */
+    fun <T> inMemory(initial: Fetched<T>? = null): InMemoryQueryStore<T> =
+      InMemoryQueryStore(initial)
 
     /**
      * A value per key held in memory, lost with the process. Once more than [maxEntries] keys hold
@@ -96,6 +91,38 @@ interface QueryStore<T> {
         }
       }
     }
+  }
+}
+
+/**
+ * One value held in memory, from [QueryStore.inMemory]. Code that owns the store can read [data]
+ * without collecting it and edit it in place. Screens still read the query's data, since only
+ * collecting that runs the staleness check.
+ */
+class InMemoryQueryStore<T> internal constructor(initial: Fetched<T>?) : QueryStore<T> {
+  /** The stored value, readable without collecting. Reading it never fetches. */
+  override val data: StateFlow<Fetched<T>?>
+    field = MutableStateFlow(initial)
+
+  /**
+   * Changes the stored value in place, such as for an optimistic edit. [transform] may run more
+   * than once, as with [MutableStateFlow.update]. The change skips the query's ordering, so a fetch
+   * already in flight can replace it.
+   */
+  fun update(transform: (Fetched<T>?) -> Fetched<T>?) {
+    data.update(transform)
+  }
+
+  override suspend fun write(value: T, fetchedAt: Instant) {
+    data.value = Fetched(value, fetchedAt)
+  }
+
+  override suspend fun clear() {
+    data.value = null
+  }
+
+  override suspend fun invalidate() {
+    data.update { it?.copy(fetchedAt = QueryStore.INVALIDATED) }
   }
 }
 
