@@ -197,6 +197,22 @@ class KeyedDataQueriesTest {
   }
 
   @Test
+  fun `a key's mutation runs after its fetch in flight`() = runTest {
+    gate = CompletableDeferred()
+    val values = values()
+
+    val fetch = values.requestFetch("a", force = false)
+    testScheduler.runCurrent()
+    val mutation = values.mutate("a", requireFresh = false) { it.write("edited", START) }
+    gate.complete(Unit)
+    fetch.await()
+    mutation.await()
+    // The fetch's older result landed first, so the edit is what stays
+    assertThat(values.data("a").first()?.value).isEqualTo("edited")
+    assertThat(fetched).containsExactly("a")
+  }
+
+  @Test
   fun `an unforced request fetches only the stale keys`() = runTest {
     val values = values()
 

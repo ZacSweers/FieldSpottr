@@ -64,8 +64,9 @@ internal class DynamicFreshness(val isStale: (fetchedAt: Instant, now: Instant) 
  *   fetch                           +--> status: Fetching, then Idle or Failed
  * ```
  *
- * Checks and fetches run one at a time on the query's own key, so a check never races a fetch.
- * `fetchedAt` is the clock time just before the fetch.
+ * Checks, fetches, invalidations and mutations run one at a time on the query's own key, so a check
+ * never races a fetch and a fetch never races a write. `fetchedAt` is the clock time just before
+ * the fetch.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class DataQuery<T>
@@ -149,10 +150,48 @@ internal constructor(
   /**
    * Marks the stored data stale without fetching, so the next collector fetches. Runs on this
    * query's key after any fetch already in flight, so a fetch that started before a write cannot
-   * leave the old data marked fresh. Use a forced [requestFetch] instead when the data is on
-   * screen.
+   * leave the old data marked fresh. Requests made after this returns run after it, so an unforced
+   * one fetches again. Use a forced [requestFetch] instead when the data is on screen.
    */
-  fun invalidate(): Operation = actions.run(Ordering.Keyed(key)) { store.invalidate() }
+  fun invalidate(): Operation = runBeforeLaterRequests { store.invalidate() }
+
+  /**
+   * Runs [block], a write that changes what this query fetches, on this query's key. It runs after
+   * any fetch in flight, and fetches requested after this returns run after it, so no fetch that
+   * started before the write can land after it. The key stays held until [block] returns, remote
+   * call included.
+   *
+   * This is on the query because its fetches run on a runner of their own, and commands on a
+   * repository's [DataActions] cannot order against them. A repository that also orders its own
+   * writes by key, like saves to one item that must land in call order, calls this from inside that
+   * action and awaits the handle. The action then holds its key until the mutation finishes.
+   *
+   * With [requireFresh], a stale store fetches first, so [block] sees current data, like a revision
+   * to check before writing. A failed fetch fails the handle and [block] never runs.
+   *
+   * [block] gets the store, to mark it stale before a remote write whose outcome may be unclear and
+   * to write the confirmed result after it.
+   */
+  fun mutate(requireFresh: Boolean, block: suspend (store: QueryStore<T>) -> Unit): Operation =
+    runBeforeLaterRequests {
+      if (requireFresh && isStale(store.data.first()?.fetchedAt)) {
+        fetchOnce(forced = false)
+      }
+      block(store)
+    }
+
+  /**
+   * Runs [block] on this query's key, then forgets the fetch that later requests would join. A
+   * request made after this returns waits for [block] and checks the store again, instead of
+   * reusing a fetch that started before [block] changed the data.
+   */
+  private fun runBeforeLaterRequests(block: suspend () -> Unit): Operation {
+    val operation = actions.run(Ordering.Keyed(key), block)
+    // This can also forget a fetch requested just after block. A later request then checks again
+    // behind that fetch and finds the data fresh, so the cost is one store read.
+    inFlight.store(null)
+    return operation
+  }
 
   private fun isStale(at: Instant?): Boolean {
     if (at == null || at <= QueryStore.INVALIDATED) {
@@ -171,7 +210,10 @@ internal constructor(
     status.value = FetchStatus.Fetching(forced)
     try {
       val fetchedAt = clock.now()
-      store.write(fetch(), fetchedAt)
+      val value = fetch()
+      // A fetch superseded while it ran never writes, even one whose fetch ignored cancellation
+      currentCoroutineContext().ensureActive()
+      store.write(value, fetchedAt)
       status.value = FetchStatus.Idle
     } catch (t: Throwable) {
       // Cancelled by a newer forced fetch, which owns the status

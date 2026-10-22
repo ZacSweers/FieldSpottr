@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
@@ -11,6 +12,7 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 
 class DataQueryTest {
 
@@ -173,6 +176,104 @@ class DataQueryTest {
     invalidate.await()
     // The fetch's write came first, so the value it stored is the one marked stale
     assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
+  }
+
+  @Test
+  fun `a request after invalidate fetches again`() = runTest {
+    gate = CompletableDeferred()
+    val query = dataQuery()
+
+    val first = query.requestFetch(force = false)
+    testScheduler.runCurrent()
+    query.invalidate()
+    val second = query.requestFetch(force = false)
+    gate.complete(Unit)
+    first.await()
+    second.await()
+    // The second request queued behind the invalidation instead of joining the first fetch
+    assertThat(fetches).isEqualTo(2)
+    assertThat(stored.value).isEqualTo(Fetched(2, START))
+  }
+
+  @Test
+  fun `a superseded forced fetch that ignores cancellation never writes`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(null)
+    val writes = mutableListOf<Int>()
+    val store =
+      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
+        writes += value
+        state.value = Fetched(value, fetchedAt)
+      }
+    val firstStarted = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    var calls = 0
+    val query =
+      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock)
+        .create(
+          store = store,
+          fetch = {
+            calls++
+            if (calls == 1) {
+              firstStarted.complete(Unit)
+              // Like a callback API that finishes whether or not anyone still waits
+              withContext(NonCancellable) { release.await() }
+            }
+            calls
+          },
+          freshness = Freshness.staleAfter(1.hours),
+        )
+
+    val first = query.requestFetch(force = true)
+    firstStarted.await()
+    val second = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    release.complete(Unit)
+    assertThat(first.await()).isEqualTo(OperationState.Cancelled)
+    assertThat(second.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(writes).containsExactly(2)
+  }
+
+  @Test
+  fun `a mutation waits for the fetch in flight and later requests wait for it`() = runTest {
+    gate = CompletableDeferred()
+    val query = dataQuery()
+
+    val fetch = query.requestFetch(force = false)
+    testScheduler.runCurrent()
+    val mutation = query.mutate(requireFresh = false) { it.write(100, START) }
+    val later = query.requestFetch(force = false)
+    gate.complete(Unit)
+    fetch.await()
+    mutation.await()
+    later.await()
+    // The fetch's older result landed first, and the later request found the mutation's write fresh
+    assertThat(stored.value).isEqualTo(Fetched(100, START))
+    assertThat(fetches).isEqualTo(1)
+  }
+
+  @Test
+  fun `a mutation that requires fresh data fetches stale data first`() = runTest {
+    stored.value = Fetched(1, START - 2.hours)
+    val query = dataQuery()
+    var seen: Int? = null
+
+    query.mutate(requireFresh = true) { seen = it.data.first()?.value }.await()
+    assertThat(seen).isEqualTo(2)
+    assertThat(fetches).isEqualTo(1)
+    // Fresh now, so this one skips the fetch
+    query.mutate(requireFresh = true) { seen = it.data.first()?.value }.await()
+    assertThat(fetches).isEqualTo(1)
+  }
+
+  @Test
+  fun `a failed fetch before a mutation fails it and skips the block`() = runTest {
+    fetchFails = true
+    val query = dataQuery()
+    var ran = false
+
+    assertThat(query.mutate(requireFresh = true) { ran = true }.await())
+      .isInstanceOf<OperationState.Failed>()
+    assertThat(ran).isEqualTo(false)
   }
 
   @Test

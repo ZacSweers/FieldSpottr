@@ -158,6 +158,24 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   fun invalidate(keys: Collection<K>): Operation =
     Operation.all(keys.distinct().map { invalidate(it) })
 
+  /**
+   * [DataQuery.mutate] for [key]. [block] gets the key's store and runs after any fetch in flight
+   * for the key, and fetches requested for the key after this returns run after it.
+   */
+  fun mutate(
+    key: K,
+    requireFresh: Boolean,
+    block: suspend (store: QueryStore<T>) -> Unit,
+  ): Operation {
+    val entry = acquire(key)
+    try {
+      // Pinned, so a later request for the key orders behind this mutation on the same query
+      return entry.query.mutate(requireFresh, block).also(entry::pin)
+    } finally {
+      release(key, entry)
+    }
+  }
+
   /** The entry for [key], counted as in use until [release]. Builds it on first use. */
   private fun acquire(key: K): KeyEntry<T> {
     // Entries left behind by a fetch that outlived its users go once it settles
