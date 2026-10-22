@@ -12,14 +12,23 @@ import assertk.assertions.isInstanceOf
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 
 class KeyedDataQueriesTest {
 
@@ -266,6 +275,153 @@ class KeyedDataQueriesTest {
       .isInstanceOf<OperationState.Failed>()
     assertThat(values.requestFetch(emptyList(), force = true).await())
       .isEqualTo(OperationState.Succeeded)
+  }
+
+  // The eviction tests below check keysHeld without calling the queries again, since any keyed
+  // access could clean up the entry and hide a missed eviction.
+
+  @Test
+  fun `a key is dropped once the fetch its last collector left settles`() = runTest {
+    gate = CompletableDeferred()
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    val values = values(store = stores)
+
+    val collector = backgroundScope.launch { values.data("a").collect {} }
+    testScheduler.runCurrent()
+    collector.cancel()
+    testScheduler.runCurrent()
+    // The fetch still runs, so the key keeps its query and its ordering
+    assertThat(values.keysHeld).isEqualTo(1)
+    gate.complete(Unit)
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+    // Dropping the query leaves the data in the store
+    assertThat(stores("a").data.first()?.value).isEqualTo("a#1")
+  }
+
+  @Test
+  fun `a key is dropped once an automatic refetch its last collector left settles`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    val values = values(store = stores)
+
+    val collector = backgroundScope.launch { values.data("a").collect {} }
+    stores("a").data.first { it != null }
+    testScheduler.runCurrent()
+    gate = CompletableDeferred()
+    // An emptied store makes the collector fetch again, with no keyed call of its own
+    stores("a").clear()
+    testScheduler.runCurrent()
+    assertThat(fetched).containsExactly("a", "a")
+    collector.cancel()
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(1)
+    gate.complete(Unit)
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
+  @Test
+  fun `a key is dropped once its explicit operations settle`() = runTest {
+    gate = CompletableDeferred()
+    val values = values()
+
+    val fetch = values.requestFetch("a", force = true)
+    val invalidate = values.invalidate("a")
+    val mutation = values.mutate("a", requireFresh = false) { it.write("edited", START) }
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(1)
+    gate.complete(Unit)
+    assertThat(fetch.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(invalidate.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(mutation.await()).isEqualTo(OperationState.Succeeded)
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
+  @Test
+  fun `a key is dropped once cancelled and superseded fetches settle`() = runTest {
+    gate = CompletableDeferred()
+    val values = values()
+
+    val running = values.requestFetch("a", force = true)
+    testScheduler.runCurrent()
+    // queued cancels running, then last cancels queued before it ever starts
+    val queued = values.requestFetch("a", force = true)
+    val last = values.requestFetch("a", force = true)
+    testScheduler.runCurrent()
+    assertThat(running.state.value).isEqualTo(OperationState.Cancelled)
+    assertThat(queued.state.value).isEqualTo(OperationState.Cancelled)
+    assertThat(values.keysHeld).isEqualTo(1)
+    gate.complete(Unit)
+    assertThat(last.await()).isEqualTo(OperationState.Succeeded)
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
+  @Test
+  fun `a key keeps its query while a mutation runs so later requests order behind it`() = runTest {
+    val release = CompletableDeferred<Unit>()
+    val values = values()
+
+    val mutation =
+      values.mutate("a", requireFresh = false) {
+        release.await()
+        it.write("edited", START)
+      }
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(1)
+    val fetch = values.requestFetch("a", force = false)
+    testScheduler.runCurrent()
+    // The same query, so the request waits for the mutation instead of fetching beside it
+    assertThat(fetched).isEmpty()
+    release.complete(Unit)
+    assertThat(mutation.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(fetch.await()).isEqualTo(OperationState.Succeeded)
+    // The mutation's write is fresh, so the request found nothing to fetch
+    assertThat(fetched).isEmpty()
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
+  @Test
+  fun `keys drop once concurrent work on other threads settles`() = runTest {
+    withContext(Dispatchers.Default) {
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      try {
+        val values =
+          DataQuery.Factory(scope, onFailure = {}, clock = clock)
+            .keyed(
+              store = QueryStore.inMemoryByKey<Int, Int>(),
+              fetch = { key ->
+                yield()
+                key
+              },
+              freshness = Freshness.staleAfter(1.hours),
+            )
+        // Forced fetches cancel each other, so cancelled commands are in the mix too
+        List(500) { i ->
+            async {
+              val key = i % 3
+              when (i % 5) {
+                0 -> values.requestFetch(key, force = true).await()
+                1 -> values.requestFetch(key, force = false).await()
+                2 -> values.invalidate(key).await()
+                3 -> values.mutate(key, requireFresh = i % 2 == 0) { it.write(key, START) }.await()
+                else -> values.data(key).first { it != null }
+              }
+            }
+          }
+          .awaitAll()
+        // A key drops as its last job completes, which can trail the handles a little
+        withTimeout(5.seconds) {
+          while (values.keysHeld != 0) {
+            delay(1)
+          }
+        }
+      } finally {
+        scope.cancel()
+      }
+    }
   }
 
   private companion object {

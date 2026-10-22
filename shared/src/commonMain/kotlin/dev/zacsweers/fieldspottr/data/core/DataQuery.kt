@@ -86,12 +86,19 @@ internal constructor(
    * The stored value and when it was fetched, or null before the first fetch. Collecting it fetches
    * first when the data is stale, and again whenever the store empties.
    */
-  val data: Flow<Fetched<T>?> = flow {
-    fetchIfStale()
+  val data: Flow<Fetched<T>?> = data(onRequest = {})
+
+  /**
+   * [data], handing [onRequest] each fetch request it makes, the ones after the store empties
+   * included. Every command this query runs reaches a caller as an [Operation] this way or as a
+   * return value, which [KeyedDataQueries] relies on to keep a key's query until its work is done.
+   */
+  internal fun data(onRequest: (Operation) -> Unit): Flow<Fetched<T>?> = flow {
+    onRequest(fetchIfStale())
     emitAll(
       store.data.onEach {
         if (it == null) {
-          fetchIfStale()
+          onRequest(fetchIfStale())
         }
       }
     )

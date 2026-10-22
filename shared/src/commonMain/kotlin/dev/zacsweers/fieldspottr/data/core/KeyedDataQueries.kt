@@ -6,10 +6,9 @@ import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.decrementAndFetch
+import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlinx.collections.immutable.persistentHashMapOf
-import kotlinx.collections.immutable.persistentListOf
-import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
@@ -32,8 +31,9 @@ fun <K : Any, T> DataQuery.Factory.keyed(
  * shorter window for today than for later dates. [maxFetches] caps the fetches in flight across all
  * keys. It does not cap store writes, which still run at the same time for different keys.
  *
- * A key's query is dropped once nothing uses it and no fetch it started is still running. Its data
- * stays in its store, so the next query for the key picks up the stored value and fetch time.
+ * A key's query is dropped as soon as no caller uses it and none of its fetches, checks,
+ * invalidations or mutations is queued or running. Its data stays in its store, so the next query
+ * for the key picks up the stored value and fetch time.
  */
 fun <K : Any, T> DataQuery.Factory.keyed(
   store: (key: K) -> QueryStore<T>,
@@ -69,15 +69,17 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   // Compare-and-set only. Nothing observes it.
   private val entries = AtomicReference(persistentHashMapOf<K, KeyEntry<T>>())
 
+  /** How many keys still hold a query. For tests, which cannot see eviction any other way. */
+  internal val keysHeld: Int
+    get() = entries.load().size
+
   /** [key]'s stored value and fetch time. Collecting it fetches first when stale. */
   fun data(key: K): Flow<Fetched<T>?> = flow {
     val entry = acquire(key)
     try {
-      // Pinned, so the entry outlives the fetch even if this collector leaves first
-      entry.pin(entry.query.requestFetch(force = false))
-      emitAll(entry.query.data)
+      emitAll(entry.query.data(onRequest = entry::holdUntilSettled))
     } finally {
-      release(key, entry)
+      entry.release()
     }
   }
 
@@ -104,7 +106,7 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
     try {
       emitAll(entry.query.status)
     } finally {
-      release(key, entry)
+      entry.release()
     }
   }
 
@@ -129,9 +131,9 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   fun requestFetch(key: K, force: Boolean): Operation {
     val entry = acquire(key)
     try {
-      return entry.query.requestFetch(force).also(entry::pin)
+      return entry.query.requestFetch(force).also(entry::holdUntilSettled)
     } finally {
-      release(key, entry)
+      entry.release()
     }
   }
 
@@ -148,9 +150,9 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   fun invalidate(key: K): Operation {
     val entry = acquire(key)
     try {
-      return entry.query.invalidate().also(entry::pin)
+      return entry.query.invalidate().also(entry::holdUntilSettled)
     } finally {
-      release(key, entry)
+      entry.release()
     }
   }
 
@@ -169,27 +171,20 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   ): Operation {
     val entry = acquire(key)
     try {
-      // Pinned, so a later request for the key orders behind this mutation on the same query
-      return entry.query.mutate(requireFresh, block).also(entry::pin)
+      return entry.query.mutate(requireFresh, block).also(entry::holdUntilSettled)
     } finally {
-      release(key, entry)
+      entry.release()
     }
   }
 
-  /** The entry for [key], counted as in use until [release]. Builds it on first use. */
+  /** The entry for [key], held until [KeyEntry.release]. Builds it on first use. */
   private fun acquire(key: K): KeyEntry<T> {
-    // Entries left behind by a fetch that outlived its users go once it settles
-    for ((idleKey, idle) in entries.load()) {
-      if (idle.tryDrop()) {
-        remove(idleKey, idle)
-      }
-    }
     while (true) {
       val current = entries.load()
       var entry = current[key]
       if (entry == null) {
         // Building a query starts nothing, so the copy that loses this race is simply dropped
-        val created = KeyEntry(build(key))
+        val created = KeyEntry(build(key)) { remove(key, it) }
         if (!entries.compareAndSet(current, current.putting(key, created))) {
           continue
         }
@@ -199,13 +194,6 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
         return entry
       }
       // Dropped between the load and the acquire: clear it out and build a fresh one
-      remove(key, entry)
-    }
-  }
-
-  private fun release(key: K, entry: KeyEntry<T>) {
-    entry.release()
-    if (entry.tryDrop()) {
       remove(key, entry)
     }
   }
@@ -221,38 +209,42 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   }
 }
 
+/**
+ * A key's query and what holds it: each caller from acquire to release, and each operation a caller
+ * started until its command finishes, automatic refetches and cancelled commands included. The last
+ * release drops the entry, so a key's next query never runs beside unfinished work from the last
+ * one, and nothing has to look for idle entries later.
+ */
 @OptIn(ExperimentalAtomicApi::class)
-private class KeyEntry<T>(val query: DataQuery<T>) {
-  // Callers using the query, or -1 once dropped. A dropped entry is never acquired again.
-  private val users = AtomicInt(0)
-  // Fetches the entry must outlive, so a fetch nobody waits on keeps its status visible
-  private val pins = AtomicReference(persistentListOf<Operation>())
+private class KeyEntry<T>(val query: DataQuery<T>, private val onDropped: (KeyEntry<T>) -> Unit) {
+  // Callers and unfinished operations, or -1 once dropped. A dropped entry is never acquired again.
+  private val holds = AtomicInt(0)
 
   fun tryAcquire(): Boolean {
     while (true) {
-      val count = users.load()
+      val count = holds.load()
       if (count < 0) {
         return false
       }
-      if (users.compareAndSet(count, count + 1)) {
+      if (holds.compareAndSet(count, count + 1)) {
         return true
       }
     }
   }
 
-  fun release() {
-    users.decrementAndFetch()
+  /**
+   * Holds the entry until [operation]'s command finishes, cancelled or not. Only called while a
+   * caller holds the entry, so it never revives a dropped one.
+   */
+  fun holdUntilSettled(operation: Operation) {
+    holds.incrementAndFetch()
+    operation.invokeOnSettled(::release)
   }
 
-  fun pin(operation: Operation) {
-    pins.update { current ->
-      (current.filter { it.state.value !is OperationState.Terminal } + operation).toPersistentList()
+  /** Lets go of one hold, and drops the entry when it was the last. */
+  fun release() {
+    if (holds.decrementAndFetch() == 0 && holds.compareAndSet(0, -1)) {
+      onDropped(this)
     }
   }
-
-  fun tryDrop(): Boolean =
-    users.load() == 0 &&
-      pins.load().all { it.state.value is OperationState.Terminal } &&
-      query.status.value !is FetchStatus.Fetching &&
-      users.compareAndSet(0, -1)
 }

@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -57,7 +58,7 @@ class DataActions(private val scope: CoroutineScope, private val onFailure: (Thr
     private val block: suspend () -> Unit,
   ) {
     private val entry = Entry(ordering.mode)
-    val operation: Operation = Operation.of(entry.state.asStateFlow())
+    val operation: Operation = RunnerOperation(entry.state.asStateFlow(), entry.settled)
 
     /**
      * Phase two: publish on the key and start. Call at most once. An uncommitted command is simply
@@ -96,6 +97,7 @@ class DataActions(private val scope: CoroutineScope, private val onFailure: (Thr
             else -> OperationState.Failed(cause)
           }
         }
+        entry.settled.complete()
       }
       // Serial is a key of its own. Concurrent has none.
       ordering.chainKey?.let { key ->
@@ -193,6 +195,9 @@ internal class Entry(val mode: OnPrevious) {
   lateinit var job: Job
   // Observed. The handle is a view over it.
   val state = MutableStateFlow<OperationState>(OperationState.Queued)
+  // Completes after job does, cancelled or not. It exists from prepare on, so a handle handed out
+  // before commit can still wait on it.
+  val settled = Job()
   // One CAS decides. Nothing observes it.
   val claim = AtomicReference(Claim.Undecided)
   // Written before published completes. Cleared on start.
@@ -204,6 +209,22 @@ internal class Entry(val mode: OnPrevious) {
     published.await()
     return predecessor
   }
+}
+
+/** A handle from [DataActions], which also knows when its command's job completes. */
+@OptIn(DelicateDataLayerApi::class)
+private class RunnerOperation(override val state: StateFlow<OperationState>, val settled: Job) :
+  Operation
+
+/**
+ * Runs [handler] once this handle's command has finished, also when it was cancelled before it
+ * started. [handler] must be quick and must not throw. Only handles from [DataActions] know when
+ * their command finishes, so any other handle fails here.
+ */
+internal fun Operation.invokeOnSettled(handler: () -> Unit) {
+  val settled = (this as? RunnerOperation)?.settled
+  requireNotNull(settled) { "$this does not come from DataActions" }
+  settled.invokeOnCompletion { handler() }
 }
 
 internal enum class Claim {
