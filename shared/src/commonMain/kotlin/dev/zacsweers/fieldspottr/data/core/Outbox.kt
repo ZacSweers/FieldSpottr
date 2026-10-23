@@ -297,7 +297,9 @@ class Outbox<E>(
     companion object {
       /**
        * Outboxes run in [scope] and failures go to [onFailure]. Each payload is stored in
-       * [payloadFormat], and each outbox opens its rows on [stores] under its name.
+       * [payloadFormat], and each outbox opens its rows on [stores] under its name. Drains, sends
+       * and store calls run on [scope]'s dispatcher, so pass a scope on `Dispatchers.Default`, not
+       * on Main, as [DataActions] explains.
        */
       operator fun invoke(
         scope: CoroutineScope,

@@ -274,7 +274,8 @@ internal constructor(
     companion object {
       /**
        * Fetches run in [scope] and failures go to [onFailure]. Each query gets its own
-       * [DataActions].
+       * [DataActions], so checks, fetches and store calls run on [scope]'s dispatcher. Pass a scope
+       * on `Dispatchers.Default`, not on Main, as [DataActions] explains.
        */
       operator fun invoke(
         scope: CoroutineScope,

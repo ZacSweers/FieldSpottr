@@ -40,6 +40,11 @@ import kotlinx.coroutines.launch
  * A command replaces or cancels only predecessors of its own mode, and waits for the rest. Keys
  * never wait on each other. [Ordering.Serial] is one key of its own, and [Ordering.Concurrent] has
  * none.
+ *
+ * Commands run on [scope]'s dispatcher, the way `launch` runs on its scope's. So pass a scope on
+ * `Dispatchers.Default`, not on Main: a Main scope, like Android's process lifecycle scope, would
+ * run every command on the main thread. Blocking work inside a command moves itself with
+ * `withContext`, as [QueryStore] describes.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class DataActions(private val scope: CoroutineScope, private val onFailure: (Throwable) -> Unit) {
@@ -248,8 +253,7 @@ internal suspend fun Operation.requireNotWaitingOnItself() {
     is RunnerOperation -> {
       val holding = currentCoroutineContext()[Holding] ?: return
       val sameKey = holding.runner === runner && chainKey != null && holding.chainKey == chainKey
-      // While a command holds its key, anything on that key that has not started is queued behind
-      // it
+      // While a command holds its key, anything not yet started on that key is queued behind it
       check(!sameKey || (entry !== holding.entry && entry.claim.load() != Claim.Undecided)) {
         "A command awaited a command queued behind it on the same key, which would never finish. " +
           "Await it after the command returns, or do not await it."
