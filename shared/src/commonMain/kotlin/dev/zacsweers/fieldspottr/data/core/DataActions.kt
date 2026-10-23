@@ -87,8 +87,7 @@ class DataActions(private val scope: CoroutineScope, private val onFailure: (Thr
           entry.state.value = OperationState.Running
           try {
             block()
-            // Cancelled while it ran: settles Cancelled even when the block ignored that and
-            // returned
+            // Cancelled while it ran: settles Cancelled even when the block returned normally
             ensureActive()
             entry.state.value = OperationState.Succeeded
           } catch (t: Throwable) {

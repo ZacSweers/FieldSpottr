@@ -183,7 +183,7 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `invalidating a key nobody collects makes its next collect fetch`() = runTest {
+  fun `invalidating an uncollected key makes its next collect fetch`() = runTest {
     val values = values()
 
     values.data("a").first { it != null }

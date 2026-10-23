@@ -551,7 +551,7 @@ internal constructor(
     feed: AreaFeed,
     fetchedAt: Long,
   ) {
-    val rows = checkNotNull(feed.rows) { "Only a downloaded feed carries rows" }
+    val rows = checkNotNull(feed.rows) { "Only a downloaded feed has rows" }
     val areaName = area.resolvedAreaName
     transaction {
       fsdbQueries.deleteAreaPermits(areaName)

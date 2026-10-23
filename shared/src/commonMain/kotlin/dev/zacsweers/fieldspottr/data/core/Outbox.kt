@@ -258,7 +258,7 @@ class Outbox<E>(
     timer.start()
   }
 
-  /** Queued until [write] lands, then a view over the row it names. */
+  /** Queued until [write] lands, then a view over the row whose id it returns. */
   private fun tracked(ordering: Ordering, write: suspend () -> EntryId): Operation {
     val id = CompletableDeferred<EntryId>()
     val written = actions.run(ordering) { id.complete(write()) }
@@ -331,7 +331,7 @@ class Outbox<E>(
     }
   }
 
-  // Keys this outbox owns on its DataActions. They carry the instance, so two outboxes on one
+  // Keys this outbox owns on its DataActions. They include the instance, so two outboxes on one
   // runner never chain on each other.
   private data class Enqueue(val owner: Outbox<*>, val key: String)
 

@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 
-/** Names one outbox row everywhere: in its store, in a handle and after a restart. */
+/** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
 @JvmInline value class EntryId(val value: String)
 
 sealed interface OutboxStatus {
@@ -97,7 +97,7 @@ fun <E> inMemoryOutboxStore(
   time: TimeSource = TimeSource.Monotonic,
 ): OutboxStore<E> = InMemoryOutboxStore(keepSettledFor, time)
 
-/** The app's store choice, made once. Each outbox is a name on it. */
+/** The app's store choice, made once. Each outbox opens its own store from it by name. */
 interface OutboxStores {
   /** The store for the outbox called [name]. Open each name once per process. */
   fun <E> open(name: String, codec: PayloadCodec<E>): OutboxStore<E>

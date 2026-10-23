@@ -42,8 +42,8 @@ class SqlDelightOutboxStores(
 
 /**
  * Outbox rows in the app's database, kept across process death. Every outbox shares the `outboxRow`
- * table from OutboxRow.sq, and [outbox] names this one's rows, so a new outbox needs no schema
- * change. Concurrent writes from different keys rely on the driver to serialize them.
+ * table from OutboxRow.sq, and [outbox] identifies this outbox's rows, so a new outbox needs no
+ * schema change. Concurrent writes from different keys rely on the driver to serialize them.
  */
 @OptIn(ExperimentalUuidApi::class)
 class SqlDelightOutboxStore<E>(
@@ -57,7 +57,7 @@ class SqlDelightOutboxStore<E>(
 ) : OutboxStore<E> {
 
   override suspend fun insert(key: String, payload: E): EntryId {
-    // seq orders the rows. The Uuid names a row everywhere.
+    // seq orders the rows. The Uuid identifies the row everywhere.
     val id = EntryId(Uuid.random().toString())
     withContext(io) {
       val database = db.await()

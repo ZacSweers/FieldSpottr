@@ -95,7 +95,7 @@ class DataStoreOutboxStore<E>(
 ) : OutboxStore<E> {
 
   override suspend fun insert(key: String, payload: E): EntryId {
-    // List order is send order. The Uuid names the row everywhere.
+    // List order is send order. The Uuid identifies the row everywhere.
     val id = EntryId(Uuid.random().toString())
     val row =
       OutboxLog.Row(

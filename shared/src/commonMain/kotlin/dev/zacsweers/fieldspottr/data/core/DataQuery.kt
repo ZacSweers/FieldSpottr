@@ -153,7 +153,7 @@ internal constructor(
       if (inFlight.compareAndSet(current, InFlight(next.operation, forced = true))) {
         return next.commit()
       }
-      // Lost the race. next was never published, so dropping it costs nothing.
+      // Lost the race. next was never published, so dropping it has no effect.
     }
   }
 
@@ -174,7 +174,7 @@ internal constructor(
       if (inFlight.compareAndSet(current, InFlight(next.operation, forced = false))) {
         return next.commit()
       }
-      // Lost the race. next was never published, so dropping it costs nothing. Loop and join the
+      // Lost the race. next was never published, so dropping it has no effect. Loop and join the
       // winner.
     }
   }
@@ -220,7 +220,7 @@ internal constructor(
   private fun runBeforeLaterRequests(block: suspend () -> Unit): Operation {
     val operation = actions.run(Ordering.Keyed(key), block)
     // This can also forget a fetch requested just after block. A later request then checks again
-    // behind that fetch and finds the data fresh, so the cost is one store read.
+    // behind that fetch and finds the data fresh, so this adds one store read.
     inFlight.store(null)
     return operation
   }
