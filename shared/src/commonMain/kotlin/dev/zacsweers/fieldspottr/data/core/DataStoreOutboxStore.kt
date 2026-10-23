@@ -16,6 +16,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialFormat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okio.BufferedSink
@@ -78,10 +80,18 @@ fun outboxDataStore(
 class DataStoreOutboxStores(
   private val scope: CoroutineScope,
   private val directory: Path,
+  /**
+   * Encodes each payload inside the file, which is JSON either way. A binary format is stored as
+   * Base64, as [asCodec] describes.
+   */
+  private val payloadFormat: SerialFormat = Json,
   private val fileSystem: FileSystem = FileSystem.SYSTEM,
 ) : OutboxStores {
-  override fun <E> open(name: String, codec: PayloadCodec<E>): OutboxStore<E> =
-    DataStoreOutboxStore(outboxDataStore(scope, { directory / "$name.outbox" }, fileSystem), codec)
+  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
+    DataStoreOutboxStore(
+      outboxDataStore(scope, { directory / "$name.outbox" }, fileSystem),
+      serializer.asCodec(payloadFormat),
+    )
 }
 
 /** Outbox rows in a DataStore file, kept across process death. */

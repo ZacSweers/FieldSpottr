@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.KSerializer
 
 /** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
 @JvmInline value class EntryId(val value: String)
@@ -97,15 +98,24 @@ fun <E> inMemoryOutboxStore(
   time: TimeSource = TimeSource.Monotonic,
 ): OutboxStore<E> = InMemoryOutboxStore(keepSettledFor, time)
 
-/** The app's store choice, made once. Each outbox opens its own store from it by name. */
+/**
+ * The app's store choice, made once. Each outbox opens its own store from it by name. A durable
+ * store set also takes the payload format, so the app chooses the format with the store.
+ */
 interface OutboxStores {
-  /** The store for the outbox called [name]. Open each name once per process. */
-  fun <E> open(name: String, codec: PayloadCodec<E>): OutboxStore<E>
+  /**
+   * The store for the outbox called [name]. Open each name once per process. A durable store
+   * encodes each payload with [serializer] in its set's format.
+   */
+  fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E>
 }
 
-/** Every outbox in memory. The default, and what tests and previews use. */
+/**
+ * Every outbox in memory. The default, and what tests and previews use. Rows keep each payload as
+ * the object itself, so these stores never use the serializer.
+ */
 object InMemoryOutboxStores : OutboxStores {
-  override fun <E> open(name: String, codec: PayloadCodec<E>): OutboxStore<E> =
+  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
     inMemoryOutboxStore()
 }
 

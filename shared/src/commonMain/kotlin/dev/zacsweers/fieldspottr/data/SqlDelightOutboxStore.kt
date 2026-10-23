@@ -13,6 +13,7 @@ import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
 import dev.zacsweers.fieldspottr.data.core.PayloadCodec
+import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.isSettled
 import dev.zacsweers.fieldspottr.data.core.storedCause
 import dev.zacsweers.fieldspottr.data.core.storedName
@@ -30,14 +31,21 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialFormat
+import kotlinx.serialization.json.Json
 
 /** Every outbox's rows in the app's database, one partition of the `outboxRow` table per name. */
 class SqlDelightOutboxStores(
   private val db: SuspendLazy<FSDatabase>,
   private val io: CoroutineDispatcher,
+  /**
+   * Encodes each payload into its row. A binary format is stored as Base64, as [asCodec] describes.
+   */
+  private val payloadFormat: SerialFormat = Json,
 ) : OutboxStores {
-  override fun <E> open(name: String, codec: PayloadCodec<E>): OutboxStore<E> =
-    SqlDelightOutboxStore(db, name, codec, io)
+  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
+    SqlDelightOutboxStore(db, name, serializer.asCodec(payloadFormat), io)
 }
 
 /**

@@ -29,8 +29,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.SerialFormat
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 
 /** How often and how long a row waits after a transient failure. */
@@ -284,8 +282,13 @@ class Outbox<E>(
   }
     .stateIn(scope, SharingStarted.Eagerly, OperationState.Queued)
 
-  /** Builds outboxes that share one scope, failure handler, payload format and store choice. */
+  /** Builds outboxes that share one scope, failure handler and store choice. */
   interface Factory {
+    /**
+     * An outbox called [name], over the store its factory's store set opens for that name.
+     * [serializer] is required even when the stores are in memory, so changing the store set needs
+     * no change where outboxes are created.
+     */
     fun <E> create(
       name: String,
       serializer: KSerializer<E>,
@@ -296,17 +299,16 @@ class Outbox<E>(
 
     companion object {
       /**
-       * Outboxes run in [scope] and failures go to [onFailure]. Each payload is stored in
-       * [payloadFormat], and each outbox opens its rows on [stores] under its name. Drains, sends
-       * and store calls run on [scope]'s dispatcher, so pass a scope on `Dispatchers.Default`, not
-       * on Main, as [DataActions] explains.
+       * Outboxes run in [scope] and failures go to [onFailure]. Each outbox opens its rows on
+       * [stores] under its name, and a durable store set encodes payloads in its own format.
+       * Drains, sends and store calls run on [scope]'s dispatcher, so pass a scope on
+       * `Dispatchers.Default`, not on Main, as [DataActions] explains.
        */
       operator fun invoke(
         scope: CoroutineScope,
         onFailure: (Throwable) -> Unit,
         online: StateFlow<Boolean> = MutableStateFlow(true),
         clock: Clock = Clock.System,
-        payloadFormat: SerialFormat = Json,
         stores: OutboxStores = InMemoryOutboxStores,
       ): Factory =
         object : Factory {
@@ -322,7 +324,7 @@ class Outbox<E>(
               actions = DataActions(scope, onFailure),
               send = send,
               revert = revert,
-              store = stores.open(name, serializer.asCodec(payloadFormat)),
+              store = stores.open(name, serializer),
               retry = retry,
               online = online,
               clock = clock,
