@@ -23,6 +23,7 @@ import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.keyed
+import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.hashOf
 import dev.zacsweers.fieldspottr.util.toNyInstant
@@ -43,10 +44,9 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,6 +149,7 @@ internal constructor(
   private val logger: Logger,
   private val db: SuspendLazy<FSDatabase>,
   private val client: Lazy<HttpClient>,
+  private val io: CoroutineDispatcher,
 ) : PermitRepository {
 
   @Inject
@@ -160,6 +161,7 @@ internal constructor(
     json: Json,
     logger: Logger,
     client: Lazy<HttpClient>,
+    @IoDispatcher io: CoroutineDispatcher,
   ) : this(
     queries,
     scope,
@@ -168,6 +170,7 @@ internal constructor(
     logger.withTag("PermitRepository"),
     database,
     client,
+    io,
   )
 
   private val areasJson by lazy { appDirs.userData / "areas.json" }
@@ -181,6 +184,7 @@ internal constructor(
       fs = appDirs.fs,
       path = areasJson,
       db = db,
+      io = io,
       fetchedAtKey = LAST_AREAS_FETCH_AT,
       appVersionKey = LAST_AREAS_APP_VERSION,
       decode = ::decodeAreas,
@@ -200,6 +204,7 @@ internal constructor(
       fs = appDirs.fs,
       path = manifestJson,
       db = db,
+      io = io,
       fetchedAtKey = LAST_MANIFEST_FETCH_AT,
       appVersionKey = LAST_MANIFEST_APP_VERSION,
       decode = ::decodeManifest,
@@ -334,7 +339,7 @@ internal constructor(
 
   override fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {
     return flow {
-        emitAll(db.await().fsdbQueries.permitDateRange().asFlow().mapToOne(Dispatchers.IO))
+        emitAll(db.await().fsdbQueries.permitDateRange().asFlow().mapToOne(io))
       }
       .map { result ->
         val minMillis = result.minDate
@@ -348,17 +353,15 @@ internal constructor(
           null
         }
       }
-      .flowOn(Dispatchers.IO)
+      .flowOn(io)
   }
 
   override fun lastUpdateFlow(areaName: String): Flow<Instant?> {
     return flow {
-        emitAll(
-          db.await().fsdbQueries.lastAreaUpdate(areaName).asFlow().mapToOneOrNull(Dispatchers.IO)
-        )
+        emitAll(db.await().fsdbQueries.lastAreaUpdate(areaName).asFlow().mapToOneOrNull(io))
       }
       .map { millis -> millis?.let { Instant.fromEpochMilliseconds(it) } }
-      .flowOn(Dispatchers.IO)
+      .flowOn(io)
   }
 
   override fun allPermitsInWindow(
@@ -375,10 +378,10 @@ internal constructor(
             .fsdbQueries
             .getPermitsInTimeWindow(windowEnd = windowEnd, windowStart = windowStart)
             .asFlow()
-            .mapToList(Dispatchers.IO)
+            .mapToList(io)
         )
       }
-      .flowOn(Dispatchers.IO)
+      .flowOn(io)
   }
 
   private fun windowBoundaryMillis(date: LocalDate, hour: Int): Long {
@@ -405,14 +408,7 @@ internal constructor(
     val endTime = date.plus(1, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
     log("permitsFlow query: date=$date, group=$group, startTime=$startTime, endTime=$endTime")
     return flow {
-      emitAll(
-        db
-          .await()
-          .fsdbQueries
-          .getPermits(group, startTime, endTime)
-          .asFlow()
-          .mapToList(Dispatchers.IO)
-      )
+      emitAll(db.await().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(io))
     }
   }
 
@@ -421,14 +417,7 @@ internal constructor(
     val startTime = date.atStartOfDayInNy().toEpochMilliseconds()
     val endTime = date.plus(days, DateTimeUnit.DAY).atStartOfDayInNy().toEpochMilliseconds()
     return flow {
-      emitAll(
-        db
-          .await()
-          .fsdbQueries
-          .getPermits(group, startTime, endTime)
-          .asFlow()
-          .mapToList(Dispatchers.IO)
-      )
+      emitAll(db.await().fsdbQueries.getPermits(group, startTime, endTime).asFlow().mapToList(io))
     }
   }
 
@@ -440,10 +429,10 @@ internal constructor(
             .fsdbQueries
             .getPermitsByOrg(group, org, start.atStartOfDayInNy().toEpochMilliseconds())
             .asFlow()
-            .mapToList(Dispatchers.IO)
+            .mapToList(io)
         )
       }
-      .flowOn(Dispatchers.IO)
+      .flowOn(io)
   }
 
   private suspend fun downloadAreas(): Areas {
@@ -521,21 +510,21 @@ internal constructor(
     val name = area.resolvedAreaName
     return QueryStore.of(
       data = flow {
-          emitAll(db.await().fsdbQueries.getAreaFeed(name).asFlow().mapToOneOrNull(Dispatchers.IO))
+          emitAll(db.await().fsdbQueries.getAreaFeed(name).asFlow().mapToOneOrNull(io))
         }
           // A row for another hash came from an older manifest, so it counts as nothing stored
           .map { row -> row?.takeIf { it.hash == area.hash }?.toFetched() },
-      clear = { withContext(Dispatchers.IO) { db.await().clearAreaFeed(name) } },
-      invalidate = { withContext(Dispatchers.IO) { db.await().invalidateAreaFeed(name) } },
+      clear = { withContext(io) { db.await().clearAreaFeed(name) } },
+      invalidate = { withContext(io) { db.await().invalidateAreaFeed(name) } },
     ) { feed, fetchedAt ->
-      withContext(Dispatchers.IO) {
+      withContext(io) {
         db.await().replaceAreaFeed(area, feed, fetchedAt.toEpochMilliseconds())
       }
     }
   }
 
   private suspend fun hasAnyPermits(): Boolean {
-    return withContext(Dispatchers.IO) {
+    return withContext(io) {
       db.await().fsdbQueries.permitDateRange().executeAsOne().minDate != null
     }
   }
@@ -545,7 +534,7 @@ internal constructor(
     manifestArea: AvailabilityManifestArea,
     fetchedAt: Long,
   ) {
-    withContext(Dispatchers.IO) {
+    withContext(io) {
       db
         .await()
         .replaceAreaFeed(

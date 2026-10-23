@@ -27,6 +27,11 @@ fun <T> Flow<Fetched<T>?>.values(): Flow<T?> = map { it?.value }
  * One query calls its store one write at a time, since its writes run in order on its own key.
  * Different queries do not coordinate, so stores over one shared resource, like a database, see
  * concurrent calls and must allow them or take turns themselves.
+ *
+ * Calls come from the query's runner, on the dispatcher of the scope its factory was given, usually
+ * `Dispatchers.Default`, so they must not block that thread. A store whose calls block, like a JDBC
+ * driver or file I/O, moves them with `withContext` onto a dispatcher it was given. A store whose
+ * calls only suspend, like DataStore or an in-memory store, needs nothing.
  */
 interface QueryStore<T> {
   /** The stored value and its fetch time, or null when nothing is stored. Emits on every change. */

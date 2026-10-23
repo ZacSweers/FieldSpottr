@@ -57,8 +57,9 @@ object OutboxLogSerializer : OkioSerializer<OutboxLog> {
 
 /**
  * The DataStore behind one outbox. DataStore allows one active instance per file, so build it once
- * per outbox per process. A graph-scoped repository does this by construction. Cancelling [scope]
- * releases the file.
+ * per outbox per process. A graph-scoped repository does this by construction. DataStore does its
+ * file I/O in [scope], so give it a dispatcher that suits blocking I/O, like the app scope plus an
+ * I/O dispatcher. Cancelling [scope] releases the file.
  */
 fun outboxDataStore(
   scope: CoroutineScope,
@@ -72,7 +73,7 @@ fun outboxDataStore(
 
 /**
  * One DataStore file per outbox under [directory]. Suits an outbox of a few dozen rows that rewrite
- * as a whole.
+ * as a whole. [scope] needs a dispatcher that suits blocking I/O, as with [outboxDataStore].
  */
 class DataStoreOutboxStores(
   private val scope: CoroutineScope,

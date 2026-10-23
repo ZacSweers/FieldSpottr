@@ -22,6 +22,7 @@ import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,9 +47,14 @@ interface FSGraph {
 
   @Provides @SingleIn(AppScope::class) fun provideHttpClient(): HttpClient = HttpClient()
 
+  @Provides @IoDispatcher fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
   @Provides
-  suspend fun provideDatabase(sqlDriverFactory: SqlDriverFactory): FSDatabase =
-    withContext(Dispatchers.IO) {
+  suspend fun provideDatabase(
+    sqlDriverFactory: SqlDriverFactory,
+    @IoDispatcher io: CoroutineDispatcher,
+  ): FSDatabase =
+    withContext(io) {
       sqlDriverFactory.create(FSDatabase.Schema, "fs.db").createFSDatabase()
     }
 

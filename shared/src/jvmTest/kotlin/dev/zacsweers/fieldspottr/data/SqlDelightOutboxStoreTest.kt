@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.metro.suspendLazy
 import kotlin.time.Duration
 import kotlin.time.Instant
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.TestScope
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -24,6 +25,8 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
       db = suspendLazy { temporaryDatabase.db() },
       outbox = "test",
       codec = String.serializer().asCodec(Json),
+      // Real threads, so the concurrency test reaches the driver
+      io = Dispatchers.IO,
       keepSettledFor = keepSettledFor,
       clock = clock,
     )

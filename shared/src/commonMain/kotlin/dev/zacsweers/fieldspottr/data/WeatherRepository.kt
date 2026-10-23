@@ -16,6 +16,7 @@ import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.asQueryStore
 import dev.zacsweers.fieldspottr.data.core.values
+import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Inject
@@ -29,9 +30,8 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Instant
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.plus
@@ -183,7 +183,8 @@ internal constructor(
     appDirs: FSAppDirs,
     json: Json,
     client: Lazy<HttpClient>,
-  ) : this(queries, weatherStore(appDirs, json, scope + Dispatchers.IO), json, client)
+    @IoDispatcher io: CoroutineDispatcher,
+  ) : this(queries, weatherStore(appDirs, json, scope + io), json, client)
 
   private val query =
     queries.create(

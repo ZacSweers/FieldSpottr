@@ -264,6 +264,11 @@ internal constructor(
 
   /** Builds queries that share one scope, one failure handler and one clock. */
   interface Factory {
+    /**
+     * A query over [store] that fills it with [fetch]. [fetch] runs on the factory scope's
+     * dispatcher, usually `Dispatchers.Default`, which suits decoding a response. A fetch that
+     * blocks moves that part with `withContext` onto a dispatcher it was given.
+     */
     fun <T> create(store: QueryStore<T>, fetch: suspend () -> T, freshness: Freshness): DataQuery<T>
 
     companion object {

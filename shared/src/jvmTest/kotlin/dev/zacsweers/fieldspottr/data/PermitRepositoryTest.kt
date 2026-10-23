@@ -77,6 +77,8 @@ class PermitRepositoryTest {
       Logger.Companion,
       suspendLazy { temporaryDatabase.db() },
       lazyOf(httpClient),
+      // Real threads, so the import tests run against the driver's own concurrency
+      Dispatchers.IO,
     )
 
   @AfterTest
@@ -199,6 +201,7 @@ class PermitRepositoryTest {
       Logger.Companion,
       suspendLazy { temporaryDatabase.db() },
       lazyOf(client),
+      Dispatchers.IO,
     ) to client
   }
 

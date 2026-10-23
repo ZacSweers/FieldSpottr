@@ -29,7 +29,8 @@ fun <K : Any, T> DataQuery.Factory.keyed(
  * One [DataQuery] per key, each over the [store] for that key, shared by every caller for the key
  * so concurrent collectors share its fetches and its status. [freshness] can differ per key, like a
  * shorter window for today than for later dates. [maxFetches] caps the fetches in flight across all
- * keys. It does not cap store writes, which still run at the same time for different keys.
+ * keys. It does not cap store writes, which still run at the same time for different keys. [fetch]
+ * and each store run on the factory scope's dispatcher, as in [DataQuery.Factory.create].
  *
  * A key's query is dropped as soon as no caller uses it and none of its fetches, checks,
  * invalidations or mutations is queued or running. Its data stays in its store, so the next query

@@ -76,6 +76,10 @@ class Outbox<E>(
   /** Runs the row views and the backoff timers. */
   private val scope: CoroutineScope,
   private val actions: DataActions,
+  /**
+   * Delivers one payload. It runs on the outbox's runner, usually on `Dispatchers.Default`, so a
+   * send that blocks moves that part with `withContext` onto a dispatcher it was given.
+   */
   private val send: suspend (E) -> Unit,
   /**
    * Undoes the optimistic change when a row fails for good or is discarded. It reads only the

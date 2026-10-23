@@ -63,6 +63,10 @@ data class OutboxEntry<E>(
  *
  * The outbox drains each key on its own, so calls for different keys can run at the same time. A
  * store over a shared resource, like a database, must allow that or take turns itself.
+ *
+ * Calls come from the outbox's runner, on its scope's dispatcher, usually `Dispatchers.Default`, so
+ * they must not block that thread. A store whose calls block moves them with `withContext` onto a
+ * dispatcher it was given, as [QueryStore] describes.
  */
 interface OutboxStore<E> {
   /** Inserts a Queued row and returns its id, a Uuid, so no other install or device reuses it. */

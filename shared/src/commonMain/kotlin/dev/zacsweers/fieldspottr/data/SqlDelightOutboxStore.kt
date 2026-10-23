@@ -23,8 +23,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
@@ -33,9 +32,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 /** Every outbox's rows in the app's database, one partition of the `outboxRow` table per name. */
-class SqlDelightOutboxStores(private val db: SuspendLazy<FSDatabase>) : OutboxStores {
+class SqlDelightOutboxStores(
+  private val db: SuspendLazy<FSDatabase>,
+  private val io: CoroutineDispatcher,
+) : OutboxStores {
   override fun <E> open(name: String, codec: PayloadCodec<E>): OutboxStore<E> =
-    SqlDelightOutboxStore(db, name, codec)
+    SqlDelightOutboxStore(db, name, codec, io)
 }
 
 /**
@@ -48,6 +50,8 @@ class SqlDelightOutboxStore<E>(
   private val db: SuspendLazy<FSDatabase>,
   private val outbox: String,
   private val codec: PayloadCodec<E>,
+  /** Runs the database calls, which block. */
+  private val io: CoroutineDispatcher,
   private val keepSettledFor: Duration = 1.minutes,
   private val clock: Clock = Clock.System,
 ) : OutboxStore<E> {
@@ -55,7 +59,7 @@ class SqlDelightOutboxStore<E>(
   override suspend fun insert(key: String, payload: E): EntryId {
     // seq orders the rows. The Uuid names a row everywhere.
     val id = EntryId(Uuid.random().toString())
-    withContext(Dispatchers.IO) {
+    withContext(io) {
       val database = db.await()
       database.transaction {
         database.outboxRowQueries.pruneSettled(outbox, cutoff())
@@ -67,7 +71,7 @@ class SqlDelightOutboxStore<E>(
 
   override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
     val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.status.isSettled }
-    return withContext(Dispatchers.IO) {
+    return withContext(io) {
       val queries = db.await().outboxRowQueries
       // The WHERE on the expected status is the compare. changes() reports whether it matched.
       queries.transactionWithResult {
@@ -94,16 +98,14 @@ class SqlDelightOutboxStore<E>(
   }
 
   override fun entries(): Flow<List<OutboxEntry<E>>> = flow {
-    emitAll(db.await().outboxRowQueries.pending(outbox).asFlow().mapToList(Dispatchers.IO))
+    emitAll(db.await().outboxRowQueries.pending(outbox).asFlow().mapToList(io))
   }
     .map { rows -> rows.map { it.toEntry() } }
     .distinctUntilChanged()
 
   // An id that is not one of ours finds no row, so its handle settles Cancelled
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> = flow {
-    emitAll(
-      db.await().outboxRowQueries.byId(outbox, id.value).asFlow().mapToOneOrNull(Dispatchers.IO)
-    )
+    emitAll(db.await().outboxRowQueries.byId(outbox, id.value).asFlow().mapToOneOrNull(io))
   }
     .map { row -> row?.takeUnless { it.isExpired() }?.toEntry() }
     .distinctUntilChanged()

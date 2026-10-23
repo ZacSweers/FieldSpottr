@@ -8,8 +8,7 @@ import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.metro.SuspendLazy
 import kotlin.time.Instant
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
@@ -32,6 +31,8 @@ internal class StampedFileStore<T : Any>(
   private val fs: FileSystem,
   private val path: Path,
   private val db: SuspendLazy<FSDatabase>,
+  /** Runs the file and database calls, which block. */
+  private val io: CoroutineDispatcher,
   private val fetchedAtKey: String,
   private val appVersionKey: String,
   private val decode: (String) -> T?,
@@ -50,7 +51,7 @@ internal class StampedFileStore<T : Any>(
   }
 
   override suspend fun write(value: T, fetchedAt: Instant) {
-    withContext(Dispatchers.IO) {
+    withContext(io) {
       writeAtomically(encode(value))
       stamp(fetchedAt)
     }
@@ -58,14 +59,14 @@ internal class StampedFileStore<T : Any>(
   }
 
   override suspend fun clear() {
-    withContext(Dispatchers.IO) { fs.delete(path) }
+    withContext(io) { fs.delete(path) }
     loaded.value = Loaded(null)
   }
 
   // Only the fetch time changes, so the file stays as it is
   override suspend fun invalidate() {
     val current = data.first() ?: return
-    withContext(Dispatchers.IO) { stamp(QueryStore.INVALIDATED) }
+    withContext(io) { stamp(QueryStore.INVALIDATED) }
     loaded.value = Loaded(current.copy(fetchedAt = QueryStore.INVALIDATED))
   }
 
@@ -78,7 +79,7 @@ internal class StampedFileStore<T : Any>(
   }
 
   private suspend fun readStamped(): Fetched<T>? {
-    return withContext(Dispatchers.IO) {
+    return withContext(io) {
       val value = fs.readTextOrNull(path)?.let(decode) ?: return@withContext null
       val queries = db.await().fsdbQueries
       val fetchedAt = queries.getMetadata(fetchedAtKey).executeAsOneOrNull()?.toLongOrNull()
