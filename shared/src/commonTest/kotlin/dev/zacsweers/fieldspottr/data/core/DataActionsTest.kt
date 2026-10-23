@@ -8,15 +8,65 @@ import assertk.assertions.isInstanceOf
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 
-/** The guard that turns a wait which can never end into an immediate failure. */
+/** How the runner settles handles, and the guard that fails a wait which can never end. */
 class DataActionsTest {
 
   private val failures = mutableListOf<Throwable>()
 
   private fun TestScope.actions() = DataActions(backgroundScope) { failures += it }
+
+  @Test
+  fun `a command cancelled while it runs settles cancelled even when its block returns`() =
+    runTest {
+      val actions = actions()
+      val started = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+
+      val first =
+        actions.run(Ordering.Keyed("k", OnPrevious.Cancel)) {
+          started.complete(Unit)
+          // Like a blocking call that finishes whether or not anyone still waits
+          withContext(NonCancellable) { release.await() }
+        }
+      started.await()
+      val second = actions.run(Ordering.Keyed("k", OnPrevious.Cancel)) {}
+      testScheduler.runCurrent()
+      release.complete(Unit)
+      assertThat(first.await()).isEqualTo(OperationState.Cancelled)
+      assertThat(second.await()).isEqualTo(OperationState.Succeeded)
+      // Cancellation is not a failure, so the failure handler hears nothing
+      assertThat(failures.isEmpty()).isEqualTo(true)
+    }
+
+  @Test
+  fun `a command whose scope ends while it runs settles cancelled even when its block returns`() =
+    runTest {
+      val scope =
+        CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+      val actions = DataActions(scope) { failures += it }
+      val started = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+
+      val command = actions.run {
+        started.complete(Unit)
+        withContext(NonCancellable) { release.await() }
+      }
+      started.await()
+      scope.cancel()
+      release.complete(Unit)
+      assertThat(command.await()).isEqualTo(OperationState.Cancelled)
+      assertThat(failures.isEmpty()).isEqualTo(true)
+    }
 
   @Test
   fun `awaiting a command queued behind the caller on its key fails at once`() = runTest {
