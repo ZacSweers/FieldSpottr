@@ -46,7 +46,7 @@ class OutboxTest {
     )
 
   @Test
-  fun `an enqueued row applies, inserts and sends`() = runTest {
+  fun `an enqueued row applies its change before it inserts and sends`() = runTest {
     val outbox = outbox()
     var applied = false
 
@@ -86,7 +86,7 @@ class OutboxTest {
   }
 
   @Test
-  fun `a transient failure backs off, then sends`() = runTest {
+  fun `a transient failure backs off and then sends`() = runTest {
     var failuresLeft = 1
     sendFailure = {
       if (failuresLeft-- > 0) {
