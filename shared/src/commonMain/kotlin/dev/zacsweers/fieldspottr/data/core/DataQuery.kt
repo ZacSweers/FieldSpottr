@@ -24,11 +24,18 @@ sealed interface FetchStatus {
   /** A fetch is running. [forced] is true when a forced [DataQuery.requestFetch] started it. */
   data class Fetching(val forced: Boolean) : FetchStatus
 
+  /**
+   * The last fetch threw [cause]. The core passes it through unchanged, so a fetch that maps
+   * transport errors, like an HTTP 404, to domain errors makes [cause] a domain error.
+   */
   data class Failed(val cause: Throwable) : FetchStatus
 }
 
 /**
  * When a successful fetch stops counting as fresh. A fetch time ahead of the clock is always stale.
+ *
+ * Freshness decides when to fetch again, never what stays in memory. The [QueryStore] decides what
+ * it keeps and for how long, and the scope that owns the query decides how long the query lives.
  */
 sealed interface Freshness {
   companion object {
@@ -60,7 +67,7 @@ internal class DynamicFreshness(val isStale: (fetchedAt: Instant, now: Instant) 
  *                                   | stale
  *                                   v
  * requestFetch(force = true) --> fetch() --> store.write(value, fetchedAt) --> data
- *   cancels an older forced         |
+ *   joins a running forced          |
  *   fetch                           +--> status: Fetching, then Idle or Failed
  * ```
  *
@@ -80,13 +87,20 @@ internal constructor(
   // Private, so only this query's fetches chain on it
   private val key = Any()
   // Compare-and-set only. Nothing observes it.
-  private val inFlight = AtomicReference<Operation?>(null)
+  private val inFlight = AtomicReference<InFlight?>(null)
 
   /**
-   * The stored value and when it was fetched, or null before the first fetch. Collecting it fetches
-   * first when the data is stale, and again whenever the store empties.
+   * The stored value and when it was fetched, or null before the first fetch. Collecting this may
+   * fetch: it checks freshness first and fetches when the data is stale, and again whenever the
+   * store empties. Use [stored] to watch the same values without starting any work.
    */
   val data: Flow<Fetched<T>?> = data(onRequest = {})
+
+  /**
+   * The stored value and when it was fetched, as [data] shows it, without checking freshness or
+   * fetching. For readers that must not start work, like a background job that only reports.
+   */
+  val stored: Flow<Fetched<T>?> = store.data
 
   /**
    * [data], handing [onRequest] each fetch request it makes, the ones after the store empties
@@ -110,9 +124,11 @@ internal constructor(
   /**
    * Runs this query's fetch when [force] is true or the stored data is stale.
    *
-   * Force it when the user asks for new data, like a pull to refresh. A forced request fetches now,
-   * cancels an older forced fetch and queues behind an unforced fetch that already started. Its
-   * status shows as `Fetching(forced = true)`.
+   * Force it when the user asks for new data, like a pull to refresh. A forced request joins a
+   * forced fetch already running since the last [invalidate] or [mutate], so callers that force at
+   * the same time share one fetch. Otherwise it fetches now, cancels a forced fetch from before
+   * that call and queues behind an unforced fetch that already started. Its status shows as
+   * `Fetching(forced = true)`.
    *
    * An unforced request is single flight. It joins the fetch in flight, else checks the stored time
    * and fetches only if the data is stale.
@@ -124,20 +140,29 @@ internal constructor(
       fetchIfStale()
     }
 
-  /** Fetches now. Cancels an older forced fetch and queues behind an unforced one that started. */
+  /** Joins a running forced fetch, else fetches now. See [requestFetch]. */
   private fun fetchNow(): Operation {
-    val next = actions.prepare(Ordering.Keyed(key, OnPrevious.Cancel)) { fetchOnce(forced = true) }
-    // Requests from here on join this fetch
-    inFlight.store(next.operation)
-    return next.commit()
+    while (true) {
+      val current = inFlight.load()
+      if (current != null && current.forced && !current.operation.isSettled) {
+        return current.operation
+      }
+      val next =
+        actions.prepare(Ordering.Keyed(key, OnPrevious.Cancel)) { fetchOnce(forced = true) }
+      // Requests from here on join this fetch
+      if (inFlight.compareAndSet(current, InFlight(next.operation, forced = true))) {
+        return next.commit()
+      }
+      // Lost the race. next was never published, so dropping it costs nothing.
+    }
   }
 
   /** Single flight. Joins the fetch in flight, else checks the stored time and fetches if stale. */
   private fun fetchIfStale(): Operation {
     while (true) {
       val current = inFlight.load()
-      if (current != null && current.state.value !is OperationState.Terminal) {
-        return current
+      if (current != null && !current.operation.isSettled) {
+        return current.operation
       }
       // The check reads the store on this query's key, so it never races a fetch
       val next =
@@ -146,7 +171,7 @@ internal constructor(
             fetchOnce(forced = false)
           }
         }
-      if (inFlight.compareAndSet(current, next.operation)) {
+      if (inFlight.compareAndSet(current, InFlight(next.operation, forced = false))) {
         return next.commit()
       }
       // Lost the race. next was never published, so dropping it costs nothing. Loop and join the
@@ -230,6 +255,12 @@ internal constructor(
       throw t
     }
   }
+
+  /** The request later ones may join, and whether it was forced. */
+  private class InFlight(val operation: Operation, val forced: Boolean)
+
+  private val Operation.isSettled: Boolean
+    get() = state.value is OperationState.Terminal
 
   /** Builds queries that share one scope, one failure handler and one clock. */
   interface Factory {

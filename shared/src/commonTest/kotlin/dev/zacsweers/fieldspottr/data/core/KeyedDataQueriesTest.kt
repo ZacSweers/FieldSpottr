@@ -222,6 +222,19 @@ class KeyedDataQueriesTest {
   }
 
   @Test
+  fun `stored shows a key's store without fetching`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    stores("a").write("cached", START - 2.hours)
+    val values = values(store = stores)
+
+    assertThat(values.stored("a").first()?.value).isEqualTo("cached")
+    testScheduler.runCurrent()
+    // Stale, yet nothing fetched, and the key's query is gone once nothing collects it
+    assertThat(fetched).isEmpty()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
+  @Test
   fun `an unforced request fetches only the stale keys`() = runTest {
     val values = values()
 
@@ -345,8 +358,11 @@ class KeyedDataQueriesTest {
 
     val running = values.requestFetch("a", force = true)
     testScheduler.runCurrent()
-    // queued cancels running, then last cancels queued before it ever starts
+    // Each invalidation stops the next forced request from joining, so queued cancels running,
+    // then last cancels queued before it ever starts
+    values.invalidate("a")
     val queued = values.requestFetch("a", force = true)
+    values.invalidate("a")
     val last = values.requestFetch("a", force = true)
     testScheduler.runCurrent()
     assertThat(running.state.value).isEqualTo(OperationState.Cancelled)
@@ -398,7 +414,8 @@ class KeyedDataQueriesTest {
               },
               freshness = Freshness.staleAfter(1.hours),
             )
-        // Forced fetches cancel each other, so cancelled commands are in the mix too
+        // Invalidations and mutations let later forced fetches cancel earlier ones, so cancelled
+        // commands are in the mix too
         List(500) { i ->
             async {
               val key = i % 3

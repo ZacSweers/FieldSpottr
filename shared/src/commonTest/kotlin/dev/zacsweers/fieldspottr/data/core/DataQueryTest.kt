@@ -179,6 +179,48 @@ class DataQueryTest {
   }
 
   @Test
+  fun `forced requests made together share one fetch`() = runTest {
+    gate = CompletableDeferred()
+    val query = dataQuery()
+
+    val first = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    // Like a second pull to refresh while the first one still spins
+    val second = query.requestFetch(force = true)
+    gate.complete(Unit)
+    assertThat(first.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(second.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(fetches).isEqualTo(1)
+  }
+
+  @Test
+  fun `a forced request after a mutation starts its own fetch`() = runTest {
+    gate = CompletableDeferred()
+    val query = dataQuery()
+
+    val before = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    query.mutate(requireFresh = false) { it.write(100, START) }
+    val after = query.requestFetch(force = true)
+    gate.complete(Unit)
+    // The fetch from before the write is cancelled, and the one after it lands last
+    assertThat(before.await()).isEqualTo(OperationState.Cancelled)
+    assertThat(after.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(stored.value).isEqualTo(Fetched(101, START))
+  }
+
+  @Test
+  fun `stored shows the store without fetching`() = runTest {
+    stored.value = Fetched(1, START - 2.hours)
+    val query = dataQuery()
+
+    assertThat(query.stored.first()).isEqualTo(Fetched(1, START - 2.hours))
+    testScheduler.runCurrent()
+    // Stale, yet nothing fetched
+    assertThat(fetches).isEqualTo(0)
+  }
+
+  @Test
   fun `a request after invalidate fetches again`() = runTest {
     gate = CompletableDeferred()
     val query = dataQuery()
@@ -225,6 +267,8 @@ class DataQueryTest {
 
     val first = query.requestFetch(force = true)
     firstStarted.await()
+    // After an invalidation, a forced request cancels the older forced fetch instead of joining it
+    query.invalidate()
     val second = query.requestFetch(force = true)
     testScheduler.runCurrent()
     release.complete(Unit)
@@ -303,10 +347,12 @@ class DataQueryTest {
     val query = dataQuery()
 
     assertThat(Operation.all(emptyList()).await()).isEqualTo(OperationState.Succeeded)
-    // Holds the first forced fetch so the second cancels it mid-fetch
+    // Holds the first forced fetch. After the invalidation, the second cancels it mid-fetch.
     gate = CompletableDeferred()
-    val both =
-      Operation.all(listOf(query.requestFetch(force = true), query.requestFetch(force = true)))
+    val first = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    query.invalidate()
+    val both = Operation.all(listOf(first, query.requestFetch(force = true)))
     testScheduler.runCurrent()
     gate.complete(Unit)
     assertThat(both.await()).isEqualTo(OperationState.Cancelled)

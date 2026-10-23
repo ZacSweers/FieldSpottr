@@ -6,12 +6,15 @@ import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,7 +61,7 @@ class DataActions(private val scope: CoroutineScope, private val onFailure: (Thr
     private val block: suspend () -> Unit,
   ) {
     private val entry = Entry(ordering.mode)
-    val operation: Operation = RunnerOperation(entry.state.asStateFlow(), entry.settled)
+    val operation: Operation = RunnerOperation(entry, this@DataActions, ordering.chainKey)
 
     /**
      * Phase two: publish on the key and start. Call at most once. An uncommitted command is simply
@@ -66,7 +69,7 @@ class DataActions(private val scope: CoroutineScope, private val onFailure: (Thr
      */
     fun commit(): Operation {
       entry.job =
-        scope.launch(start = CoroutineStart.LAZY) {
+        scope.launch(Holding(entry, this@DataActions, ordering.chainKey), CoroutineStart.LAZY) {
           waitForTurn(entry)
           ensureActive()
           // Superseded while waiting
@@ -211,10 +214,51 @@ internal class Entry(val mode: OnPrevious) {
   }
 }
 
-/** A handle from [DataActions], which also knows when its command's job completes. */
+/**
+ * A handle from [DataActions]. It knows its command, so it can tell when the command's job
+ * completes and when waiting on it from inside another command would never end.
+ */
 @OptIn(DelicateDataLayerApi::class)
-private class RunnerOperation(override val state: StateFlow<OperationState>, val settled: Job) :
-  Operation
+private class RunnerOperation(val entry: Entry, val runner: DataActions, val chainKey: ChainKey?) :
+  Operation {
+  override val state: StateFlow<OperationState> = entry.state.asStateFlow()
+
+  override suspend fun await(): OperationState.Terminal {
+    requireNotWaitingOnItself()
+    return super.await()
+  }
+}
+
+/**
+ * Marks a coroutine as running [entry]'s command, so a wait on that command's key can be caught.
+ */
+private class Holding(val entry: Entry, val runner: DataActions, val chainKey: ChainKey?) :
+  AbstractCoroutineContextElement(Holding) {
+  companion object Key : CoroutineContext.Key<Holding>
+}
+
+/**
+ * Fails at once when the caller is a command and this handle's command can only run after it on the
+ * same key, which includes the caller's own handle. Such a wait never ends. Waits across keys or
+ * across runners pass, since only a full wait-for graph could tell which of those never end.
+ */
+@OptIn(ExperimentalAtomicApi::class)
+internal suspend fun Operation.requireNotWaitingOnItself() {
+  when (this) {
+    is RunnerOperation -> {
+      val holding = currentCoroutineContext()[Holding] ?: return
+      val sameKey = holding.runner === runner && chainKey != null && holding.chainKey == chainKey
+      // While a command holds its key, anything on that key that has not started is queued behind
+      // it
+      check(!sameKey || (entry !== holding.entry && entry.claim.load() != Claim.Undecided)) {
+        "A command awaited a command queued behind it on the same key, which would never finish. " +
+          "Await it after the command returns, or do not await it."
+      }
+    }
+    is AllOperation -> parts.forEach { it.requireNotWaitingOnItself() }
+    else -> Unit
+  }
+}
 
 /**
  * Runs [handler] once this handle's command has finished, also when it was cancelled before it
@@ -222,7 +266,7 @@ private class RunnerOperation(override val state: StateFlow<OperationState>, val
  * their command finishes, so any other handle fails here.
  */
 internal fun Operation.invokeOnSettled(handler: () -> Unit) {
-  val settled = (this as? RunnerOperation)?.settled
+  val settled = (this as? RunnerOperation)?.entry?.settled
   requireNotNull(settled) { "$this does not come from DataActions" }
   settled.invokeOnCompletion { handler() }
 }

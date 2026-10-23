@@ -21,6 +21,8 @@ fun <T> Flow<Fetched<T>?>.values(): Flow<T?> = map { it?.value }
 /**
  * Where a [DataQuery] keeps its data, along with when it was fetched. The query decides freshness
  * from the stored time, so a store that outlives the process keeps its data fresh across restarts.
+ * The store alone decides what stays in memory and for how long, such as the cap that
+ * [inMemoryByKey] takes. Freshness never frees anything.
  *
  * One query calls its store one write at a time, since its writes run in order on its own key.
  * Different queries do not coordinate, so stores over one shared resource, like a database, see

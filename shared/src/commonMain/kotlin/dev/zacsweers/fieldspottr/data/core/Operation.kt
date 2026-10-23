@@ -27,7 +27,14 @@ sealed interface OperationState {
   data object Cancelled : Terminal
 }
 
-/** Observing a handle never affects the work. Dropping it never cancels the work. */
+/**
+ * Observing a handle never affects the work. Dropping it never cancels the work.
+ *
+ * A handle settles when its work returns, such as right after a store write. Collectors of that
+ * store see the new value on their next dispatch, which can come later. So clear optimistic state
+ * from the data a screen observes, or keep that state in the store, instead of clearing it when the
+ * handle settles.
+ */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface Operation {
   val state: StateFlow<OperationState>
@@ -54,8 +61,19 @@ interface Operation {
       if (operations.isEmpty()) {
         Done
       } else {
-        of(AllState(operations.map { it.state }))
+        AllOperation(operations.toList())
       }
+  }
+}
+
+/** [Operation.all]'s handle. It keeps its parts, so awaiting it can check each one. */
+@OptIn(DelicateDataLayerApi::class)
+internal class AllOperation(val parts: List<Operation>) : Operation {
+  override val state: StateFlow<OperationState> = AllState(parts.map { it.state })
+
+  override suspend fun await(): OperationState.Terminal {
+    requireNotWaitingOnItself()
+    return super.await()
   }
 }
 

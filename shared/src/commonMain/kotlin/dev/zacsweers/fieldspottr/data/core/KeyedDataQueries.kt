@@ -73,7 +73,10 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
   internal val keysHeld: Int
     get() = entries.load().size
 
-  /** [key]'s stored value and fetch time. Collecting it fetches first when stale. */
+  /**
+   * [key]'s stored value and fetch time. Collecting this may fetch, like [DataQuery.data]. Use
+   * [stored] to watch without starting any work.
+   */
   fun data(key: K): Flow<Fetched<T>?> = flow {
     val entry = acquire(key)
     try {
@@ -97,6 +100,19 @@ class KeyedDataQueries<K : Any, T> internal constructor(private val build: (K) -
     return combine(flows) { values ->
       @Suppress("UNCHECKED_CAST")
       distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
+    }
+  }
+
+  /**
+   * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
+   * keeps the key's query but starts no work.
+   */
+  fun stored(key: K): Flow<Fetched<T>?> = flow {
+    val entry = acquire(key)
+    try {
+      emitAll(entry.query.stored)
+    } finally {
+      entry.release()
     }
   }
 
