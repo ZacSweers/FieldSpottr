@@ -4,11 +4,17 @@ package dev.zacsweers.fieldspottr.data
 
 import androidx.compose.runtime.Immutable
 import co.touchlab.kermit.Logger
+import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.FetchStatus
+import dev.zacsweers.fieldspottr.data.core.Freshness
+import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.keyed
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import io.ktor.http.isSuccess
 import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
@@ -17,9 +23,9 @@ import kotlinx.collections.immutable.ImmutableMap
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableMap
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -74,65 +80,70 @@ data class LivePermitAdvisory(
     get() = endSlot - startSlot
 }
 
+/**
+ * Live availability from the NYC Parks per-field API, fetched on demand and kept in memory only.
+ */
 class LivePermitRepository(
+  queries: DataQuery.Factory,
   private val json: Json,
   private val client: HttpClient,
   logger: Logger,
 ) {
   private val logger = logger.withTag("LivePermitRepository")
-  private val cache = mutableMapOf<CacheKey, CacheEntry>()
 
-  suspend fun availability(group: FieldGroup, date: LocalDate): LiveGroupAvailability {
-    return withContext(Dispatchers.IO) {
-      val checkedAt = System.now()
-      val fieldsWithApiIds = group.fields.filter { it.apiLocationId != null }
-      if (fieldsWithApiIds.isEmpty()) return@withContext LiveGroupAvailability.empty(checkedAt)
+  // One request at a time keeps the load on the undocumented Parks API low
+  private val fieldAvailability =
+    queries.keyed(
+      store = QueryStore.inMemoryByKey(),
+      fetch = ::fetch,
+      freshness = Freshness.staleAfter(CACHE_TTL),
+      maxFetches = 1,
+    )
 
-      val fields =
-        fieldsWithApiIds
-          .associateWith { field -> availability(field, date, checkedAt) }
-          .toImmutableMap()
-      LiveGroupAvailability(checkedAt, fields).withOverlapsFrom(group)
+  /**
+   * Live availability for [group] on [date], emitted once every field with a live API id has
+   * loaded. Collecting it fetches each field whose data is older than [CACHE_TTL]. A field that
+   * fails to load holds the emission back, and [status] reports the failure.
+   */
+  fun availability(group: FieldGroup, date: LocalDate): Flow<LiveGroupAvailability> {
+    val keys = group.liveKeys(date)
+    if (keys.isEmpty()) return flowOf(LiveGroupAvailability.empty(System.now()))
+    return fieldAvailability.data(keys).mapNotNull { loaded ->
+      if (loaded.values.any { it == null }) return@mapNotNull null
+      val fetched = loaded.mapValues { (_, value) -> checkNotNull(value) }
+      LiveGroupAvailability(
+          checkedAt = fetched.values.minOf { it.fetchedAt },
+          fields =
+            fetched.entries.associate { (key, value) -> key.field to value.value }.toImmutableMap(),
+        )
+        .withOverlapsFrom(group)
     }
   }
 
-  private suspend fun availability(
-    field: Field,
-    date: LocalDate,
-    checkedAt: Instant,
-  ): LiveFieldAvailability {
-    val apiLocationId =
-      field.apiLocationId ?: error("Missing live API location id for ${field.name}")
-    val cacheKey = CacheKey(apiLocationId, date)
-    cache[cacheKey]
-      ?.takeIf { checkedAt - it.fetchedAt < CACHE_TTL }
-      ?.let {
-        return it.availability
-      }
+  /**
+   * [FetchStatus.Failed] if any of [group]'s fields failed to load, else whether any is loading.
+   */
+  fun status(group: FieldGroup, date: LocalDate): Flow<FetchStatus> =
+    fieldAvailability.status(group.liveKeys(date))
 
-    val url = "$BASE_URL?location=$apiLocationId&date=$date"
-    logger.i { "Fetching live permit availability for ${field.name}: $url" }
+  private suspend fun fetch(key: FieldKey): LiveFieldAvailability {
+    val url = "$BASE_URL?location=${key.field.apiLocationId}&date=${key.date}"
+    logger.i { "Fetching live permit availability for ${key.field.name}: $url" }
     val response =
-      client
-        .get(url) {
-          headers {
-            append(HttpHeaders.UserAgent, NYC_PARKS_USER_AGENT)
-            append(HttpHeaders.Accept, "application/json")
-          }
+      client.get(url) {
+        headers {
+          append(HttpHeaders.UserAgent, NYC_PARKS_USER_AGENT)
+          append(HttpHeaders.Accept, "application/json")
         }
-        .bodyAsText()
-
-    return parseLiveFieldAvailability(field, date, response, json).also { availability ->
-      cache[cacheKey] = CacheEntry(checkedAt, availability)
-    }
+      }
+    check(response.status.isSuccess()) { "Live permit fetch failed: ${response.status}" }
+    return parseLiveFieldAvailability(key.field, key.date, response.bodyAsText(), json)
   }
 
-  private data class CacheKey(val apiLocationId: String, val date: LocalDate)
+  private fun FieldGroup.liveKeys(date: LocalDate): List<FieldKey> =
+    fields.filter { it.apiLocationId != null }.map { FieldKey(it, date) }
 
-  private data class CacheEntry(
-    val fetchedAt: Instant,
-    val availability: LiveFieldAvailability,
-  )
+  private data class FieldKey(val field: Field, val date: LocalDate)
 }
 
 internal fun LiveGroupAvailability.withOverlapsFrom(group: FieldGroup): LiveGroupAvailability {

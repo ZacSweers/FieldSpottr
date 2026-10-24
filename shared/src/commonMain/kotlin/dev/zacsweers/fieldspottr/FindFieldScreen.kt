@@ -34,11 +34,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -85,7 +83,6 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
@@ -141,8 +138,7 @@ fun FindFieldPresenter(
   weatherRepository: WeatherRepository,
   navigator: Navigator,
 ): FindFieldScreen.State {
-  val areasFlow = retain { repository.areasFlow() }
-  val areas by areasFlow.collectAsRetainedState()
+  val areas by repository.areas.collectAsRetainedState(Areas.default)
   val currentLocalDateTime = remember {
     System.now().toLocalDateTime(TimeZone.currentSystemDefault())
   }
@@ -151,8 +147,6 @@ fun FindFieldPresenter(
   var selectedWindow by retain {
     mutableStateOf(TimeWindow.forHour(currentLocalDateTime.hour))
   }
-
-  val scope = rememberCoroutineScope()
 
   // Last updated — use the first area as a representative
   val firstAreaName = remember(areas) { areas.entries.firstOrNull()?.areaName }
@@ -186,8 +180,7 @@ fun FindFieldPresenter(
   val availability by availabilityFlow.collectAsRetainedState(null)
 
   // Weather
-  val weather by weatherRepository.forecast.collectAsRetainedState()
-  LaunchedEffect(Unit) { weatherRepository.refresh() }
+  val weather by weatherRepository.forecast.collectAsRetainedState(null)
 
   return FindFieldScreen.State(
     selectedDate = selectedDate,
@@ -216,8 +209,8 @@ fun FindFieldPresenter(
         )
       }
       FindFieldScreen.Event.Refresh -> {
-        scope.launch { repository.populateDb(forceRefresh = true) }
-        scope.launch { weatherRepository.refresh(forceRefresh = true) }
+        repository.refresh()
+        weatherRepository.refresh()
       }
     }
   }

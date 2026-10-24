@@ -1,0 +1,54 @@
+-- One table for every outbox in the database, split by name.
+CREATE TABLE IF NOT EXISTS outboxRow (
+  -- The order rows send in
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- The EntryId: a Uuid, so no other install or device ever reuses it
+  id TEXT NOT NULL UNIQUE,
+  -- Which Outbox owns the row
+  outbox TEXT NOT NULL,
+  orderingKey TEXT NOT NULL,
+  -- PayloadCodec output
+  payload TEXT NOT NULL,
+  -- queued, sending, failed, sent or discarded
+  status TEXT NOT NULL,
+  -- Failed rows only
+  cause TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lastError TEXT,
+  -- 1 once the row's optimistic change was undone, or an undo was attempted
+  reverted INTEGER NOT NULL DEFAULT 0,
+  -- Epoch millis when the current backoff ends, or null when not backing off
+  retryAt INTEGER,
+  -- Epoch millis once sent or discarded, pruned after keepSettledFor
+  settledAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS outboxRow_pending ON outboxRow(outbox, status, seq);
+
+insert:
+INSERT INTO outboxRow(id, outbox, orderingKey, payload, status) VALUES (?, ?, ?, ?, 'queued');
+
+pending:
+SELECT * FROM outboxRow WHERE outbox = ? AND status NOT IN ('sent', 'discarded') ORDER BY seq;
+
+byId:
+SELECT * FROM outboxRow WHERE outbox = ? AND id = ?;
+
+compareAndSet:
+UPDATE outboxRow
+SET
+  status = :status,
+  cause = :cause,
+  attempts = :attempts,
+  lastError = :lastError,
+  reverted = :reverted,
+  retryAt = :retryAt,
+  settledAt = :settledAt
+WHERE outbox = :outbox AND id = :id AND status = :expected;
+
+changes:
+SELECT changes();
+
+-- NULL never compares, so pending rows stay
+pruneSettled:
+DELETE FROM outboxRow WHERE outbox = ? AND settledAt < ?;

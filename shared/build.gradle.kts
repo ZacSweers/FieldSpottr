@@ -31,6 +31,9 @@ kotlin {
   android {
     namespace = "dev.zacsweers.fieldspottr.shared"
     androidResources.enable = true
+    withHostTest {
+      isIncludeAndroidResources = true
+    }
   }
   jvm { mainRun { mainClass.set("dev.zacsweers.fieldspottr.MainKt") } }
 
@@ -51,6 +54,7 @@ kotlin {
         implementation(libs.circuit.serialization)
         implementation(libs.circuitx.overlays)
         implementation(libs.circuitx.gestureNav)
+        implementation(libs.androidx.datastore.core.okio)
         implementation(libs.androidx.datastore.preferences)
         implementation(libs.okio)
         implementation(libs.kotlinx.immutable)
