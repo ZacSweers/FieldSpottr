@@ -2,21 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
-import kotlin.concurrent.atomics.AtomicReference
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Instant
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.onEach
 
 sealed interface FetchStatus {
   data object Idle : FetchStatus
@@ -38,6 +27,12 @@ sealed interface FetchStatus {
  * it keeps and for how long, and the scope that owns the query decides how long the query lives.
  */
 sealed interface Freshness {
+  /**
+   * Whether data fetched at [fetchedAt] is stale at [now]. The query treats a [fetchedAt] ahead of
+   * [now] as stale before it asks.
+   */
+  fun isStale(fetchedAt: Instant, now: Instant): Boolean
+
   companion object {
     /** Stale once [duration] has passed since the fetch. */
     fun staleAfter(duration: Duration): Freshness = FixedFreshness(duration)
@@ -51,14 +46,18 @@ sealed interface Freshness {
   }
 }
 
-internal class FixedFreshness(val staleAfter: Duration) : Freshness
+private class FixedFreshness(private val staleAfter: Duration) : Freshness {
+  override fun isStale(fetchedAt: Instant, now: Instant): Boolean = now - fetchedAt >= staleAfter
+}
 
-internal class DynamicFreshness(val isStale: (fetchedAt: Instant, now: Instant) -> Boolean) :
-  Freshness
+private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Instant) -> Boolean) :
+  Freshness {
+  override fun isStale(fetchedAt: Instant, now: Instant): Boolean = rule(fetchedAt, now)
+}
 
 /**
  * A [QueryStore] plus the fetch that fills it, with single-flight staleness checks. Built by
- * [Factory.create].
+ * [DataScope.query].
  *
  * ```
  * collecting data -------------+
@@ -75,51 +74,23 @@ internal class DynamicFreshness(val isStale: (fetchedAt: Instant, now: Instant) 
  * never races a fetch and a fetch never races a write. `fetchedAt` is the clock time just before
  * the fetch.
  */
-@OptIn(ExperimentalAtomicApi::class)
-class DataQuery<T>
-internal constructor(
-  private val actions: DataActions,
-  private val store: QueryStore<T>,
-  private val fetch: suspend () -> T,
-  private val freshness: Freshness,
-  private val clock: Clock = Clock.System,
-) {
-  // Private, so only this query's fetches chain on it
-  private val key = Any()
-  // Compare-and-set only. Nothing observes it.
-  private val inFlight = AtomicReference<InFlight?>(null)
-
+@SubclassOptInRequired(DelicateDataLayerApi::class)
+interface DataQuery<T> {
   /**
    * The stored value and when it was fetched, or null before the first fetch. Collecting this may
    * fetch: it checks freshness first and fetches when the data is stale, and again whenever the
    * store empties. Use [stored] to watch the same values without starting any work.
    */
-  val data: Flow<Fetched<T>?> = data(onRequest = {})
+  val data: Flow<Fetched<T>?>
 
   /**
    * The stored value and when it was fetched, as [data] shows it, without checking freshness or
    * fetching. For readers that must not start work, like a background job that only reports.
    */
-  val stored: Flow<Fetched<T>?> = store.data
+  val stored: Flow<Fetched<T>?>
 
-  /**
-   * [data], handing [onRequest] each fetch request it makes, the ones after the store empties
-   * included. Every command this query runs reaches a caller as an [Operation] this way or as a
-   * return value, which [KeyedDataQueries] relies on to keep a key's query until its work is done.
-   */
-  internal fun data(onRequest: (Operation) -> Unit): Flow<Fetched<T>?> = flow {
-    onRequest(fetchIfStale())
-    emitAll(
-      store.data.onEach {
-        if (it == null) {
-          onRequest(fetchIfStale())
-        }
-      }
-    )
-  }
-
+  /** What this query's fetches are doing. */
   val status: StateFlow<FetchStatus>
-    field = MutableStateFlow<FetchStatus>(FetchStatus.Idle)
 
   /**
    * Runs this query's fetch when [force] is true or the stored data is stale.
@@ -133,51 +104,7 @@ internal constructor(
    * An unforced request is single flight. It joins the fetch in flight, else checks the stored time
    * and fetches only if the data is stale.
    */
-  fun requestFetch(force: Boolean): Operation =
-    if (force) {
-      fetchNow()
-    } else {
-      fetchIfStale()
-    }
-
-  /** Joins a running forced fetch, else fetches now. See [requestFetch]. */
-  private fun fetchNow(): Operation {
-    while (true) {
-      val current = inFlight.load()
-      if (current != null && current.forced && !current.operation.isSettled) {
-        return current.operation
-      }
-      val next =
-        actions.prepare(Ordering.Keyed(key, OnPrevious.Cancel)) { fetchOnce(forced = true) }
-      // Requests from here on join this fetch
-      if (inFlight.compareAndSet(current, InFlight(next.operation, forced = true))) {
-        return next.commit()
-      }
-      // Lost the race. next was never published, so dropping it has no effect.
-    }
-  }
-
-  /** Single flight. Joins the fetch in flight, else checks the stored time and fetches if stale. */
-  private fun fetchIfStale(): Operation {
-    while (true) {
-      val current = inFlight.load()
-      if (current != null && !current.operation.isSettled) {
-        return current.operation
-      }
-      // The check reads the store on this query's key, so it never races a fetch
-      val next =
-        actions.prepare(Ordering.Keyed(key)) {
-          if (isStale(store.data.first()?.fetchedAt)) {
-            fetchOnce(forced = false)
-          }
-        }
-      if (inFlight.compareAndSet(current, InFlight(next.operation, forced = false))) {
-        return next.commit()
-      }
-      // Lost the race. next was never published, so dropping it has no effect. Loop and join the
-      // winner.
-    }
-  }
+  fun requestFetch(force: Boolean): Operation
 
   /**
    * Marks the stored data stale without fetching, so the next collector fetches. Runs on this
@@ -185,7 +112,7 @@ internal constructor(
    * leave the old data marked fresh. Requests made after this returns run after it, so an unforced
    * one fetches again. Use a forced [requestFetch] instead when the data is on screen.
    */
-  fun invalidate(): Operation = runBeforeLaterRequests { store.invalidate() }
+  fun invalidate(): Operation
 
   /**
    * Runs [block], a write that changes what this query fetches, on this query's key. It runs after
@@ -204,91 +131,5 @@ internal constructor(
    * [block] gets the store, to mark it stale before a remote write whose outcome may be unclear and
    * to write the confirmed result after it.
    */
-  fun mutate(requireFresh: Boolean, block: suspend (store: QueryStore<T>) -> Unit): Operation =
-    runBeforeLaterRequests {
-      if (requireFresh && isStale(store.data.first()?.fetchedAt)) {
-        fetchOnce(forced = false)
-      }
-      block(store)
-    }
-
-  /**
-   * Runs [block] on this query's key, then forgets the fetch that later requests would join. A
-   * request made after this returns waits for [block] and checks the store again, instead of
-   * reusing a fetch that started before [block] changed the data.
-   */
-  private fun runBeforeLaterRequests(block: suspend () -> Unit): Operation {
-    val operation = actions.run(Ordering.Keyed(key), block)
-    // This can also forget a fetch requested just after block. A later request then checks again
-    // behind that fetch and finds the data fresh, so this adds one store read.
-    inFlight.store(null)
-    return operation
-  }
-
-  private fun isStale(at: Instant?): Boolean {
-    if (at == null || at <= QueryStore.INVALIDATED) {
-      return true
-    }
-    val now = clock.now()
-    // A time in the future means the clock moved back or the record is bad
-    return at > now ||
-      when (freshness) {
-        is FixedFreshness -> now - at >= freshness.staleAfter
-        is DynamicFreshness -> freshness.isStale(at, now)
-      }
-  }
-
-  private suspend fun fetchOnce(forced: Boolean) {
-    status.value = FetchStatus.Fetching(forced)
-    try {
-      val fetchedAt = clock.now()
-      val value = fetch()
-      // A fetch superseded while it ran never writes, even one whose fetch ignored cancellation
-      currentCoroutineContext().ensureActive()
-      store.write(value, fetchedAt)
-      status.value = FetchStatus.Idle
-    } catch (t: Throwable) {
-      // Cancelled by a newer forced fetch, which owns the status
-      currentCoroutineContext().ensureActive()
-      status.value = FetchStatus.Failed(t)
-      // The handle settles Failed and the failure reporter hears it
-      throw t
-    }
-  }
-
-  /** The request later ones may join, and whether it was forced. */
-  private class InFlight(val operation: Operation, val forced: Boolean)
-
-  private val Operation.isSettled: Boolean
-    get() = state.value is OperationState.Terminal
-
-  /** Builds queries that share one scope, one failure handler and one clock. */
-  interface Factory {
-    /**
-     * A query over [store] that fills it with [fetch]. [fetch] runs on the factory scope's
-     * dispatcher, usually `Dispatchers.Default`, which suits decoding a response. A fetch that
-     * blocks moves that part with `withContext` onto a dispatcher it was given.
-     */
-    fun <T> create(store: QueryStore<T>, fetch: suspend () -> T, freshness: Freshness): DataQuery<T>
-
-    companion object {
-      /**
-       * Fetches run in [scope] and failures go to [onFailure]. Each query gets its own
-       * [DataActions], so checks, fetches and store calls run on [scope]'s dispatcher. Pass a scope
-       * on `Dispatchers.Default`, not on Main, as [DataActions] explains.
-       */
-      operator fun invoke(
-        scope: CoroutineScope,
-        onFailure: (Throwable) -> Unit,
-        clock: Clock = Clock.System,
-      ): Factory =
-        object : Factory {
-          override fun <T> create(
-            store: QueryStore<T>,
-            fetch: suspend () -> T,
-            freshness: Freshness,
-          ): DataQuery<T> = DataQuery(DataActions(scope, onFailure), store, fetch, freshness, clock)
-        }
-    }
-  }
+  fun mutate(requireFresh: Boolean, block: suspend (store: QueryStore<T>) -> Unit): Operation
 }

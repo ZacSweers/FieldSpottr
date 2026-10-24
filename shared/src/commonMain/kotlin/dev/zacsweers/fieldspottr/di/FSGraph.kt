@@ -16,7 +16,8 @@ import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.createFSDatabase
-import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.DataScope
+import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
@@ -72,13 +73,23 @@ interface FSGraph {
 
   @Provides
   @SingleIn(AppScope::class)
-  fun provideDataQueryFactory(
-    @ForScope(AppScope::class) appScope: CoroutineScope,
-    logger: Logger,
-  ): DataQuery.Factory {
-    val log = logger.withTag("DataQuery")
-    return DataQuery.Factory(appScope, onFailure = { log.e(it) { "Fetch failed" } })
+  fun provideDataScopeFactory(logger: Logger): DataScope.Factory {
+    val log = logger.withTag("Data")
+    return DataScope.Factory(
+      onFailure = { log.e(it) { "Fetch failed" } },
+      // Each fetch reports its own failure, so an action that fails with one only summarizes it
+      onActionFailure = { log.w(it) { "Action failed" } },
+    )
   }
+
+  /** Data work that lives as long as the app, for the repositories in this graph. */
+  @Provides
+  @SingleIn(AppScope::class)
+  @ForScope(AppScope::class)
+  fun provideAppDataScope(
+    factory: DataScope.Factory,
+    @ForScope(AppScope::class) scope: CoroutineScope,
+  ): DataScope = factory.create(scope)
 
   @Provides
   @SingleIn(AppScope::class)

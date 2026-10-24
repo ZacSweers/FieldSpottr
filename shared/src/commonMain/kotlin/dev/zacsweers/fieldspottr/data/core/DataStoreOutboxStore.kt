@@ -6,12 +6,15 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.okio.OkioSerializer
 import androidx.datastore.core.okio.OkioStorage
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -76,7 +79,11 @@ fun outboxDataStore(
 /**
  * One DataStore file per outbox under [directory]. Suits an outbox of a few dozen rows that rewrite
  * as a whole. [scope] needs a dispatcher that suits blocking I/O, as with [outboxDataStore].
+ *
+ * DataStore allows one active instance per file, so build one set per directory. Each name gets one
+ * store for as long as this set lives, and an outbox built again for that name gets the same store.
  */
+@OptIn(ExperimentalAtomicApi::class)
 class DataStoreOutboxStores(
   private val scope: CoroutineScope,
   private val directory: Path,
@@ -87,11 +94,27 @@ class DataStoreOutboxStores(
   private val payloadFormat: SerialFormat = Json,
   private val fileSystem: FileSystem = FileSystem.SYSTEM,
 ) : OutboxStores {
-  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
-    DataStoreOutboxStore(
-      outboxDataStore(scope, { directory / "$name.outbox" }, fileSystem),
-      serializer.asCodec(payloadFormat),
-    )
+  // Compare-and-set only. Nothing observes it.
+  private val opened = AtomicReference(persistentHashMapOf<String, Lazy<OutboxStore<*>>>())
+
+  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+    while (true) {
+      val current = opened.load()
+      val entry =
+        current[name]
+          ?: lazy {
+            DataStoreOutboxStore(
+              outboxDataStore(scope, { directory / "$name.outbox" }, fileSystem),
+              serializer.asCodec(payloadFormat),
+            )
+          }
+      // Only the entry that wins the map builds its DataStore, so the file never has two
+      if (entry === current[name] || opened.compareAndSet(current, current.putting(name, entry))) {
+        @Suppress("UNCHECKED_CAST")
+        return entry.value as OutboxStore<E>
+      }
+    }
+  }
 }
 
 /** Outbox rows in a DataStore file, kept across process death. */

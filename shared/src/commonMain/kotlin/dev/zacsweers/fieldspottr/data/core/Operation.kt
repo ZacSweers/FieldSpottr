@@ -3,7 +3,10 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,19 +45,22 @@ interface Operation {
   suspend fun await(): OperationState.Terminal =
     state.filterIsInstance<OperationState.Terminal>().first()
 
-  @OptIn(DelicateDataLayerApi::class)
   companion object {
-    /**
-     * A read-only handle over a state flow. The runner, [DataQuery] and the outbox build theirs
-     * here.
-     */
-    internal fun of(source: StateFlow<OperationState>): Operation =
-      object : Operation {
-        override val state = source
-      }
-
     /** Already succeeded. What a call returns when there is nothing to do. */
-    val Done: Operation = of(MutableStateFlow(OperationState.Succeeded).asStateFlow())
+    val Done: Operation = SettledOperation(OperationState.Succeeded)
+
+    /**
+     * Already cancelled. What a call returns when it drops its work before starting, like a request
+     * that an earlier one already covers.
+     */
+    val cancelled: Operation = SettledOperation(OperationState.Cancelled)
+
+    /**
+     * Already failed with [cause]. What a call returns when it rejects its input before any work
+     * starts. No failure handler hears about it, so the caller reports [cause] if it should be
+     * logged.
+     */
+    fun failed(cause: Throwable): Operation = SettledOperation(OperationState.Failed(cause))
 
     /** One handle over [operations]. Settles once all of them have: failed if any failed. */
     fun all(operations: Collection<Operation>): Operation =
@@ -66,13 +72,23 @@ interface Operation {
   }
 }
 
-/** [Operation.all]'s handle. It keeps its parts, so awaiting it can check each one. */
+/** A handle whose work ended before anyone got it. Its state never changes. */
 @OptIn(DelicateDataLayerApi::class)
-internal class AllOperation(val parts: List<Operation>) : Operation {
+private class SettledOperation(terminal: OperationState.Terminal) : Operation {
+  override val state: StateFlow<OperationState> = MutableStateFlow(terminal).asStateFlow()
+}
+
+/**
+ * [Operation.all]'s handle. Awaiting it awaits each part in a child coroutine. A child keeps the
+ * caller's context, so a part whose own await checks who is waiting still sees the caller, and a
+ * part that could never finish fails the whole await at once.
+ */
+@OptIn(DelicateDataLayerApi::class)
+private class AllOperation(private val parts: List<Operation>) : Operation {
   override val state: StateFlow<OperationState> = AllState(parts.map { it.state })
 
   override suspend fun await(): OperationState.Terminal {
-    requireNotWaitingOnItself()
+    coroutineScope { parts.map { async { it.await() } }.awaitAll() }
     return super.await()
   }
 }

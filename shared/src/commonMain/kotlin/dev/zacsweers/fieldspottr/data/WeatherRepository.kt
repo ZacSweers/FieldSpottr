@@ -10,7 +10,7 @@ import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.core.okio.OkioSerializer
 import androidx.datastore.core.okio.OkioStorage
 import dev.zacsweers.fieldspottr.FSAppDirs
-import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
@@ -170,7 +170,7 @@ data class WeatherForecast(
 @SingleIn(AppScope::class)
 class WeatherRepository
 internal constructor(
-  queries: DataQuery.Factory,
+  data: DataScope,
   store: DataStore<Fetched<OpenMeteoResponse>?>,
   private val json: Json,
   private val client: Lazy<HttpClient>,
@@ -178,16 +178,15 @@ internal constructor(
 
   @Inject
   constructor(
-    queries: DataQuery.Factory,
-    @ForScope(AppScope::class) scope: CoroutineScope,
+    @ForScope(AppScope::class) data: DataScope,
     appDirs: FSAppDirs,
     json: Json,
     client: Lazy<HttpClient>,
     @IoDispatcher io: CoroutineDispatcher,
-  ) : this(queries, weatherStore(appDirs, json, scope + io), json, client)
+  ) : this(data, weatherStore(appDirs, json, data.scope + io), json, client)
 
   private val query =
-    queries.create(
+    data.query(
       store = store.asQueryStore(),
       fetch = ::fetchForecast,
       freshness = Freshness.staleAfter(WEATHER_REFRESH_INTERVAL),

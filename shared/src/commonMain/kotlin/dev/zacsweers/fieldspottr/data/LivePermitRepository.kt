@@ -4,7 +4,7 @@ package dev.zacsweers.fieldspottr.data
 
 import androidx.compose.runtime.Immutable
 import co.touchlab.kermit.Logger
-import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.FetchStatus
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.QueryStore
@@ -84,7 +84,7 @@ data class LivePermitAdvisory(
  * Live availability from the NYC Parks per-field API, fetched on demand and kept in memory only.
  */
 class LivePermitRepository(
-  queries: DataQuery.Factory,
+  data: DataScope,
   private val json: Json,
   private val client: HttpClient,
   logger: Logger,
@@ -93,7 +93,7 @@ class LivePermitRepository(
 
   // One request at a time keeps the load on the undocumented Parks API low
   private val fieldAvailability =
-    queries.keyed(
+    data.keyed(
       store = QueryStore.inMemoryByKey(),
       fetch = ::fetch,
       freshness = Freshness.staleAfter(CACHE_TTL),

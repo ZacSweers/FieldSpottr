@@ -3,20 +3,8 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import kotlin.jvm.JvmInline
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
-import kotlin.time.TimeMark
-import kotlin.time.TimeSource
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
-import kotlinx.collections.immutable.persistentMapOf
-import kotlinx.collections.immutable.toPersistentMap
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.update
 import kotlinx.serialization.KSerializer
 
 /** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
@@ -90,90 +78,14 @@ interface OutboxStore<E> {
 }
 
 /**
- * Rows in memory, lost with the process. A settled row stays observable for [keepSettledFor], so a
- * handle that re-attaches soon after still sees its outcome, and the next write prunes it.
- */
-fun <E> inMemoryOutboxStore(
-  keepSettledFor: Duration = 1.minutes,
-  time: TimeSource = TimeSource.Monotonic,
-): OutboxStore<E> = InMemoryOutboxStore(keepSettledFor, time)
-
-/**
  * The app's store choice, made once. Each outbox opens its own store from it by name. A durable
  * store set also takes the payload format, so the app chooses the format with the store.
  */
 interface OutboxStores {
   /**
-   * The store for the outbox called [name]. Open each name once per process. A durable store
-   * encodes each payload with [serializer] in its set's format.
+   * The store for the outbox called [name]. Calls with the same name return stores over the same
+   * rows, so an outbox built again after its scope ended finds the rows it left. Open a name with
+   * one payload type. A durable store encodes each payload with [serializer] in its set's format.
    */
   fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E>
-}
-
-/**
- * Every outbox in memory. The default, and what tests and previews use. Rows keep each payload as
- * the object itself, so these stores never use the serializer.
- */
-object InMemoryOutboxStores : OutboxStores {
-  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
-    inMemoryOutboxStore()
-}
-
-@OptIn(ExperimentalUuidApi::class)
-private class InMemoryOutboxStore<E>(
-  private val keepSettledFor: Duration,
-  private val time: TimeSource,
-) : OutboxStore<E> {
-  // Insertion order is send order, and the map keeps it
-  private val rows = MutableStateFlow(persistentMapOf<EntryId, Row<E>>())
-
-  override suspend fun insert(key: String, payload: E): EntryId {
-    val id = EntryId(Uuid.random().toString())
-    val row = Row(OutboxEntry(id, key, payload, OutboxStatus.Queued), settledAt = null)
-    rows.update { current -> current.pruned().putting(id, row) }
-    return id
-  }
-
-  override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
-    var written = false
-    rows.update { current ->
-      val row = current[entry.id]
-      written = row != null && row.entry.status == expected
-      if (row == null || !written) {
-        current
-      } else {
-        val updated =
-          row.entry.copy(
-            status = entry.status,
-            attempts = entry.attempts,
-            lastError = entry.lastError,
-            reverted = entry.reverted,
-            retryAt = entry.retryAt,
-          )
-        val settledAt =
-          if (entry.status.isSettled) {
-            time.markNow()
-          } else {
-            null
-          }
-        current.pruned().putting(entry.id, Row(updated, settledAt))
-      }
-    }
-    return written
-  }
-
-  override fun entries(): Flow<List<OutboxEntry<E>>> =
-    rows
-      .map { current -> current.values.map { it.entry }.filterNot { it.status.isSettled } }
-      .distinctUntilChanged()
-
-  override fun entry(id: EntryId): Flow<OutboxEntry<E>?> =
-    rows.map { current -> current[id]?.takeUnless { it.isExpired() }?.entry }.distinctUntilChanged()
-
-  private fun Map<EntryId, Row<E>>.pruned() = filterValues { !it.isExpired() }.toPersistentMap()
-
-  private fun Row<E>.isExpired(): Boolean =
-    settledAt != null && settledAt.elapsedNow() >= keepSettledFor
-
-  private class Row<E>(val entry: OutboxEntry<E>, val settledAt: TimeMark?)
 }

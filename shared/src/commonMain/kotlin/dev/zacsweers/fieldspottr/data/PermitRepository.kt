@@ -13,8 +13,7 @@ import dev.zacsweers.fieldspottr.DbAreaFeed
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.fieldspottr.FSDatabase
-import dev.zacsweers.fieldspottr.data.core.DataActions
-import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.OnPrevious
@@ -45,7 +44,6 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -142,8 +140,7 @@ interface PermitRepository {
 @ContributesBinding(AppScope::class)
 class PermitRepositoryImpl
 internal constructor(
-  queries: DataQuery.Factory,
-  scope: CoroutineScope,
+  data: DataScope,
   private val appDirs: FSAppDirs,
   private val json: Json,
   private val logger: Logger,
@@ -154,8 +151,7 @@ internal constructor(
 
   @Inject
   constructor(
-    queries: DataQuery.Factory,
-    @ForScope(AppScope::class) scope: CoroutineScope,
+    @ForScope(AppScope::class) data: DataScope,
     database: SuspendLazy<FSDatabase>,
     appDirs: FSAppDirs,
     json: Json,
@@ -163,8 +159,7 @@ internal constructor(
     client: Lazy<HttpClient>,
     @IoDispatcher io: CoroutineDispatcher,
   ) : this(
-    queries,
-    scope,
+    data,
     appDirs,
     json,
     logger.withTag("PermitRepository"),
@@ -177,7 +172,7 @@ internal constructor(
   private val manifestJson by lazy { appDirs.userData / "availability" / "manifest.json" }
 
   // Each fetch reports its own failure, so a failed sync only summarizes them
-  private val actions = DataActions(scope) { logger.w(it) { "Permit data sync failed" } }
+  private val actions = data.newActions { logger.w(it) { "Permit data sync failed" } }
 
   private val areasStore =
     StampedFileStore(
@@ -193,7 +188,7 @@ internal constructor(
     }
 
   private val areasQuery =
-    queries.create(
+    data.query(
       store = areasStore,
       fetch = ::downloadAreas,
       freshness = Freshness.staleAfter(REPO_DATA_REFRESH_INTERVAL),
@@ -213,7 +208,7 @@ internal constructor(
     }
 
   private val manifestQuery =
-    queries.create(
+    data.query(
       store = manifestStore,
       fetch = ::downloadManifest,
       freshness = Freshness.staleAfter(REPO_DATA_REFRESH_INTERVAL),
@@ -221,7 +216,7 @@ internal constructor(
 
   // Keyed by manifest entry, so a feed whose hash changed is a new key with nothing stored
   private val feeds =
-    queries.keyed(
+    data.keyed(
       store = ::feedStore,
       fetch = ::downloadFeed,
       freshness = Freshness.staleAfter(REPO_DATA_REFRESH_INTERVAL),
