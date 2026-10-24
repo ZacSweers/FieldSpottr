@@ -3,7 +3,6 @@
 package dev.zacsweers.fieldspottr.data.core.impl
 
 import dev.zacsweers.fieldspottr.data.core.DataActions
-import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OnPrevious
@@ -22,7 +21,6 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.update
 import kotlin.time.Clock
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -30,7 +28,6 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -42,29 +39,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 
-/**
- * An outbox whose commands run on [actions] and whose row views and backoff timers run in [scope].
- * This skips the one-outbox-per-name check of [DataScope.outbox], so give each store one outbox.
- *
- * @param send delivers one payload. It runs on the outbox's runner, usually on
- *   `Dispatchers.Default`, so a send that blocks moves that part with `withContext` onto a
- *   dispatcher it was given.
- * @param revert undoes the optimistic change when a row fails for good or is discarded. It reads
- *   only the payload, so it works after a restart too.
- * @param store a durable store when rows must survive the process.
- * @param clock gives backoff deadlines. They outlive the process, so they use wall time.
- */
-operator fun <E> Outbox.Companion.invoke(
-  scope: CoroutineScope,
-  actions: DataActions,
-  send: suspend (E) -> Unit,
-  revert: suspend (E) -> Unit = {},
-  store: OutboxStore<E> = inMemoryOutboxStore(),
-  retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
-  online: StateFlow<Boolean> = MutableStateFlow(true),
-  clock: Clock = Clock.System,
-): Outbox<E> = RealOutbox(scope, actions, send, revert, store, retry, online, clock)
-
 /** [Outbox] over a store's rows, with one drainer per key on its runner. */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealOutbox<E>(
@@ -74,12 +48,11 @@ internal class RealOutbox<E>(
   private val send: suspend (E) -> Unit,
   private val revert: suspend (E) -> Unit,
   private val store: OutboxStore<E>,
-  retry: RetryPolicy,
+  private val policy: RetryPolicy,
   private val online: StateFlow<Boolean>,
   /** Backoff deadlines outlive the process, so they use wall time. */
   private val clock: Clock,
 ) : Outbox<E> {
-  private val policy = retry
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt.
   private val waking = AtomicReference(persistentMapOf<String, Job>())
 

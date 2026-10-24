@@ -7,15 +7,18 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
-import assertk.assertions.isInstanceOf
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
-import dev.zacsweers.fieldspottr.data.core.DataQuery
-import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.DataScope
+import dev.zacsweers.fieldspottr.data.core.impl.invoke
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.metro.suspendLazy
 import io.ktor.client.HttpClient
@@ -25,8 +28,8 @@ import io.ktor.http.HttpStatusCode
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineScope
@@ -70,8 +73,7 @@ class PermitRepositoryTest {
 
   private val repository =
     PermitRepositoryImpl(
-      DataQuery.Factory(idleScope, onFailure = {}),
-      idleScope,
+      DataScope.Factory(onFailure = {}).create(idleScope),
       appDirs,
       json,
       Logger.Companion,
@@ -194,8 +196,7 @@ class PermitRepositoryTest {
         }
       )
     return PermitRepositoryImpl(
-      DataQuery.Factory(backgroundScope, onFailure = {}),
-      backgroundScope,
+      testDataScope(clock = testClock(START)),
       appDirs,
       json,
       Logger.Companion,
@@ -681,7 +682,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.refresh().await()).isEqualTo(OperationState.Succeeded)
+      refreshRepository.refresh().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -742,7 +743,7 @@ class PermitRepositoryTest {
     }
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.refresh().await()).isEqualTo(OperationState.Succeeded)
+      refreshRepository.refresh().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits.map { it.name }.toSet())
@@ -811,7 +812,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.refresh().await()).isInstanceOf<OperationState.Failed>()
+      refreshRepository.refresh().awaitFailed<Throwable>()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -823,7 +824,7 @@ class PermitRepositoryTest {
 
   @Test
   fun `sync skips network when repo data is newer than an hour`() = runTest {
-    val now = System.now().toEpochMilliseconds()
+    val now = START.toEpochMilliseconds()
     writeCachedAreas()
     writeCachedManifest("hash-1")
     temporaryDatabase
@@ -844,7 +845,7 @@ class PermitRepositoryTest {
     // No routes, so any request would fail the sync
     val (syncRepository, client) = testRepository(mutableMapOf())
     try {
-      assertThat(syncRepository.syncIfStale().await()).isEqualTo(OperationState.Succeeded)
+      syncRepository.syncIfStale().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -856,7 +857,7 @@ class PermitRepositoryTest {
 
   @Test
   fun `sync refreshes area feeds older than an hour`() = runTest {
-    val oldFetch = System.now().toEpochMilliseconds() - 2.hours.inWholeMilliseconds
+    val oldFetch = START.toEpochMilliseconds() - 2.hours.inWholeMilliseconds
     writeCachedAreas()
     writeCachedManifest("hash-1")
     temporaryDatabase
@@ -880,7 +881,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.syncIfStale().await()).isEqualTo(OperationState.Succeeded)
+      refreshRepository.syncIfStale().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -892,7 +893,7 @@ class PermitRepositoryTest {
 
   @Test
   fun `sync failed hourly area feed refresh keeps prior rows`() = runTest {
-    val oldFetch = System.now().toEpochMilliseconds() - 2.hours.inWholeMilliseconds
+    val oldFetch = START.toEpochMilliseconds() - 2.hours.inWholeMilliseconds
     writeCachedAreas()
     writeCachedManifest("hash-1")
     temporaryDatabase
@@ -916,7 +917,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.syncIfStale().await()).isInstanceOf<OperationState.Failed>()
+      refreshRepository.syncIfStale().awaitFailed<Throwable>()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -928,7 +929,7 @@ class PermitRepositoryTest {
 
   @Test
   fun `sync refetches a fresh feed whose manifest hash changed`() = runTest {
-    val now = System.now().toEpochMilliseconds()
+    val now = START.toEpochMilliseconds()
     writeCachedAreas()
     writeCachedManifest("hash-2")
     val queries = temporaryDatabase.db().fsdbQueries
@@ -949,7 +950,7 @@ class PermitRepositoryTest {
       )
     val (syncRepository, client) = testRepository(routes)
     try {
-      assertThat(syncRepository.syncIfStale().await()).isEqualTo(OperationState.Succeeded)
+      syncRepository.syncIfStale().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits.single().name).isEqualTo("New Hash Permit")
@@ -963,12 +964,12 @@ class PermitRepositoryTest {
   fun `a failed sync shows a message only when no permits are stored`() = runTest {
     val (syncRepository, client) = testRepository(mutableMapOf())
     try {
-      assertThat(syncRepository.refresh().await()).isInstanceOf<OperationState.Failed>()
+      syncRepository.refresh().awaitFailed<Throwable>()
       assertThat(syncRepository.loadingMessage.first())
         .isEqualTo("Failed to fetch areas. Please check connection and try again.")
 
       temporaryDatabase.db().fsdbQueries.addPermit(morningPermit)
-      assertThat(syncRepository.refresh().await()).isInstanceOf<OperationState.Failed>()
+      syncRepository.refresh().awaitFailed<Throwable>()
       assertThat(syncRepository.loadingMessage.first()).isEqualTo(null)
     } finally {
       client.close()
@@ -999,7 +1000,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.refresh().await()).isInstanceOf<OperationState.Failed>()
+      refreshRepository.refresh().awaitFailed<Throwable>()
 
       assertThat(refreshRepository.areas.first().entries.map { it.areaName }.contains("CachedArea"))
         .isTrue()
@@ -1057,5 +1058,10 @@ class PermitRepositoryTest {
     val allPermitsAfter = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
     assertThat(allPermitsAfter).hasSize(1)
     assertThat(allPermitsAfter[0]).isEqualTo(area2Permit)
+  }
+
+  private companion object {
+    // Fixed, so cached fetch times and the repository's clock agree on every run
+    val START = Instant.parse("2026-06-10T12:00:00Z")
   }
 }

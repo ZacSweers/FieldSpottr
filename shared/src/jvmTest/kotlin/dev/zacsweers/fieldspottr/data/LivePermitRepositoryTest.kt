@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data
 
+import app.cash.turbine.test
 import assertk.assertThat
 import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.hasSize
@@ -9,9 +10,10 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import co.touchlab.kermit.Logger
-import dev.zacsweers.fieldspottr.data.core.DataQuery
-import dev.zacsweers.fieldspottr.data.core.FakeClock
 import dev.zacsweers.fieldspottr.data.core.FetchStatus
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -30,8 +32,8 @@ import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
@@ -65,8 +67,7 @@ class LivePermitRepositoryTest {
       location = Location("", ""),
     )
 
-  private val clock = FakeClock(START)
-  private val failures = mutableListOf<Throwable>()
+  private lateinit var data: TestDataScope
   private val requested: MutableList<String> = Collections.synchronizedList(mutableListOf())
   private val failingLocations = mutableSetOf<String>()
   private val client =
@@ -393,7 +394,7 @@ class LivePermitRepositoryTest {
     val repository = repository()
     repository.availability(group, date).first()
 
-    clock.now = START + 16.minutes
+    advanceTimeBy(16.minutes)
     repository.availability(group, date).first { it.checkedAt == START + 16.minutes }
     assertThat(requested).hasSize(4)
   }
@@ -403,12 +404,12 @@ class LivePermitRepositoryTest {
     failingLocations += softball.apiLocationId!!
     val repository = repository()
 
-    val emissions = mutableListOf<LiveGroupAvailability>()
-    backgroundScope.launch { repository.availability(group, date).collect { emissions += it } }
-    assertThat(repository.status(group, date).first { it is FetchStatus.Failed })
-      .isInstanceOf<FetchStatus.Failed>()
-    assertThat(failures).hasSize(1)
-    assertThat(emissions).isEmpty()
+    repository.availability(group, date).test {
+      assertThat(repository.status(group, date).first { it is FetchStatus.Failed })
+        .isInstanceOf<FetchStatus.Failed>()
+      data.fetchFailures.assertSingle<Throwable>()
+      expectNoEvents()
+    }
   }
 
   @Test
@@ -436,13 +437,10 @@ class LivePermitRepositoryTest {
     assertThat(requested).isEmpty()
   }
 
-  private fun TestScope.repository(): LivePermitRepository =
-    LivePermitRepository(
-      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock),
-      json,
-      client,
-      Logger,
-    )
+  private fun TestScope.repository(): LivePermitRepository {
+    data = testDataScope(clock = testClock(START))
+    return LivePermitRepository(data, json, client, Logger)
+  }
 
   private fun liveResponse(location: String): String {
     if (location != field.apiLocationId) return response()

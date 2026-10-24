@@ -3,8 +3,12 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import kotlin.time.Instant
+import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.persistentHashMapOf
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -58,8 +62,7 @@ interface QueryStore<T> {
      * One value held in memory, lost with the process. [initial] seeds it, like a cached value
      * stored with [INVALIDATED] so it shows at once and still fetches on the first collect.
      */
-    fun <T> inMemory(initial: Fetched<T>? = null): InMemoryQueryStore<T> =
-      InMemoryQueryStore(initial)
+    fun <T> inMemory(initial: Fetched<T>? = null): InMemoryQueryStore<T> = SingleValueStore(initial)
 
     /**
      * A value per key held in memory, lost with the process. Once more than [maxEntries] keys hold
@@ -102,69 +105,110 @@ interface QueryStore<T> {
 }
 
 /**
- * One value held in memory, from [QueryStore.inMemory]. Code that owns the store can read [data]
- * without collecting it and edit it in place. Screens still read the query's data, since only
- * collecting that runs the staleness check.
+ * A value held in memory: the one from [QueryStore.inMemory], or one key's from
+ * [QueryStore.inMemoryByKey]. Code that owns the store can read [data] without collecting it and
+ * edit it in place. Screens still read the query's data, since only collecting that runs the
+ * staleness check.
  */
-class InMemoryQueryStore<T> internal constructor(initial: Fetched<T>?) : QueryStore<T> {
+sealed class InMemoryQueryStore<T> : QueryStore<T> {
   /** The stored value, readable without collecting. Reading it never fetches. */
-  override val data: StateFlow<Fetched<T>?>
-    field = MutableStateFlow(initial)
+  abstract override val data: StateFlow<Fetched<T>?>
 
   /**
    * Changes the stored value in place, such as for an optimistic edit. [transform] may run more
    * than once, as with [MutableStateFlow.update]. The change skips the query's ordering, so a fetch
-   * already in flight can replace it.
+   * already in flight can replace it. In a store from [QueryStore.inMemoryByKey], a change that
+   * stores a value counts toward the cap, like a write.
    */
-  fun update(transform: (Fetched<T>?) -> Fetched<T>?) {
-    data.update(transform)
-  }
+  abstract fun update(transform: (Fetched<T>?) -> Fetched<T>?)
 
   override suspend fun write(value: T, fetchedAt: Instant) {
-    data.value = Fetched(value, fetchedAt)
+    update { Fetched(value, fetchedAt) }
   }
 
   override suspend fun clear() {
-    data.value = null
+    update { null }
   }
 
   override suspend fun invalidate() {
-    data.update { it?.copy(fetchedAt = QueryStore.INVALIDATED) }
+    update { it?.copy(fetchedAt = QueryStore.INVALIDATED) }
   }
 }
 
-/** In-memory stores for many keys, from [QueryStore.inMemoryByKey]. */
+/** The store from [QueryStore.inMemory], which keeps its value in a state flow of its own. */
+private class SingleValueStore<T>(initial: Fetched<T>?) : InMemoryQueryStore<T>() {
+  override val data: StateFlow<Fetched<T>?>
+    field = MutableStateFlow(initial)
+
+  override fun update(transform: (Fetched<T>?) -> Fetched<T>?) {
+    data.update(transform)
+  }
+}
+
+/**
+ * In-memory stores for many keys, from [QueryStore.inMemoryByKey]. Every key's value lives in one
+ * map, and each store is a view of its key, so stores for one key always agree.
+ */
 class InMemoryStores<K : Any, T> internal constructor(private val maxEntries: Int) :
-  (K) -> QueryStore<T> {
+  (K) -> InMemoryQueryStore<T> {
   init {
     require(maxEntries > 0) { "maxEntries must be positive, was $maxEntries" }
   }
 
-  private val entries = MutableStateFlow(persistentHashMapOf<K, Fetched<T>>())
+  private val stored = MutableStateFlow(persistentHashMapOf<K, Fetched<T>>())
 
-  override fun invoke(key: K): QueryStore<T> =
-    QueryStore.of(
-      entries.map { it[key] }.distinctUntilChanged(),
-      clear = { entries.update { it.removing(key) } },
-      invalidate = {
-        entries.update { current ->
-          val stored = current[key] ?: return@update current
-          current.putting(key, stored.copy(fetchedAt = QueryStore.INVALIDATED))
-        }
-      },
-    ) { value, fetchedAt ->
-      entries.update { current ->
-        val next = current.putting(key, Fetched(value, fetchedAt))
-        if (next.size <= maxEntries) {
-          return@update next
-        }
-        val oldest = next.entries.filter { it.key != key }.minBy { it.value.fetchedAt }.key
-        next.removing(oldest)
-      }
-    }
+  /** [key]'s store. Each call returns a new view of the same value. */
+  override fun invoke(key: K): InMemoryQueryStore<T> = KeyStore(key)
 
   /** Removes every key's value, such as on logout. */
   fun clear() {
-    entries.value = persistentHashMapOf()
+    stored.value = persistentHashMapOf()
+  }
+
+  /** One key's store, a view of that key in [stored]. */
+  private inner class KeyStore(private val key: K) : InMemoryQueryStore<T>() {
+    override val data: StateFlow<Fetched<T>?> = KeyState(stored, key)
+
+    override fun update(transform: (Fetched<T>?) -> Fetched<T>?) {
+      stored.update { current ->
+        val next = transform(current[key])
+        if (next == null) {
+          current.removing(key)
+        } else {
+          current.putting(key, next).capped(kept = key)
+        }
+      }
+    }
+  }
+
+  /** Drops the key fetched longest ago, other than [kept], once more than the cap hold a value. */
+  private fun PersistentMap<K, Fetched<T>>.capped(kept: K): PersistentMap<K, Fetched<T>> {
+    if (size <= maxEntries) {
+      return this
+    }
+    val oldest = this.entries.filter { it.key != kept }.minBy { it.value.fetchedAt }.key
+    return removing(oldest)
+  }
+}
+
+/**
+ * One key's value in [stored], as a state flow of its own. It reads the map when asked, so a view
+ * needs no scope.
+ */
+@OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+private class KeyState<K : Any, T>(
+  private val stored: StateFlow<Map<K, Fetched<T>>>,
+  private val key: K,
+) : StateFlow<Fetched<T>?> {
+  override val value: Fetched<T>?
+    get() = stored.value[key]
+
+  override val replayCache: List<Fetched<T>?>
+    get() = listOf(value)
+
+  override suspend fun collect(collector: FlowCollector<Fetched<T>?>): Nothing {
+    stored.map { it[key] }.distinctUntilChanged().collect(collector)
+    // State flows never complete, so neither does this view
+    awaitCancellation()
   }
 }

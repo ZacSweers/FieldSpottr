@@ -2,18 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data
 
+import app.cash.turbine.test
 import assertk.assertThat
-import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
-import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
-import dev.zacsweers.fieldspottr.data.core.DataQuery
-import dev.zacsweers.fieldspottr.data.core.FakeClock
-import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -29,10 +30,8 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
@@ -43,11 +42,10 @@ class WeatherRepositoryTest {
 
   private val json = Json { ignoreUnknownKeys = true }
 
-  private val clock = FakeClock(START)
   private val fs = FakeFileSystem()
   private val appDirs = FakeFSAppDirs(fs)
   private val cachePath = appDirs.userData / "weather.json"
-  private val failures = mutableListOf<Throwable>()
+  private lateinit var data: TestDataScope
   private val requests = AtomicInteger()
   private var responseStatus = HttpStatusCode.OK
   private var responseGate = CompletableDeferred(Unit)
@@ -175,7 +173,7 @@ class WeatherRepositoryTest {
 
     assertThat(repository.forecast.first()!!.current!!.tempF).isEqualTo(STORED_TEMP)
     // A refresh queues behind the collector's staleness check, so this counts only its own request
-    assertThat(repository.refresh().await()).isEqualTo(OperationState.Succeeded)
+    repository.refresh().awaitSucceeded()
     assertThat(requests.get()).isEqualTo(1)
   }
 
@@ -185,11 +183,11 @@ class WeatherRepositoryTest {
     responseGate = CompletableDeferred()
     val repository = repository()
 
-    val emissions = Channel<WeatherForecast>(Channel.UNLIMITED)
-    backgroundScope.launch { repository.forecast.filterNotNull().collect { emissions.send(it) } }
-    assertThat(emissions.receive().current!!.tempF).isEqualTo(STORED_TEMP)
-    responseGate.complete(Unit)
-    assertThat(emissions.receive().current!!.tempF).isEqualTo(FETCHED_TEMP)
+    repository.forecast.filterNotNull().test {
+      assertThat(awaitItem().current!!.tempF).isEqualTo(STORED_TEMP)
+      responseGate.complete(Unit)
+      assertThat(awaitItem().current!!.tempF).isEqualTo(FETCHED_TEMP)
+    }
     assertThat(requests.get()).isEqualTo(1)
   }
 
@@ -210,7 +208,7 @@ class WeatherRepositoryTest {
     writeCache(fetchedAt = START - 10.minutes)
     val repository = repository()
 
-    assertThat(repository.refresh().await()).isEqualTo(OperationState.Succeeded)
+    repository.refresh().awaitSucceeded()
     assertThat(requests.get()).isEqualTo(1)
     assertThat(readCache().fetchedAt).isEqualTo(START.toEpochMilliseconds())
     assertThat(repository.forecast.first()!!.current!!.tempF).isEqualTo(FETCHED_TEMP)
@@ -222,8 +220,8 @@ class WeatherRepositoryTest {
     responseStatus = HttpStatusCode.InternalServerError
     val repository = repository()
 
-    assertThat(repository.refresh().await()).isInstanceOf<OperationState.Failed>()
-    assertThat(failures).hasSize(1)
+    repository.refresh().awaitFailed<Throwable>()
+    data.fetchFailures.assertSingle<Throwable>()
     assertThat(repository.forecast.first()!!.current!!.tempF).isEqualTo(STORED_TEMP)
   }
 
@@ -237,13 +235,15 @@ class WeatherRepositoryTest {
     assertThat(requests.get()).isEqualTo(1)
   }
 
-  private fun TestScope.repository(): WeatherRepository =
-    WeatherRepository(
-      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock),
+  private fun TestScope.repository(): WeatherRepository {
+    data = testDataScope(clock = testClock(START))
+    return WeatherRepository(
+      data,
       weatherStore(appDirs, json, backgroundScope),
       json,
       lazyOf(client),
     )
+  }
 
   private fun writeCache(fetchedAt: Instant) {
     val stored = json.decodeFromString<OpenMeteoResponse>(sampleResponse.replace("72.6", "50.0"))

@@ -56,6 +56,14 @@ interface DataScope {
     maxFetches: Int = Int.MAX_VALUE,
   ): KeyedDataQueries<K, T>
 
+  /** [keyed] with one [freshness] rule for every key. */
+  fun <K : Any, T> keyed(
+    store: (key: K) -> QueryStore<T>,
+    fetch: suspend (key: K) -> T,
+    freshness: Freshness,
+    maxFetches: Int = Int.MAX_VALUE,
+  ): KeyedDataQueries<K, T> = keyed(store, fetch, { freshness }, maxFetches)
+
   /**
    * An outbox called [name], over the store that the store set opens for that name, draining in
    * this scope. Data scopes from one factory may run only one outbox per name at a time, so build
@@ -64,10 +72,28 @@ interface DataScope {
    *
    * [serializer] is required even when the stores are in memory, so changing the store set needs no
    * change where outboxes are built.
+   *
+   * @param send delivers one payload. It runs on this scope's dispatcher, usually
+   *   `Dispatchers.Default`, so a send that blocks moves that part with `withContext` onto a
+   *   dispatcher it was given.
+   * @param revert undoes the optimistic change when a row fails for good or is discarded. It reads
+   *   only the payload, so it works after a restart too.
    */
   fun <E> outbox(
     name: String,
     serializer: KSerializer<E>,
+    send: suspend (E) -> Unit,
+    revert: suspend (E) -> Unit = {},
+    retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
+  ): Outbox<E>
+
+  /**
+   * An outbox over a [store] of its own, like rows in an app table, draining in this scope. Its
+   * [send] and [revert] work as in the outbox by name. This skips the one-outbox-per-name check, so
+   * build one outbox per store, in the one owner that sends these writes.
+   */
+  fun <E> outbox(
+    store: OutboxStore<E>,
     send: suspend (E) -> Unit,
     revert: suspend (E) -> Unit = {},
     retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
@@ -84,14 +110,6 @@ interface DataScope {
 
   companion object
 }
-
-/** [DataScope.keyed] with one [freshness] rule for every key. */
-fun <K : Any, T> DataScope.keyed(
-  store: (key: K) -> QueryStore<T>,
-  fetch: suspend (key: K) -> T,
-  freshness: Freshness,
-  maxFetches: Int = Int.MAX_VALUE,
-): KeyedDataQueries<K, T> = keyed(store, fetch, { freshness }, maxFetches)
 
 /** [DataScope.outbox] with the serializer for a `@Serializable` payload. */
 inline fun <reified E> DataScope.outbox(

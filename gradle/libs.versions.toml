@@ -97,3 +97,5 @@ sqldelight-driver-jdbc = { module = "app.cash.sqldelight:sqlite-driver", version
 sqldelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqldelight" }
 sqldelight-async = { module = "app.cash.sqldelight:async-extensions", version.ref = "sqldelight" }
 sqldelight-coroutines = { module = "app.cash.sqldelight:coroutines-extensions", version.ref = "sqldelight" }
+
+turbine = "app.cash.turbine:turbine:1.2.1"

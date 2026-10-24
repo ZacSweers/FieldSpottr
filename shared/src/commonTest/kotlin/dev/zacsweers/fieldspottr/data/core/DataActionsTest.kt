@@ -3,11 +3,15 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
-import assertk.assertions.isInstanceOf
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
-import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -18,12 +22,20 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
-/** How the runner settles handles, and the guard that fails a wait which can never end. */
+/**
+ * How the runner settles handles and reports failures, and the guard that fails a wait which can
+ * never end.
+ */
 class DataActionsTest {
 
-  private val failures = mutableListOf<Throwable>()
+  private lateinit var data: TestDataScope
 
-  private fun TestScope.actions() = DataActions(backgroundScope) { failures += it }
+  private fun TestScope.actions(): DataActions {
+    if (!::data.isInitialized) {
+      data = testDataScope()
+    }
+    return data.newActions()
+  }
 
   @Test
   fun `a command cancelled while it runs settles cancelled even when its block returns`() =
@@ -45,7 +57,7 @@ class DataActionsTest {
       assertThat(first.await()).isEqualTo(OperationState.Cancelled)
       assertThat(second.await()).isEqualTo(OperationState.Succeeded)
       // Cancellation is not a failure, so the failure handler hears nothing
-      assertThat(failures.isEmpty()).isEqualTo(true)
+      data.actionFailures.assertNone()
     }
 
   @Test
@@ -53,7 +65,8 @@ class DataActionsTest {
     runTest {
       val scope =
         CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-      val actions = DataActions(scope) { failures += it }
+      val data = testDataScopeFactory().create(scope)
+      val actions = data.newActions()
       val started = CompletableDeferred<Unit>()
       val release = CompletableDeferred<Unit>()
 
@@ -65,7 +78,7 @@ class DataActionsTest {
       scope.cancel()
       release.complete(Unit)
       assertThat(command.await()).isEqualTo(OperationState.Cancelled)
-      assertThat(failures.isEmpty()).isEqualTo(true)
+      data.actionFailures.assertNone()
     }
 
   @Test
@@ -78,7 +91,8 @@ class DataActionsTest {
         inner = actions.run(Ordering.Keyed("k")) {}
         inner.await()
       }
-    assertThat(outer.await()).isFailedWithIllegalState()
+    outer.await()
+    outer.assertFailed<IllegalStateException>()
     // The inner command still runs once the outer one is done
     assertThat(inner.await()).isEqualTo(OperationState.Succeeded)
   }
@@ -89,7 +103,8 @@ class DataActionsTest {
     lateinit var self: Operation
 
     self = actions.run { self.await() }
-    assertThat(self.await()).isFailedWithIllegalState()
+    self.await()
+    self.assertFailed<IllegalStateException>()
   }
 
   @Test
@@ -102,7 +117,8 @@ class DataActionsTest {
         val queued = actions.run(Ordering.Keyed("k")) {}
         Operation.all(listOf(other, queued)).await()
       }
-    assertThat(outer.await()).isFailedWithIllegalState()
+    outer.await()
+    outer.assertFailed<IllegalStateException>()
   }
 
   @Test
@@ -116,25 +132,34 @@ class DataActionsTest {
         check(otherRunner.run(Ordering.Keyed("a")) {}.await() == OperationState.Succeeded)
       }
     assertThat(outer.await()).isEqualTo(OperationState.Succeeded)
-    assertThat(failures.isEmpty()).isEqualTo(true)
+    data.actionFailures.assertNone()
+  }
+
+  @Test
+  fun `a data scope runner reports to its own failure handler when given one`() = runTest {
+    val data = testDataScope()
+    val own = TestFailures()
+    val boom = IllegalStateException("boom")
+
+    data.newActions(own).run(Ordering.Serial) { throw boom }.await()
+    data.newActions().run(Ordering.Serial) { throw boom }.await()
+
+    assertThat(own.all).containsExactly(boom)
+    assertThat(data.actionFailures.all).containsExactly(boom)
   }
 
   @Test
   fun `a mutation that awaits a request on its own query fails at once`() = runTest {
     val query =
-      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = FakeClock(START))
-        .create(QueryStore.inMemory(), fetch = { 1 }, freshness = Freshness.staleAfter(1.hours))
+      testDataScope()
+        .query(
+          QueryStore.inMemory(),
+          fetch = { 1 },
+          freshness = Freshness.staleAfter(1.hours),
+        )
 
     val mutation = query.mutate(requireFresh = false) { query.requestFetch(force = false).await() }
-    assertThat(mutation.await()).isFailedWithIllegalState()
-  }
-
-  private fun assertk.Assert<OperationState.Terminal>.isFailedWithIllegalState() = given { state ->
-    assertThat(state).isInstanceOf<OperationState.Failed>()
-    assertThat((state as OperationState.Failed).cause).isInstanceOf<IllegalStateException>()
-  }
-
-  private companion object {
-    val START = Instant.parse("2026-06-10T12:00:00Z")
+    mutation.await()
+    mutation.assertFailed<IllegalStateException>()
   }
 }

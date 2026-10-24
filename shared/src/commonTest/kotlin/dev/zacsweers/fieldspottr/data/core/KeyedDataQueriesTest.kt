@@ -9,6 +9,12 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import dev.zacsweers.fieldspottr.data.core.impl.invoke
+import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -25,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -32,47 +39,34 @@ import kotlinx.coroutines.yield
 
 class KeyedDataQueriesTest {
 
-  private val clock = FakeClock(START)
-  private val failures = mutableListOf<Throwable>()
-  private val fetched = mutableListOf<String>()
   private val failing = mutableSetOf<String>()
-  private var gate = CompletableDeferred(Unit)
-  private var running = 0
-  private var maxRunning = 0
+  // Numbers each key's fetches, like a#2 for a's second, so a test can tell them apart
+  private val fetch: TestKeyedFetch<String, String> = TestKeyedFetch { key ->
+    check(key !in failing) { "$key failed" }
+    "$key#${fetch.callCount(key)}"
+  }
+  private lateinit var data: TestDataScope
 
   private fun TestScope.values(
     store: (String) -> QueryStore<String> = QueryStore.inMemoryByKey(),
     maxFetches: Int = Int.MAX_VALUE,
-  ) =
-    DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock)
-      .keyed(
-        store = store,
-        fetch = { key ->
-          fetched += key
-          running++
-          maxRunning = maxOf(maxRunning, running)
-          try {
-            gate.await()
-            check(key !in failing) { "$key failed" }
-            "$key#${fetched.count { it == key }}"
-          } finally {
-            running--
-          }
-        },
-        freshness = Freshness.staleAfter(1.hours),
-        maxFetches = maxFetches,
-      )
+  ): KeyedDataQueries<String, String> {
+    data = testDataScope(clock = testClock(START))
+    return data.keyed(
+      store = store,
+      fetch = fetch,
+      freshness = Freshness.staleAfter(1.hours),
+      maxFetches = maxFetches,
+    )
+  }
 
   @Test
   fun `freshness can differ per key`() = runTest {
     val values =
-      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock)
+      testDataScope(clock = testClock(START))
         .keyed(
           store = QueryStore.inMemoryByKey<String, String>(),
-          fetch = { key ->
-            fetched += key
-            "$key#${fetched.count { it == key }}"
-          },
+          fetch = fetch,
           freshness = { key ->
             Freshness.staleAfter(
               if (key == "today") {
@@ -86,40 +80,40 @@ class KeyedDataQueriesTest {
     val keys = listOf("today", "later")
 
     values.data(keys).first { loaded -> loaded.values.none { it == null } }
-    clock.now = START + 10.minutes
+    advanceTimeBy(10.minutes)
     values.data(keys).first { loaded -> loaded["today"]?.value == "today#2" }
     // A forced request queues behind later's staleness check, so this counts only its own fetch
     values.requestFetch(listOf("later"), force = true).await()
-    assertThat(fetched.count { it == "today" }).isEqualTo(2)
-    assertThat(fetched.count { it == "later" }).isEqualTo(2)
+    assertThat(fetch.callCount("today")).isEqualTo(2)
+    assertThat(fetch.callCount("later")).isEqualTo(2)
   }
 
   @Test
   fun `collectors of one key share its fetch`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values()
 
     val collectors = List(3) { async { values.data("a").first { it != null } } }
     testScheduler.runCurrent()
-    gate.complete(Unit)
+    fetch.release()
     assertThat(collectors.awaitAll().map { it!!.value }).containsExactly("a#1", "a#1", "a#1")
-    assertThat(fetched).containsExactly("a")
+    assertThat(fetch.calls).containsExactly("a")
   }
 
   @Test
   fun `data over many keys fetches them together and combines them`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values()
 
     val combined = async {
       values.data(listOf("a", "b", "a")).first { loaded -> loaded.values.none { it == null } }
     }
     testScheduler.runCurrent()
-    assertThat(running).isEqualTo(2)
-    gate.complete(Unit)
+    assertThat(fetch.running).isEqualTo(2)
+    fetch.release()
     assertThat(combined.await().mapValues { it.value!!.value })
       .isEqualTo(mapOf("a" to "a#1", "b" to "b#1"))
-    assertThat(fetched).containsExactlyInAnyOrder("a", "b")
+    assertThat(fetch.calls).containsExactlyInAnyOrder("a", "b")
   }
 
   @Test
@@ -132,18 +126,18 @@ class KeyedDataQueriesTest {
 
   @Test
   fun `maxFetches caps the fetches in flight across keys`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values(maxFetches = 1)
 
     val combined = async {
       values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     }
     testScheduler.runCurrent()
-    assertThat(running).isEqualTo(1)
-    gate.complete(Unit)
+    assertThat(fetch.running).isEqualTo(1)
+    fetch.release()
     combined.await()
-    assertThat(maxRunning).isEqualTo(1)
-    assertThat(fetched).hasSize(2)
+    assertThat(fetch.maxRunning).isEqualTo(1)
+    assertThat(fetch.calls).hasSize(2)
   }
 
   @Test
@@ -154,7 +148,7 @@ class KeyedDataQueriesTest {
     backgroundScope.launch { values.data(listOf("a", "b")).collect {} }
     assertThat(values.status(listOf("a", "b")).first { it is FetchStatus.Failed })
       .isInstanceOf<FetchStatus.Failed>()
-    assertThat(failures).hasSize(1)
+    data.fetchFailures.assertSingle<IllegalStateException>()
   }
 
   @Test
@@ -167,7 +161,7 @@ class KeyedDataQueriesTest {
     assertThat(values.data("a").first()!!.value).isEqualTo("a#1")
     // A forced request queues behind that collector's staleness check, so only it fetches here
     values.requestFetch("a", force = true).await()
-    assertThat(fetched).containsExactly("a", "a")
+    assertThat(fetch.calls).containsExactly("a", "a")
   }
 
   @Test
@@ -179,7 +173,7 @@ class KeyedDataQueriesTest {
     // Storing b drops a, and a's collector fetches it again
     values.data("b").first { it != null }
     values.data("a").first { it?.value == "a#2" }
-    assertThat(fetched).containsExactly("a", "b", "a")
+    assertThat(fetch.calls).containsExactly("a", "b", "a")
   }
 
   @Test
@@ -189,9 +183,9 @@ class KeyedDataQueriesTest {
     values.data("a").first { it != null }
     testScheduler.runCurrent()
     assertThat(values.invalidate("a").await()).isEqualTo(OperationState.Succeeded)
-    assertThat(fetched).containsExactly("a")
+    assertThat(fetch.calls).containsExactly("a")
     assertThat(values.data("a").first { it?.value == "a#2" }!!.value).isEqualTo("a#2")
-    assertThat(fetched).containsExactly("a", "a")
+    assertThat(fetch.calls).containsExactly("a", "a")
   }
 
   @Test
@@ -202,23 +196,23 @@ class KeyedDataQueriesTest {
     values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     stores.clear()
     assertThat(values.data("a").first { it != null }!!.value).isEqualTo("a#2")
-    assertThat(fetched.count { it == "a" }).isEqualTo(2)
+    assertThat(fetch.callCount("a")).isEqualTo(2)
   }
 
   @Test
   fun `a key's mutation runs after its fetch in flight`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values()
 
-    val fetch = values.requestFetch("a", force = false)
+    val request = values.requestFetch("a", force = false)
     testScheduler.runCurrent()
     val mutation = values.mutate("a", requireFresh = false) { it.write("edited", START) }
-    gate.complete(Unit)
-    fetch.await()
+    fetch.release()
+    request.await()
     mutation.await()
     // The fetch's older result landed first, so the edit is what stays
     assertThat(values.data("a").first()?.value).isEqualTo("edited")
-    assertThat(fetched).containsExactly("a")
+    assertThat(fetch.calls).containsExactly("a")
   }
 
   @Test
@@ -230,7 +224,7 @@ class KeyedDataQueriesTest {
     assertThat(values.stored("a").first()?.value).isEqualTo("cached")
     testScheduler.runCurrent()
     // Stale, yet nothing fetched, and the key's query is gone once nothing collects it
-    assertThat(fetched).isEmpty()
+    assertThat(fetch.calls).isEmpty()
     assertThat(values.keysHeld).isEqualTo(0)
   }
 
@@ -242,12 +236,12 @@ class KeyedDataQueriesTest {
     testScheduler.runCurrent()
     assertThat(values.requestFetch(listOf("a", "b"), force = false).await())
       .isEqualTo(OperationState.Succeeded)
-    assertThat(fetched).containsExactly("a", "b")
+    assertThat(fetch.calls).containsExactly("a", "b")
 
-    clock.now = START + 2.hours
+    advanceTimeBy(2.hours)
     assertThat(values.requestFetch(listOf("a", "b"), force = false).await())
       .isEqualTo(OperationState.Succeeded)
-    assertThat(fetched).containsExactlyInAnyOrder("a", "b", "a", "b")
+    assertThat(fetch.calls).containsExactlyInAnyOrder("a", "b", "a", "b")
     assertThat(values.requestFetch(emptyList(), force = false).await())
       .isEqualTo(OperationState.Succeeded)
   }
@@ -263,14 +257,14 @@ class KeyedDataQueriesTest {
 
   @Test
   fun `a forced request keeps its key's query until it settles`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values()
 
     val request = values.requestFetch("a", force = true)
     testScheduler.runCurrent()
     // A dropped query would leave a new one here that reports Idle
     assertThat(values.status("a").first()).isEqualTo(FetchStatus.Fetching(forced = true))
-    gate.complete(Unit)
+    fetch.release()
     assertThat(request.await()).isEqualTo(OperationState.Succeeded)
   }
 
@@ -281,7 +275,7 @@ class KeyedDataQueriesTest {
     values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     assertThat(values.requestFetch(listOf("a", "b"), force = true).await())
       .isEqualTo(OperationState.Succeeded)
-    assertThat(fetched).containsExactlyInAnyOrder("a", "b", "a", "b")
+    assertThat(fetch.calls).containsExactlyInAnyOrder("a", "b", "a", "b")
 
     failing += "b"
     assertThat(values.requestFetch(listOf("a", "b"), force = true).await())
@@ -295,7 +289,7 @@ class KeyedDataQueriesTest {
 
   @Test
   fun `a key is dropped once the fetch its last collector left settles`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val stores = QueryStore.inMemoryByKey<String, String>()
     val values = values(store = stores)
 
@@ -305,7 +299,7 @@ class KeyedDataQueriesTest {
     testScheduler.runCurrent()
     // The fetch still runs, so the key keeps its query and its ordering
     assertThat(values.keysHeld).isEqualTo(1)
-    gate.complete(Unit)
+    fetch.release()
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(0)
     // Dropping the query leaves the data in the store
@@ -320,31 +314,31 @@ class KeyedDataQueriesTest {
     val collector = backgroundScope.launch { values.data("a").collect {} }
     stores("a").data.first { it != null }
     testScheduler.runCurrent()
-    gate = CompletableDeferred()
+    fetch.hold()
     // An emptied store makes the collector fetch again, with no keyed call of its own
     stores("a").clear()
     testScheduler.runCurrent()
-    assertThat(fetched).containsExactly("a", "a")
+    assertThat(fetch.calls).containsExactly("a", "a")
     collector.cancel()
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(1)
-    gate.complete(Unit)
+    fetch.release()
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(0)
   }
 
   @Test
   fun `a key is dropped once its explicit operations settle`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values()
 
-    val fetch = values.requestFetch("a", force = true)
+    val request = values.requestFetch("a", force = true)
     val invalidate = values.invalidate("a")
     val mutation = values.mutate("a", requireFresh = false) { it.write("edited", START) }
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(1)
-    gate.complete(Unit)
-    assertThat(fetch.await()).isEqualTo(OperationState.Succeeded)
+    fetch.release()
+    assertThat(request.await()).isEqualTo(OperationState.Succeeded)
     assertThat(invalidate.await()).isEqualTo(OperationState.Succeeded)
     assertThat(mutation.await()).isEqualTo(OperationState.Succeeded)
     testScheduler.runCurrent()
@@ -353,7 +347,7 @@ class KeyedDataQueriesTest {
 
   @Test
   fun `a key is dropped once cancelled and superseded fetches settle`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val values = values()
 
     val running = values.requestFetch("a", force = true)
@@ -368,7 +362,7 @@ class KeyedDataQueriesTest {
     assertThat(running.state.value).isEqualTo(OperationState.Cancelled)
     assertThat(queued.state.value).isEqualTo(OperationState.Cancelled)
     assertThat(values.keysHeld).isEqualTo(1)
-    gate.complete(Unit)
+    fetch.release()
     assertThat(last.await()).isEqualTo(OperationState.Succeeded)
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(0)
@@ -386,26 +380,28 @@ class KeyedDataQueriesTest {
       }
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(1)
-    val fetch = values.requestFetch("a", force = false)
+    val request = values.requestFetch("a", force = false)
     testScheduler.runCurrent()
     // The same query, so the request waits for the mutation instead of fetching beside it
-    assertThat(fetched).isEmpty()
+    assertThat(fetch.calls).isEmpty()
     release.complete(Unit)
     assertThat(mutation.await()).isEqualTo(OperationState.Succeeded)
-    assertThat(fetch.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(request.await()).isEqualTo(OperationState.Succeeded)
     // The mutation's write is fresh, so the request found nothing to fetch
-    assertThat(fetched).isEmpty()
+    assertThat(fetch.calls).isEmpty()
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(0)
   }
 
   @Test
   fun `keys drop once concurrent work on other threads settles`() = runTest {
+    val clock = testClock(START)
     withContext(Dispatchers.Default) {
       val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
       try {
         val values =
-          DataQuery.Factory(scope, onFailure = {}, clock = clock)
+          DataScope.Factory(onFailure = {}, clock = clock)
+            .create(scope)
             .keyed(
               store = QueryStore.inMemoryByKey<Int, Int>(),
               fetch = { key ->

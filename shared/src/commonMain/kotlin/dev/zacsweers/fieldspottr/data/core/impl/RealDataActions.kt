@@ -29,15 +29,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * A runner whose commands run in [scope] and whose failures go to [onFailure]. Pass a scope on
- * `Dispatchers.Default`, as [DataActions] explains.
- */
-operator fun DataActions.Companion.invoke(
-  scope: CoroutineScope,
-  onFailure: (Throwable) -> Unit,
-): DataActions = RealDataActions(scope, onFailure)
-
-/**
  * [DataActions] over a map from each key to its newest entry. Each entry links to the one ahead of
  * it, so a new command finds its turn by walking back along its key.
  */

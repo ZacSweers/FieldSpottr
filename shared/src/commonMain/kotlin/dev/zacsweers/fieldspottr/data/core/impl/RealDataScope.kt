@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.KeyedDataQueries
 import dev.zacsweers.fieldspottr.data.core.Outbox
+import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
@@ -38,20 +39,6 @@ operator fun DataScope.Factory.Companion.invoke(
   stores: OutboxStores = InMemoryOutboxStores(),
   clock: Clock = Clock.System,
 ): DataScope.Factory = RealDataScopeFactory(onFailure, onActionFailure, online, stores, clock)
-
-/**
- * A data scope over [scope] with a factory of its own, for tests and for owners outside a graph.
- * The parameters are those of [DataScope.Factory.Companion.invoke]. The one-outbox-per-name check
- * covers only this data scope, so owners that share a durable store set share a factory instead.
- */
-operator fun DataScope.Companion.invoke(
-  scope: CoroutineScope,
-  onFailure: (Throwable) -> Unit,
-  onActionFailure: (Throwable) -> Unit = onFailure,
-  online: StateFlow<Boolean> = MutableStateFlow(true),
-  stores: OutboxStores = InMemoryOutboxStores(),
-  clock: Clock = Clock.System,
-): DataScope = DataScope.Factory(onFailure, onActionFailure, online, stores, clock).create(scope)
 
 /**
  * The settings every data scope from one factory shares, and the outbox names they have running.
@@ -145,17 +132,25 @@ private class RealDataScope(
     // Opened first, so a store that fails to open leaves the name free. Opening again is harmless.
     val store = factory.stores.open(name, serializer)
     factory.claimOutbox(name, scope)
-    return RealOutbox(
+    return outbox(store, send, revert, retry)
+  }
+
+  override fun <E> outbox(
+    store: OutboxStore<E>,
+    send: suspend (E) -> Unit,
+    revert: suspend (E) -> Unit,
+    retry: RetryPolicy,
+  ): Outbox<E> =
+    RealOutbox(
       scope = scope,
       actions = RealDataActions(scope, factory.onActionFailure),
       send = send,
       revert = revert,
       store = store,
-      retry = retry,
+      policy = retry,
       online = factory.online,
       clock = factory.clock,
     )
-  }
 
   private fun <T> newQuery(store: QueryStore<T>, fetch: suspend () -> T, freshness: Freshness) =
     RealDataQuery(RealDataActions(scope, factory.onFailure), store, fetch, freshness, factory.clock)

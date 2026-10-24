@@ -4,9 +4,12 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
-import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -24,32 +27,22 @@ import kotlinx.coroutines.withContext
 
 class DataQueryTest {
 
-  private val clock = FakeClock(START)
   private val stored = MutableStateFlow<Fetched<Int>?>(null)
   // No invalidate, so these tests cover the default that rewrites the value with a stale time
   private val store =
     QueryStore.of(stored, clear = { stored.value = null }) { value, fetchedAt ->
       stored.value = Fetched(value, fetchedAt)
     }
-  private val failures = mutableListOf<Throwable>()
-  private var fetches = 0
-  private var fetchFails = false
-  private var gate = CompletableDeferred(Unit)
+  // One more than what is stored, so each fetch stores a value of its own
+  private val fetch = TestFetch { (stored.value?.value ?: 0) + 1 }
+  private lateinit var data: TestDataScope
 
   private fun TestScope.dataQuery(
     freshness: Freshness = Freshness.staleAfter(1.hours)
-  ): DataQuery<Int> =
-    DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock)
-      .create(
-        store = store,
-        fetch = {
-          fetches++
-          gate.await()
-          check(!fetchFails) { "fetch failed" }
-          (stored.value?.value ?: 0) + 1
-        },
-        freshness = freshness,
-      )
+  ): DataQuery<Int> {
+    data = testDataScope(clock = testClock(START))
+    return data.query(store = store, fetch = fetch, freshness = freshness)
+  }
 
   @Test
   fun `stored fetch time inside the window skips the fetch`() = runTest {
@@ -59,7 +52,7 @@ class DataQueryTest {
     assertThat(query.data.values().first()).isEqualTo(1)
     // Joins the check the collector started. advanceUntilIdle() skips backgroundScope work.
     query.requestFetch(force = false).await()
-    assertThat(fetches).isEqualTo(0)
+    assertThat(fetch.callCount).isEqualTo(0)
   }
 
   @Test
@@ -68,7 +61,7 @@ class DataQueryTest {
     val query = dataQuery()
 
     assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
@@ -77,7 +70,7 @@ class DataQueryTest {
     val query = dataQuery()
 
     query.data.first { it?.value == 2 }
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
@@ -91,7 +84,7 @@ class DataQueryTest {
     stored.value = null
     // Waits on the store itself, so only the running collector can have started the fetch
     stored.first { it != null }
-    assertThat(fetches).isEqualTo(2)
+    assertThat(fetch.callCount).isEqualTo(2)
   }
 
   @Test
@@ -110,24 +103,24 @@ class DataQueryTest {
 
     query.data.first()
     query.requestFetch(force = false).await()
-    assertThat(fetches).isEqualTo(0)
+    assertThat(fetch.callCount).isEqualTo(0)
     assertThat(checkedAt).isEqualTo(START)
 
     window = 5.minutes
     query.data.first { it?.value == 2 }
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
   fun `collectors join the fetch in flight`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = dataQuery()
 
     val collectors = List(2) { async { query.data.first { it?.value == 1 } } }
     testScheduler.runCurrent()
-    gate.complete(Unit)
+    fetch.release()
     collectors.awaitAll()
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
@@ -136,18 +129,18 @@ class DataQueryTest {
     val query = dataQuery()
 
     assertThat(query.requestFetch(force = true).await()).isEqualTo(OperationState.Succeeded)
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
     assertThat(stored.value).isEqualTo(Fetched(2, START))
   }
 
   @Test
   fun `failed fetch fails the handle and reports the cause`() = runTest {
-    fetchFails = true
+    fetch.respond = { error("fetch failed") }
     val query = dataQuery()
 
     assertThat(query.requestFetch(force = true).await()).isInstanceOf<OperationState.Failed>()
     assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
-    assertThat(failures).hasSize(1)
+    data.fetchFailures.assertSingle<IllegalStateException>()
     assertThat(stored.value).isEqualTo(null)
   }
 
@@ -157,22 +150,22 @@ class DataQueryTest {
     val query = dataQuery()
 
     assertThat(query.invalidate().await()).isEqualTo(OperationState.Succeeded)
-    assertThat(fetches).isEqualTo(0)
+    assertThat(fetch.callCount).isEqualTo(0)
     assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
     assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
   fun `invalidate lands after a fetch already in flight`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = dataQuery()
 
-    val fetch = query.requestFetch(force = false)
+    val request = query.requestFetch(force = false)
     testScheduler.runCurrent()
     val invalidate = query.invalidate()
-    gate.complete(Unit)
-    fetch.await()
+    fetch.release()
+    request.await()
     invalidate.await()
     // The fetch's write came first, so the value it stored is the one marked stale
     assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
@@ -180,29 +173,29 @@ class DataQueryTest {
 
   @Test
   fun `forced requests made together share one fetch`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = dataQuery()
 
     val first = query.requestFetch(force = true)
     testScheduler.runCurrent()
     // Like a second pull to refresh while the first one still spins
     val second = query.requestFetch(force = true)
-    gate.complete(Unit)
+    fetch.release()
     assertThat(first.await()).isEqualTo(OperationState.Succeeded)
     assertThat(second.await()).isEqualTo(OperationState.Succeeded)
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
   fun `a forced request after a mutation starts its own fetch`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = dataQuery()
 
     val before = query.requestFetch(force = true)
     testScheduler.runCurrent()
     query.mutate(requireFresh = false) { it.write(100, START) }
     val after = query.requestFetch(force = true)
-    gate.complete(Unit)
+    fetch.release()
     // The fetch from before the write is cancelled, and the one after it lands last
     assertThat(before.await()).isEqualTo(OperationState.Cancelled)
     assertThat(after.await()).isEqualTo(OperationState.Succeeded)
@@ -217,23 +210,23 @@ class DataQueryTest {
     assertThat(query.stored.first()).isEqualTo(Fetched(1, START - 2.hours))
     testScheduler.runCurrent()
     // Stale, yet nothing fetched
-    assertThat(fetches).isEqualTo(0)
+    assertThat(fetch.callCount).isEqualTo(0)
   }
 
   @Test
   fun `a request after invalidate fetches again`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = dataQuery()
 
     val first = query.requestFetch(force = false)
     testScheduler.runCurrent()
     query.invalidate()
     val second = query.requestFetch(force = false)
-    gate.complete(Unit)
+    fetch.release()
     first.await()
     second.await()
     // The second request queued behind the invalidation instead of joining the first fetch
-    assertThat(fetches).isEqualTo(2)
+    assertThat(fetch.callCount).isEqualTo(2)
     assertThat(stored.value).isEqualTo(Fetched(2, START))
   }
 
@@ -250,8 +243,8 @@ class DataQueryTest {
     val release = CompletableDeferred<Unit>()
     var calls = 0
     val query =
-      DataQuery.Factory(backgroundScope, onFailure = { failures += it }, clock = clock)
-        .create(
+      testDataScope(clock = testClock(START))
+        .query(
           store = store,
           fetch = {
             calls++
@@ -279,20 +272,20 @@ class DataQueryTest {
 
   @Test
   fun `a mutation waits for the fetch in flight and later requests wait for it`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = dataQuery()
 
-    val fetch = query.requestFetch(force = false)
+    val request = query.requestFetch(force = false)
     testScheduler.runCurrent()
     val mutation = query.mutate(requireFresh = false) { it.write(100, START) }
     val later = query.requestFetch(force = false)
-    gate.complete(Unit)
-    fetch.await()
+    fetch.release()
+    request.await()
     mutation.await()
     later.await()
     // The fetch's older result landed first, and the later request found the mutation's write fresh
     assertThat(stored.value).isEqualTo(Fetched(100, START))
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
@@ -303,15 +296,15 @@ class DataQueryTest {
 
     query.mutate(requireFresh = true) { seen = it.data.first()?.value }.await()
     assertThat(seen).isEqualTo(2)
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
     // Fresh now, so this one skips the fetch
     query.mutate(requireFresh = true) { seen = it.data.first()?.value }.await()
-    assertThat(fetches).isEqualTo(1)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
   fun `a failed fetch before a mutation fails it and skips the block`() = runTest {
-    fetchFails = true
+    fetch.respond = { error("fetch failed") }
     val query = dataQuery()
     var ran = false
 
@@ -348,15 +341,15 @@ class DataQueryTest {
 
     assertThat(Operation.all(emptyList()).await()).isEqualTo(OperationState.Succeeded)
     // Holds the first forced fetch. After the invalidation, the second cancels it mid-fetch.
-    gate = CompletableDeferred()
+    fetch.hold()
     val first = query.requestFetch(force = true)
     testScheduler.runCurrent()
     query.invalidate()
     val both = Operation.all(listOf(first, query.requestFetch(force = true)))
     testScheduler.runCurrent()
-    gate.complete(Unit)
+    fetch.release()
     assertThat(both.await()).isEqualTo(OperationState.Cancelled)
-    fetchFails = true
+    fetch.respond = { error("fetch failed") }
     assertThat(Operation.all(listOf(query.requestFetch(force = true))).await())
       .isInstanceOf<OperationState.Failed>()
   }

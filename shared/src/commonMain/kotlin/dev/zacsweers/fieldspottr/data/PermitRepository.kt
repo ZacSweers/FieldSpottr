@@ -21,7 +21,6 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import dev.zacsweers.fieldspottr.data.core.keyed
 import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.hashOf

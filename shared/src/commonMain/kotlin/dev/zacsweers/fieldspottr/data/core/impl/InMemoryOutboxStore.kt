@@ -30,7 +30,7 @@ import kotlinx.serialization.KSerializer
  * Rows in memory, lost with the process. A settled row stays observable for [keepSettledFor], so a
  * handle that re-attaches soon after still sees its outcome, and the next write prunes it.
  */
-fun <E> inMemoryOutboxStore(
+internal fun <E> inMemoryOutboxStore(
   keepSettledFor: Duration = 1.minutes,
   time: TimeSource = TimeSource.Monotonic,
 ): OutboxStore<E> = InMemoryOutboxStore(keepSettledFor, time)

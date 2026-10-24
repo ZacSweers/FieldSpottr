@@ -6,8 +6,18 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isSameInstanceAs
+import dev.zacsweers.fieldspottr.data.core.impl.inMemoryOutboxStore
+import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
@@ -28,15 +38,67 @@ class OutboxStoresTest {
 
   @Test
   fun `in memory stores never encode a payload`() = runTest {
-    val sent = mutableListOf<String>()
-    val failures = mutableListOf<Throwable>()
-    val outbox =
-      Outbox.Factory(backgroundScope, onFailure = { failures += it })
-        .create("notes", UnencodableSerializer, send = { sent += it })
+    val send = TestSend<String>()
+    val data = testDataScope()
+    val outbox = data.outbox("notes", UnencodableSerializer, send = send)
 
     assertThat(outbox.enqueue("a").await()).isEqualTo(OperationState.Succeeded)
-    assertThat(sent).containsExactly("a")
-    assertThat(failures).isEmpty()
+    assertThat(send.sent).containsExactly("a")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a second running outbox on one name fails`() = runTest {
+    val data = testDataScope()
+    data.outbox<String>("notes", send = {})
+
+    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send = {}) }
+  }
+
+  @Test
+  fun `an outbox over a store of its own sends the rows already in it`() = runTest {
+    val send = TestSend<String>()
+    val data = testDataScope()
+    val store = inMemoryOutboxStore<String>()
+    store.insert("k", "a")
+
+    val outbox = data.outbox(store, send = send)
+
+    outbox.entries.first { it.isEmpty() }
+    assertThat(send.sent).containsExactly("a")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an outbox built again after its scope ends sends the rows it left`() = runTest {
+    val send = TestSend<String>()
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val first = scopes.create(owner).outbox<String>("notes", send = send)
+    first.enqueue("a")
+    // Offline, so the row waits
+    first.entries.first { it.isNotEmpty() }
+    owner.coroutineContext.job.cancelAndJoin()
+
+    val second = scopes.create(backgroundScope).outbox<String>("notes", send = send)
+    scopes.online.value = true
+
+    second.entries.first { it.isEmpty() }
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
+  fun `DataStore stores give one store per name`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+
+    val store = stores.open("notes", String.serializer())
+    store.insert("k", "a")
+
+    assertThat(stores.open("notes", String.serializer())).isSameInstanceAs(store)
   }
 
   @Test

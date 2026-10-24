@@ -49,7 +49,7 @@ data class OutboxLog(val rows: List<Row> = emptyList()) {
   )
 }
 
-object OutboxLogSerializer : OkioSerializer<OutboxLog> {
+private object OutboxLogSerializer : OkioSerializer<OutboxLog> {
   override val defaultValue = OutboxLog()
 
   override suspend fun readFrom(source: BufferedSource): OutboxLog =

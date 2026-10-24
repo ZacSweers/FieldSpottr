@@ -2,51 +2,41 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
+import app.cash.turbine.test
 import assertk.assertThat
-import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Instant
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 
 class InMemoryQueryStoreTest {
 
-  private val clock = FakeClock(START)
-  private var fetches = 0
-  private var gate = CompletableDeferred(Unit)
+  private val fetch = TestFetch { "fetched" }
 
   private fun TestScope.query(store: QueryStore<String>): DataQuery<String> =
-    DataQuery.Factory(backgroundScope, onFailure = {}, clock = clock)
-      .create(
-        store = store,
-        fetch = {
-          fetches++
-          gate.await()
-          "fetched"
-        },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+    testDataScope(clock = testClock(START))
+      .query(store = store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
 
   @Test
   fun `a stale seed shows at once and still fetches`() = runTest {
     val store = QueryStore.inMemory(Fetched("cached", QueryStore.INVALIDATED))
     // Readable without collecting
     assertThat(store.data.value?.value).isEqualTo("cached")
-    gate = CompletableDeferred()
+    fetch.hold()
     val query = query(store)
-    val values = mutableListOf<String?>()
 
-    backgroundScope.launch { query.data.values().collect { values += it } }
-    testScheduler.runCurrent()
-    // The seed is on screen while the fetch waits
-    assertThat(values).containsExactly("cached")
-    gate.complete(Unit)
-    query.data.first { it?.value == "fetched" }
+    query.data.values().test {
+      // The seed is on screen while the fetch waits
+      assertThat(awaitItem()).isEqualTo("cached")
+      fetch.release()
+      assertThat(awaitItem()).isEqualTo("fetched")
+    }
     assertThat(store.data.value).isEqualTo(Fetched("fetched", START))
   }
 
@@ -60,20 +50,20 @@ class InMemoryQueryStoreTest {
     assertThat(store.data.value).isEqualTo(Fetched("b", START))
     assertThat(query.data.first()?.value).isEqualTo("b")
     // Fresh the whole time, so nothing fetched
-    assertThat(fetches).isEqualTo(0)
+    assertThat(fetch.callCount).isEqualTo(0)
   }
 
   @Test
   fun `a fetch already in flight replaces a local edit`() = runTest {
-    gate = CompletableDeferred()
+    fetch.hold()
     val store = QueryStore.inMemory<String>()
     val query = query(store)
 
-    val fetch = query.requestFetch(force = true)
+    val request = query.requestFetch(force = true)
     testScheduler.runCurrent()
     store.update { Fetched("local", START) }
-    gate.complete(Unit)
-    fetch.await()
+    fetch.release()
+    request.await()
     assertThat(store.data.value).isEqualTo(Fetched("fetched", START))
   }
 
@@ -88,6 +78,28 @@ class InMemoryQueryStoreTest {
     // Nothing to mark stale once empty
     store.invalidate()
     assertThat(store.data.value).isEqualTo(null)
+  }
+
+  @Test
+  fun `stores for one key share its value and read it without collecting`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>()
+
+    stores("a").write("a", START)
+    assertThat(stores("a").data.value).isEqualTo(Fetched("a", START))
+    stores("a").update { it?.copy(value = "edited") }
+    assertThat(stores("a").data.value?.value).isEqualTo("edited")
+    assertThat(stores("b").data.value).isEqualTo(null)
+  }
+
+  @Test
+  fun `an edit that stores a key's value counts toward the cap`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
+    stores("a").write("a", START)
+
+    stores("b").update { Fetched("b", START + 1.hours) }
+    // a was fetched longest ago, so storing b drops it
+    assertThat(stores("a").data.value).isEqualTo(null)
+    assertThat(stores("b").data.value?.value).isEqualTo("b")
   }
 
   private companion object {
