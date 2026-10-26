@@ -10,7 +10,9 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.InMemoryOutboxStores
 import dev.zacsweers.fieldspottr.data.core.impl.inMemoryOutboxStore
+import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
@@ -23,6 +25,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -39,6 +42,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.KSerializer
 
 class OutboxTest {
 
@@ -474,6 +478,154 @@ class OutboxTest {
     a.assertPending()
     c.assertPending()
     assertThat(send.attempts).containsExactly("a")
+  }
+
+  @Test
+  fun `a drain whose read of the head fails tries again on its own`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insert("k", "a")
+    var reads = 0
+    // The first read is the watcher's, and the second is the drain's read of the head
+    val flaky =
+      object : OutboxStore<String> by rows {
+        override fun entries(): Flow<List<OutboxEntry<String>>> = flow {
+          if (++reads == 2) {
+            throw IllegalStateException("Disk busy")
+          }
+          emitAll(rows.entries())
+        }
+      }
+
+    assertDrainRecovers(flaky, id)
+  }
+
+  @Test
+  fun `a drain whose claim of the head fails tries again on its own`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insert("k", "a")
+    var failClaim = true
+    val flaky =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          if (failClaim && entry.status == OutboxStatus.Sending) {
+            failClaim = false
+            throw IllegalStateException("Disk busy")
+          }
+          return rows.update(entry, expected)
+        }
+      }
+
+    assertDrainRecovers(flaky, id)
+  }
+
+  /** The drain fails once with the watcher healthy, so no new row or reconnect starts another. */
+  private fun TestScope.assertDrainRecovers(rows: OutboxStore<String>, id: EntryId) {
+    val data = testDataScope()
+    val handle = data.outbox(rows, send = send).operation(id)
+    testScheduler.runCurrent()
+    data.actionFailures.assertSingle<IllegalStateException>()
+    handle.assertPending()
+
+    testScheduler.advanceTimeBy(1.minutes)
+    testScheduler.runCurrent()
+    handle.assertSucceeded()
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
+  fun `an enqueue and a reconnect send while the watcher pauses after a store failure`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    rows.insert("stored", "a")
+    var failNextRead = true
+    val flaky =
+      object : OutboxStore<String> by rows {
+        override fun entries(): Flow<List<OutboxEntry<String>>> = flow {
+          if (failNextRead) {
+            failNextRead = false
+            throw IllegalStateException("Disk busy")
+          }
+          emitAll(rows.entries())
+        }
+      }
+    val data = testDataScope()
+    val outbox = data.outbox(flaky, send = send)
+    testScheduler.runCurrent()
+    data.actionFailures.assertSingle<IllegalStateException>()
+
+    // No virtual time passes, so the watcher's pause has not ended
+    outbox.enqueue("b", key = "new")
+    testScheduler.runCurrent()
+    assertThat(send.sent).containsExactly("b")
+    data.online.value = false
+    testScheduler.runCurrent()
+    data.online.value = true
+    testScheduler.runCurrent()
+
+    assertThat(send.sent).containsExactly("b", "a")
+  }
+
+  @Test
+  fun `a reconnect sends a row whose saved deadline passed while offline`() = runTest {
+    send.failTransiently()
+    val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    val handle = outbox.enqueue("a")
+    testScheduler.runCurrent()
+    data.online.value = false
+    testScheduler.runCurrent()
+
+    // Wall time passes the deadline while the timer still waits, like while the device sleeps
+    data.clock.shift(10.minutes)
+    data.online.value = true
+    testScheduler.runCurrent()
+
+    handle.assertSucceeded()
+    assertThat(send.attempts("a")).isEqualTo(2)
+  }
+
+  @Test
+  fun `a clock moved back keeps a backing-off row waiting for its deadline`() = runTest {
+    send.failTransiently()
+    val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    val handle = outbox.enqueue("a")
+    testScheduler.runCurrent()
+
+    data.clock.shift(-4.minutes)
+    testScheduler.advanceTimeBy(5.minutes)
+    testScheduler.runCurrent()
+    assertThat(send.attempts("a")).isEqualTo(1)
+
+    testScheduler.advanceTimeBy(4.minutes)
+    testScheduler.runCurrent()
+    handle.assertSucceeded()
+  }
+
+  @Test
+  fun `an outbox that fails to build leaves its name to the same owner`() = runTest {
+    val rows = InMemoryOutboxStores()
+    var failToOpen = true
+    val stores =
+      object : OutboxStores {
+        override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+          val opened = rows.open(name, serializer)
+          return object : OutboxStore<E> by opened {
+            override fun entries(): Flow<List<OutboxEntry<E>>> {
+              if (failToOpen) {
+                failToOpen = false
+                throw IllegalStateException("Rows did not open")
+              }
+              return opened.entries()
+            }
+          }
+        }
+      }
+    val data = DataScope.Factory(onFailure = {}, stores = stores).create(backgroundScope)
+
+    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send) }
+    data.outbox<String>("notes", send).enqueue("a").awaitSucceeded()
+
+    assertThat(send.sent).containsExactly("a")
+    // Once built, it still keeps the name from a second outbox
+    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send) }
   }
 
   private companion object {

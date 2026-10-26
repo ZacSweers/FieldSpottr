@@ -22,7 +22,9 @@ import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
+import kotlin.concurrent.atomics.updateAndFetch
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -35,6 +37,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,14 +45,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** [Outbox] over a store's rows, with one drainer per key on its runner. */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
@@ -73,6 +79,9 @@ internal class RealOutbox<E>(
   // them even when their view of the row falls behind. Compare-and-set only. Nothing observes it.
   private val following =
     AtomicReference(persistentHashMapOf<EntryId, PersistentSet<MutableStateFlow<OperationState>>>())
+  // How long each key whose drain failed waits before its next try, doubling while it keeps
+  // failing. Cleared by a drain that finishes. Compare-and-set only.
+  private val failing = AtomicReference(persistentMapOf<String, Duration>())
 
   override val entries: Flow<List<OutboxEntry<E>>> = store.entries()
 
@@ -82,10 +91,11 @@ internal class RealOutbox<E>(
 
   /**
    * Starts a drain for each key with a sendable row while online. A store that fails to report its
-   * rows is reported and watched again after a pause, so rows already stored still send.
+   * rows is reported and watched again after a pause, or at once on reconnect, so rows already
+   * stored still send.
    */
   private suspend fun watch() {
-    var pause = WATCH_RETRY_FIRST
+    var pause = STORE_RETRY_FIRST
     while (true) {
       runCatchingCancellable {
           combine(online, store.entries()) { up, rows ->
@@ -96,13 +106,14 @@ internal class RealOutbox<E>(
               }
             }
             .collect { keys ->
-              pause = WATCH_RETRY_FIRST
+              pause = STORE_RETRY_FIRST
               keys.forEach(::drain)
             }
         }
         .onFailure(onFailure)
-      delay(pause)
-      pause = minOf(pause * 2, WATCH_RETRY_MAX)
+      // Rows can send again from a reconnect on, so it ends the pause early
+      withTimeoutOrNull(pause) { online.dropWhile { it }.first { it } }
+      pause = minOf(pause * 2, STORE_RETRY_MAX)
     }
   }
 
@@ -115,6 +126,8 @@ internal class RealOutbox<E>(
       withContext(NonCancellable) {
         attempt.started(rollbackOnFailure({ revert(payload) }) { store.insert(rowKey, payload) })
       }
+      // Without waiting for the watcher, which may be pausing after a store failure
+      drain(rowKey)
     }
   }
 
@@ -179,87 +192,128 @@ internal class RealOutbox<E>(
 
   /**
    * One drainer per key. Sends the oldest sendable row until none is left, the network drops or a
-   * send fails. Repeated calls coalesce.
+   * send fails. Repeated calls coalesce. A drain that throws, like on a store failure, is reported
+   * and tried again after a pause, since no new row or reconnect may come to start another.
    */
   private fun drain(key: String): Operation =
     actions.run(Ordering.Keyed(Drain(this, key), OnPrevious.Supersede)) {
-      while (online.value) {
-        val head =
-          store.entries().first().firstOrNull { it.key == key && it.status.isSendable } ?: break
-        // The read suspends, so the network may have dropped meanwhile
-        if (!online.value) {
+      try {
+        sendQueued(key)
+      } catch (t: Throwable) {
+        // Not when the owner stopped
+        if (currentCoroutineContext().isActive) {
+          drainLater(key)
+        }
+        throw t
+      }
+      failing.update { it.removing(key) }
+    }
+
+  /** Drains [key] again after a pause that doubles while its drains keep failing. */
+  private fun drainLater(key: String) {
+    val pause =
+      failing
+        .updateAndFetch { current ->
+          val last = current[key]
+          current.putting(
+            key,
+            if (last == null) {
+              STORE_RETRY_FIRST
+            } else {
+              minOf(last * 2, STORE_RETRY_MAX)
+            },
+          )
+        }
+        .getValue(key)
+    scope.launch {
+      delay(pause)
+      drain(key)
+    }
+  }
+
+  /**
+   * Sends [key]'s oldest sendable row until none is left, the key backs off or the network drops.
+   */
+  private suspend fun sendQueued(key: String) {
+    while (online.value) {
+      val head =
+        store.entries().first().firstOrNull { it.key == key && it.status.isSendable } ?: break
+      // The read suspends, so the network may have dropped meanwhile
+      if (!online.value) {
+        break
+      }
+      // A timer holds the key only while its row is still the head with the same deadline. One
+      // left over from a row that was discarded or retried meanwhile is dropped. The timer only
+      // wakes the key, and wall time can pass the deadline first, like while the device sleeps,
+      // so the clock decides.
+      val timer = waking.load()[key]
+      if (timer != null && timer.job.isActive) {
+        if (timer.waitsFor(head) && timer.deadline > clock.now()) {
           break
         }
-        // A timer holds the key only while its row is still the head with the same deadline. One
-        // left over from a row that was discarded or retried meanwhile is dropped.
-        val timer = waking.load()[key]
-        if (timer != null && timer.job.isActive) {
-          if (timer.waitsFor(head)) {
-            break
+        timer.job.cancel()
+      }
+      val retryAt = head.retryAt
+      // Still backing off, perhaps since before a restart
+      if (retryAt != null && retryAt > clock.now()) {
+        backOff(key, head.id, retryAt)
+        break
+      }
+      // Discarded first
+      if (!store.update(head.copy(status = OutboxStatus.Sending), expected = head.status)) {
+        continue
+      }
+      // So does the claim. A send started offline would spend an attempt for nothing.
+      if (!online.value) {
+        store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
+        break
+      }
+      val failure = runCatchingCancellable { send(head.payload) }.exceptionOrNull()
+      val attempts = head.attempts + 1
+      when {
+        failure == null ->
+          if (
+            store.update(head.copy(status = OutboxStatus.Sent), expected = OutboxStatus.Sending)
+          ) {
+            settleFollowers(head.id, OperationState.Succeeded)
           }
-          timer.job.cancel()
-        }
-        val retryAt = head.retryAt
-        // Still backing off, perhaps since before a restart
-        if (retryAt != null && retryAt > clock.now()) {
-          backOff(key, head.id, retryAt)
-          break
-        }
-        // Discarded first
-        if (!store.update(head.copy(status = OutboxStatus.Sending), expected = head.status)) {
-          continue
-        }
-        // So does the claim. A send started offline would spend an attempt for nothing.
-        if (!online.value) {
-          store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
-          break
-        }
-        val failure = runCatchingCancellable { send(head.payload) }.exceptionOrNull()
-        val attempts = head.attempts + 1
-        when {
-          failure == null ->
-            if (
-              store.update(head.copy(status = OutboxStatus.Sent), expected = OutboxStatus.Sending)
-            ) {
-              settleFollowers(head.id, OperationState.Succeeded)
-            }
-          // Poison pill: fail it, undo its local change, and let the key move on
-          failure is PermanentFailure || attempts >= policy.maxAttempts -> {
-            val status = OutboxStatus.Failed(failure.toString())
-            // The row marked reverted promises an undo attempt, so the write and that attempt
-            // finish together even if the owner stops meanwhile
-            withContext(NonCancellable) {
-              val failed =
-                store.update(
-                  head.copy(status = status, attempts = attempts, reverted = true),
-                  expected = OutboxStatus.Sending,
-                )
-              if (failed) {
-                settleFollowers(head.id, OperationState.Failed(PermanentFailure(status.cause)))
-                // At most once per row. A throw ends this drain and reaches the failure handler.
-                if (!head.reverted) {
-                  revert(head.payload)
-                }
+        // Poison pill: fail it, undo its local change, and let the key move on
+        failure is PermanentFailure || attempts >= policy.maxAttempts -> {
+          val status = OutboxStatus.Failed(failure.toString())
+          // The row marked reverted promises an undo attempt, so the write and that attempt
+          // finish together even if the owner stops meanwhile
+          withContext(NonCancellable) {
+            val failed =
+              store.update(
+                head.copy(status = status, attempts = attempts, reverted = true),
+                expected = OutboxStatus.Sending,
+              )
+            if (failed) {
+              settleFollowers(head.id, OperationState.Failed(PermanentFailure(status.cause)))
+              // At most once per row. A throw ends this drain and reaches the failure handler.
+              if (!head.reverted) {
+                revert(head.payload)
               }
             }
           }
-          else -> {
-            val retryAt = clock.now() + policy.delayFor(attempts)
-            store.update(
-              head.copy(
-                status = OutboxStatus.Queued,
-                attempts = attempts,
-                lastError = failure.toString(),
-                retryAt = retryAt,
-              ),
-              expected = OutboxStatus.Sending,
-            )
-            // The next pass checks that the row is still the head before the timer holds the key
-            backOff(key, head.id, retryAt)
-          }
+        }
+        else -> {
+          val retryAt = clock.now() + policy.delayFor(attempts)
+          store.update(
+            head.copy(
+              status = OutboxStatus.Queued,
+              attempts = attempts,
+              lastError = failure.toString(),
+              retryAt = retryAt,
+            ),
+            expected = OutboxStatus.Sending,
+          )
+          // The next pass checks that the row is still the head before the timer holds the key
+          backOff(key, head.id, retryAt)
         }
       }
     }
+  }
 
   /** Wakes [key]'s drain at [deadline], when the backoff of its head row [id] ends. */
   private fun backOff(key: String, id: EntryId, deadline: Instant) {
@@ -274,8 +328,8 @@ internal class RealOutbox<E>(
           current
         }
       }
-      // Cancelled by retry(), by discard() or by a drain that found it stale, and each of those
-      // drains itself
+      // Cancelled by retry(), by discard() or by a drain that found it stale or past its deadline,
+      // and each of those drains itself
       if (cause == null) {
         drain(key)
       }
@@ -399,9 +453,10 @@ internal class RealOutbox<E>(
 
 private const val WHOLE_QUEUE = ""
 
-// How long the watcher waits before reading a failing store again, doubling up to the cap
-private val WATCH_RETRY_FIRST = 1.seconds
-private val WATCH_RETRY_MAX = 1.minutes
+// How long the watcher, or a key whose drain failed, waits before reading a failing store again,
+// doubling up to the cap
+private val STORE_RETRY_FIRST = 1.seconds
+private val STORE_RETRY_MAX = 1.minutes
 
 private val OutboxStatus.isSendable: Boolean
   get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending

@@ -13,6 +13,7 @@ import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
+import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.update
@@ -59,10 +60,11 @@ private class RealDataScopeFactory(
   override fun create(scope: CoroutineScope): DataScope = RealDataScope(scope, this)
 
   /**
-   * Records an outbox for [name] until [scope] completes. Two outboxes over one name's rows would
-   * drain them on separate runners, which breaks per-key send order, so a second one fails here.
+   * Records an outbox for [name] until [scope] completes or the returned release runs, whichever
+   * comes first. Two outboxes over one name's rows would drain them on separate runners, which
+   * breaks per-key send order, so a second one fails here.
    */
-  fun claimOutbox(name: String, scope: CoroutineScope) {
+  fun claimOutbox(name: String, scope: CoroutineScope): () -> Unit {
     while (true) {
       val current = runningOutboxes.load()
       check(name !in current) {
@@ -73,9 +75,18 @@ private class RealDataScopeFactory(
         break
       }
     }
+    // Once only, so a late release never frees the name for an outbox that claimed it since
+    val released = AtomicBoolean(false)
+    val release = {
+      if (released.compareAndSet(false, true)) {
+        runningOutboxes.update { it.removing(name) }
+      }
+    }
     // A scope without a job never completes, so its outbox keeps the name for good
-    scope.coroutineContext[Job]?.invokeOnCompletion {
-      runningOutboxes.update { it.removing(name) }
+    val onScopeEnd = scope.coroutineContext[Job]?.invokeOnCompletion { release() }
+    return {
+      onScopeEnd?.dispose()
+      release()
     }
   }
 }
@@ -132,8 +143,15 @@ private class RealDataScope(
   ): Outbox<E> {
     // Opened first, so a store that fails to open leaves the name free. Opening again is harmless.
     val store = factory.stores.open(name, serializer)
-    factory.claimOutbox(name, scope)
-    return outbox(store, send, revert, retry)
+    val release = factory.claimOutbox(name, scope)
+    // Building it can throw, like when the store's rows flow fails to open. Nothing runs under the
+    // name then, so its owner can try again.
+    return try {
+      outbox(store, send, revert, retry)
+    } catch (t: Throwable) {
+      release()
+      throw t
+    }
   }
 
   override fun <E> outbox(
