@@ -34,8 +34,8 @@ internal constructor(
   /** What fetches threw. */
   val fetchFailures: TestFailures,
   /**
-   * What commands threw, on runners from `newActions()` and inside outboxes. A runner built with
-   * its own handler reports there instead.
+   * What commands threw, on runners from `newActions()`, inside outboxes, and in a query's commands
+   * that failed without a fetch. A runner built with its own handler reports there instead.
    */
   val actionFailures: TestFailures,
   /** The outbox rows, by outbox name. Tests read them through [outboxStore]. */

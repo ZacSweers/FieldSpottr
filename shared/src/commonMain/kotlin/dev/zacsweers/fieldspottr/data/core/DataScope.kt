@@ -28,7 +28,7 @@ interface DataScope {
    * it: commands on one runner share its [Ordering.Serial] line and its keys.
    *
    * Its failures go to [onFailure], like a message that names the owner. When that is null, they go
-   * to the factory's handler for runners and outboxes.
+   * to the factory's handler for failures other than fetches.
    */
   fun newActions(onFailure: ((Throwable) -> Unit)? = null): DataActions
 

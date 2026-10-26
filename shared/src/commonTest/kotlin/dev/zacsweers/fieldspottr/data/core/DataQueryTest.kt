@@ -5,12 +5,14 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
@@ -577,6 +579,42 @@ class DataQueryTest {
     fetch.respond = { error("fetch failed") }
     assertThat(Operation.all(listOf(query.requestFetch(force = true))).await())
       .isInstanceOf<OperationState.Failed>()
+  }
+
+  @Test
+  fun `a query command that fails without a fetch reports as an action`() = runTest {
+    val data = testDataScope(clock = testClock(START))
+    val rejected = IllegalStateException("Edit rejected")
+    val notMarked = IllegalStateException("Could not mark stale")
+    val backing = QueryStore.inMemory(Fetched(1, START))
+    val failingInvalidate =
+      QueryStore.of(backing.data, clear = backing::clear, invalidate = { throw notMarked }) {
+        value,
+        fetchedAt ->
+        backing.write(value, fetchedAt)
+      }
+    val query = data.query(failingInvalidate, fetch, Freshness.staleAfter(1.hours))
+
+    assertThat(query.mutate(requireFresh = false) { throw rejected }.awaitFailed<Throwable>())
+      .isSameInstanceAs(rejected)
+    assertThat(query.invalidate().awaitFailed<Throwable>()).isSameInstanceAs(notMarked)
+
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+    assertThat(data.actionFailures.take()).containsExactly(rejected, notMarked)
+    data.fetchFailures.assertNone()
+  }
+
+  @Test
+  fun `a fetch that fails inside mutate reports as a fetch and skips the edit`() = runTest {
+    val query = dataQuery()
+    fetch.respond = { error("Offline") }
+    var edited = false
+
+    query.mutate(requireFresh = true) { edited = true }.awaitFailed<IllegalStateException>()
+
+    assertThat(edited).isFalse()
+    data.fetchFailures.assertSingle<IllegalStateException>()
+    data.actionFailures.assertNone()
   }
 
   private companion object {

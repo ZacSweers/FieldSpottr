@@ -27,10 +27,11 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.KSerializer
 
 /**
- * Builds data scopes. Fetch failures go to [onFailure]. Failures of runners and outboxes go to
- * [onActionFailure], which defaults to [onFailure]. Outboxes open their rows on [stores] and drain
- * while [online] is true. Pass scopes on `Dispatchers.Default`, not on Main, as [DataActions]
- * explains.
+ * Builds data scopes. Failed fetches go to [onFailure]. Every other failure goes to
+ * [onActionFailure], which defaults to [onFailure]: commands on runners, outbox drains, and query
+ * commands that fail without a fetch, like an invalidate() whose store throws. Outboxes open their
+ * rows on [stores] and drain while [online] is true. Pass scopes on `Dispatchers.Default`, not on
+ * Main, as [DataActions] explains.
  */
 operator fun DataScope.Factory.Companion.invoke(
   onFailure: (Throwable) -> Unit,
@@ -160,12 +161,13 @@ private class RealDataScope(
     holds: QueryHolds = QueryHolds.None,
   ) =
     RealDataQuery(
-      RealDataActions(scope, factory.onFailure),
       store,
       fetch,
       freshness,
       factory.clock,
       scope,
-      holds,
+      onFetchFailure = factory.onFailure,
+      onActionFailure = factory.onActionFailure,
+      holds = holds,
     )
 }

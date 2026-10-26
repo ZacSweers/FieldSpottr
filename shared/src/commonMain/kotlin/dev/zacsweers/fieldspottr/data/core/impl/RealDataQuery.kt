@@ -36,14 +36,18 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealDataQuery<T>(
-  private val actions: RealDataActions,
   private val store: QueryStore<T>,
   private val fetch: suspend () -> T,
   private val freshness: Freshness,
   private val clock: Clock,
   private val scope: CoroutineScope,
+  /** Hears each failed fetch. */
+  private val onFetchFailure: (Throwable) -> Unit,
+  /** Hears every other failed command, like an invalidate() whose store throws. */
+  private val onActionFailure: (Throwable) -> Unit,
   private val holds: QueryHolds = QueryHolds.None,
 ) : DataQuery<T> {
+  private val actions = RealDataActions(scope, ::report)
   // Private, so only this query's commands chain on it
   private val key = Any()
   // How many observers collect data, and the watcher that runs while any do. Compare-and-set only.
@@ -229,6 +233,20 @@ internal class RealDataQuery<T>(
       status.value = FetchStatus.Failed(t)
       // The handle settles Failed and the failure reporter hears it
       throw t
+    }
+  }
+
+  /**
+   * Sends a failed command's [cause] to [onFetchFailure] when a fetch threw it, and to
+   * [onActionFailure] otherwise. A failed fetch sets [status] to its failure before its command
+   * settles, and no other command on this query's key starts before then, so the status still names
+   * it when the runner reports.
+   */
+  private fun report(cause: Throwable) {
+    if ((status.value as? FetchStatus.Failed)?.cause === cause) {
+      onFetchFailure(cause)
+    } else {
+      onActionFailure(cause)
     }
   }
 
