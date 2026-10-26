@@ -42,8 +42,9 @@ class PermanentFailure(message: String, cause: Throwable? = null) : Exception(me
  *                         permanent or out of attempts: Failed, then revert(payload)
  * ```
  *
- * Handles follow the row, so they survive a restart through [operation]. Drains start on enqueue,
- * on reconnect and at startup.
+ * Handles follow the row, so they survive a restart through [operation]. When the outbox's scope
+ * stops, its unsettled handles settle Cancelled and the rows stay for the next outbox. Drains start
+ * on enqueue, on reconnect and at startup.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface Outbox<E> {
@@ -52,7 +53,9 @@ interface Outbox<E> {
 
   /**
    * Runs [apply], the optimistic local change, then inserts a row, in one command. If apply throws,
-   * nothing is inserted and the handle fails. Without a [key], every row shares one order.
+   * nothing is inserted and the handle fails. If the insert throws, revert undoes the change and
+   * the handle fails. Once apply returns, the insert runs to the end even if the outbox's scope
+   * stops. Without a [key], every row shares one order.
    */
   fun enqueue(payload: E, key: String? = null, apply: suspend () -> Unit = {}): Operation
 

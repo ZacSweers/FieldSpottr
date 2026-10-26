@@ -4,18 +4,33 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.inMemoryOutboxStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
+import dev.zacsweers.fieldspottr.data.core.testing.assertPending
+import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -166,6 +181,89 @@ class OutboxTest {
 
     assertThat(reattached.await()).isEqualTo(OperationState.Succeeded)
     assertThat(outbox.operation(EntryId("unknown")).await()).isEqualTo(OperationState.Cancelled)
+  }
+
+  @Test
+  fun `a rejected insert undoes the optimistic change`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    // Stores nothing and throws, like a full disk
+    val full =
+      object : OutboxStore<String> by rows {
+        override suspend fun insert(key: String, payload: String): EntryId =
+          throw IllegalStateException("Disk full")
+      }
+    var applied = false
+    val outbox = testDataScope().outbox(full, send = send, revert = { applied = false })
+
+    outbox.enqueue("a") { applied = true }.awaitFailed<IllegalStateException>()
+
+    assertThat(applied).isFalse()
+    assertThat(rows.entries().first()).isEmpty()
+  }
+
+  @Test
+  fun `stopping the owner cancels its pending handles and keeps the rows`() = runTest {
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val handle = scopes.create(owner).outbox<String>("notes", send = send).enqueue("a")
+    scopes.outboxStore<String>("notes").entries().first { it.isNotEmpty() }
+
+    owner.cancel()
+    testScheduler.runCurrent()
+
+    handle.assertCancelled()
+    // The next owner sends it
+    assertThat(scopes.outboxStore<String>("notes").entries().first()).hasSize(1)
+  }
+
+  @Test
+  fun `a handle whose row cannot be read fails`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val unreadable =
+      object : OutboxStore<String> by rows {
+        override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+          throw IllegalStateException("Corrupt row")
+        }
+      }
+    val outbox = testDataScope().outbox(unreadable, send = send)
+
+    outbox.enqueue("a").awaitFailed<IllegalStateException>()
+  }
+
+  @Test
+  fun `discarding a head that is backing off sends the next row now`() = runTest {
+    send.failure = { payload, _ -> IllegalStateException("Transient").takeIf { payload == "a" } }
+    val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    outbox.enqueue("a", key = "k")
+    val b = outbox.enqueue("b", key = "k")
+    val a = outbox.entries.first { rows -> rows.any { it.retryAt != null } }.first()
+
+    val discarded = outbox.discard(a.id)
+    // No time passes, so only the discard can wake the key
+    testScheduler.runCurrent()
+
+    discarded.assertSucceeded()
+    b.assertSucceeded()
+    assertThat(send.sent).containsExactly("b")
+  }
+
+  @Test
+  fun `discarding a row behind a backing-off head keeps the head waiting`() = runTest {
+    send.failure = { payload, _ -> IllegalStateException("Transient").takeIf { payload == "a" } }
+    val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    val a = outbox.enqueue("a", key = "k")
+    val b = outbox.enqueue("b", key = "k")
+    val c = outbox.enqueue("c", key = "k")
+    val rows = outbox.entries.first { rows -> rows.any { it.retryAt != null } }
+
+    outbox.discard(rows.single { it.payload == "b" }.id)
+    testScheduler.runCurrent()
+
+    b.assertCancelled()
+    a.assertPending()
+    c.assertPending()
+    assertThat(send.attempts).containsExactly("a")
   }
 
   private companion object {

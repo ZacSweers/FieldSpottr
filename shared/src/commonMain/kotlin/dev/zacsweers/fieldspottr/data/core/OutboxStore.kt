@@ -58,7 +58,10 @@ data class OutboxEntry<E>(
  * dispatcher it was given, as [QueryStore] describes.
  */
 interface OutboxStore<E> {
-  /** Inserts a Queued row and returns its id, a Uuid, so no other install or device reuses it. */
+  /**
+   * Inserts a Queued row and returns its id, a Uuid, so no other install or device reuses it.
+   * Throws only when it stored nothing, since the outbox then reverts the optimistic change.
+   */
   suspend fun insert(key: String, payload: E): EntryId
 
   /**
