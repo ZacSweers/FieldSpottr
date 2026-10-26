@@ -12,7 +12,6 @@ import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.time.Clock
@@ -39,9 +38,9 @@ internal class RealDataQuery<T>(
 ) : DataQuery<T> {
   // Private, so only this query's commands chain on it
   private val key = Any()
-  // The recheck for the store's current absence of a value, until a collector sees a value again.
-  // Compare-and-set only. Nothing observes it.
-  private val absence = AtomicReference<Request.Recheck?>(null)
+  // The handle of the recheck for the store's current absence of a value, until a collector sees a
+  // value again. Compare-and-set only. Nothing observes it.
+  private val absence = AtomicReference<Operation?>(null)
 
   override val data: Flow<Fetched<T>?> = data(onRequest = {})
 
@@ -106,18 +105,17 @@ internal class RealDataQuery<T>(
    */
   private fun recheck(): Operation {
     while (true) {
-      val current = absence.load()
-      val absent = current ?: Request.Recheck()
-      if (absent !== current && !absence.compareAndSet(null, absent)) {
-        continue
-      }
-      absent.handle?.let {
+      absence.load()?.let {
         return it
       }
-      val operation =
-        actions.runOrJoin(Ordering.Keyed(key), absent, joins = { it === absent }, ::checkStale)
-      absent.handle = operation
-      return operation
+      // Shared before it starts, since it can finish on another thread before start() returns
+      val recheck = actions.prepare(Ordering.Keyed(key), Request.Check, ::checkStale)
+      if (absence.compareAndSet(null, recheck.handle)) {
+        recheck.start()
+        return recheck.handle
+      }
+      // Another collector submits it. This one never started, so dropping it runs nothing.
+      recheck.drop()
     }
   }
 
@@ -175,18 +173,8 @@ internal class RealDataQuery<T>(
   }
 
   /** What a request on this query's key is, so a later request can tell whether to join it. */
-  private sealed interface Request {
-    data object Check : Request
-
-    data object Forced : Request
-
-    /**
-     * The check for one absence of a stored value, shared by the collectors that see it. It keeps
-     * nothing of the value that went away, so a handle someone keeps cannot keep that value.
-     */
-    class Recheck : Request {
-      // Set by the first collector to link the recheck. Others join it until then.
-      @Volatile var handle: Operation? = null
-    }
+  private enum class Request {
+    Check,
+    Forced,
   }
 }

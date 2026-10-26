@@ -11,6 +11,7 @@ import dev.zacsweers.fieldspottr.data.core.Ordering
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
@@ -76,13 +77,43 @@ internal class RealDataActions(
         break
       }
     }
-    val started = entry ?: newEntry(ordering, tag, block)
+    return startLinked(entry ?: newEntry(ordering, tag, block), key)
+  }
+
+  /**
+   * A command that runs [block] once [Prepared.start] is called, so its handle can be handed out
+   * before the command can finish. It never joins another command.
+   */
+  internal fun prepare(ordering: Ordering, tag: Any?, block: suspend () -> Unit): Prepared =
+    Prepared(newEntry(ordering, tag, block), ordering.chainKey)
+
+  /** A command from [prepare]. Nothing runs until [start]. */
+  internal inner class Prepared(private val entry: Entry, private val key: ChainKey?) {
+    val handle: Operation
+      get() = entry.handle
+
+    /** Lines the command up behind the newest one on its key and starts it. Call at most once. */
+    fun start() {
+      if (key != null) {
+        entry.predecessor = tails.fetchAndUpdate { it.putting(key, entry) }[key]
+      }
+      startLinked(entry, key)
+    }
+
+    /** Drops a command that was never started. Nothing runs, and its handle settles Cancelled. */
+    fun drop() {
+      entry.job?.cancel()
+    }
+  }
+
+  /** Starts [entry] once it is linked on [key], or at once when it has no key. */
+  private fun startLinked(entry: Entry, key: ChainKey?): Operation {
     // Registered once linked, so it also runs for a job that ended before then, like one whose
     // scope was already cancelled
     if (key != null) {
-      started.settled.invokeOnCompletion {
+      entry.settled.invokeOnCompletion {
         tails.update { m ->
-          if (m[key] === started) {
+          if (m[key] === entry) {
             m.removing(key)
           } else {
             m
@@ -90,10 +121,10 @@ internal class RealDataActions(
         }
       }
     }
-    started.published.complete(Unit)
-    claimPredecessors(started)
-    started.job?.start()
-    return started.handle
+    entry.published.complete(Unit)
+    claimPredecessors(entry)
+    entry.job?.start()
+    return entry.handle
   }
 
   /** An entry whose job waits to be started, so nothing runs until it is linked on its key. */
