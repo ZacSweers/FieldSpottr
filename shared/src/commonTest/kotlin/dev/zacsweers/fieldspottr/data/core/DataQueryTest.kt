@@ -335,6 +335,27 @@ class DataQueryTest {
   }
 
   @Test
+  fun `collectors that see one clear share its recheck`() = runTest {
+    stored.value = Fetched(1, START)
+    val query = dataQuery()
+    val firstSawClear = CompletableDeferred<Unit>()
+    val secondSawClear = CompletableDeferred<Unit>()
+    backgroundScope.launch { query.data.collect { if (it == null) firstSawClear.complete(Unit) } }
+    backgroundScope.launch { query.data.collect { if (it == null) secondSawClear.complete(Unit) } }
+    testScheduler.runCurrent()
+
+    fetch.hold()
+    store.clear()
+    firstSawClear.await()
+    secondSawClear.await()
+    fetch.respond = { error("offline") }
+    fetch.release()
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
   fun `one collection of an empty query makes one fetch attempt`() = runTest {
     val failing = TestFetch<Int> { error("offline") }
     val query =

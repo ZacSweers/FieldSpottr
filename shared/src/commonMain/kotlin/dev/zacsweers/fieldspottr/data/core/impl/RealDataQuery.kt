@@ -12,6 +12,8 @@ import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.currentCoroutineContext
@@ -25,7 +27,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onEach
 
 /** [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. */
-@OptIn(DelicateDataLayerApi::class)
+@OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealDataQuery<T>(
   private val actions: RealDataActions,
   private val store: QueryStore<T>,
@@ -35,6 +37,9 @@ internal class RealDataQuery<T>(
 ) : DataQuery<T> {
   // Private, so only this query's commands chain on it
   private val key = Any()
+  // The recheck for the value that most recently went away. Compare-and-set only. Nothing observes
+  // it.
+  private val absence = AtomicReference<Request.Recheck?>(null)
 
   override val data: Flow<Fetched<T>?> = data(onRequest = {})
 
@@ -52,8 +57,9 @@ internal class RealDataQuery<T>(
     var previous: Fetched<T>? = null
     emitAll(
       store.data.onEach { current ->
-        if (current == null && previous != null) {
-          onRequest(checkAfterQueued())
+        val lost = previous
+        if (current == null && lost != null) {
+          onRequest(recheck(lost))
         }
         previous = current
       }
@@ -88,12 +94,24 @@ internal class RealDataQuery<T>(
     actions.runOrJoin(Ordering.Keyed(key), Request.Check, joins = { it is Request }, ::checkStale)
 
   /**
-   * Checks the stored time once the commands already queued on this query are done, without joining
-   * them. A value that goes away while a fetch is still writing gets its own check after that
-   * write.
+   * Checks the stored time after [lost] went away, once the commands already queued on this query
+   * are done. Collectors that saw the same value go away share one recheck. Work that started
+   * before then is never joined, so a value cleared while a fetch is still writing gets a check
+   * after that write.
    */
-  private fun checkAfterQueued(): Operation =
-    actions.runOrJoin(Ordering.Keyed(key), Request.Check, joins = { false }, ::checkStale)
+  private fun recheck(lost: Fetched<T>): Operation {
+    while (true) {
+      val current = absence.load()
+      val absent = current?.takeIf { it.lost == lost } ?: Request.Recheck(lost)
+      if (absent === current || absence.compareAndSet(current, absent)) {
+        val operation =
+          actions.runOrJoin(Ordering.Keyed(key), absent, joins = { it === absent }, ::checkStale)
+        // Releases the lost value
+        operation.invokeOnSettled { absence.compareAndSet(absent, null) }
+        return operation
+      }
+    }
+  }
 
   // The newest command on the key from here on, so a later request waits for it and checks the
   // store again instead of joining a fetch that started before the data changed
@@ -145,8 +163,12 @@ internal class RealDataQuery<T>(
   }
 
   /** What a request on this query's key is, so a later request can tell whether to join it. */
-  private enum class Request {
-    Check,
-    Forced,
+  private sealed interface Request {
+    data object Check : Request
+
+    data object Forced : Request
+
+    /** The check after [lost] went away, shared by the collectors that saw it go. */
+    class Recheck(val lost: Fetched<*>) : Request
   }
 }
