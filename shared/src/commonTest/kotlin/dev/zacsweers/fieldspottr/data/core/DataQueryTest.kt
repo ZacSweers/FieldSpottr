@@ -363,6 +363,26 @@ class DataQueryTest {
   }
 
   @Test
+  fun `a collector that sees a clear late shares the recheck that already ran`() = runTest {
+    stored.value = Fetched(1, START)
+    val query = dataQuery()
+    val resume = CompletableDeferred<Unit>()
+    backgroundScope.launch { query.data.collect {} }
+    // Stops after its first value, so it sees the clear only once the recheck has settled
+    backgroundScope.launch { query.data.collect { if (it != null) resume.await() } }
+    testScheduler.runCurrent()
+
+    fetch.respond = { error("offline") }
+    store.clear()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    resume.complete(Unit)
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
   fun `a forced fetch stopped with its owner leaves the status idle`() = runTest {
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))

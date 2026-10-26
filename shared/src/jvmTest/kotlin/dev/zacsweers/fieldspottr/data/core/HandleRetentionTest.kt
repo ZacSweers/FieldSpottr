@@ -3,13 +3,18 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import dev.zacsweers.fieldspottr.data.core.testing.TestClock
+import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import java.lang.reflect.Modifier
 import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.hours
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 
 /** What a settled handle keeps reachable, checked by walking the object graph from it. */
@@ -23,6 +28,31 @@ class HandleRetentionTest {
 
     handle.assertSucceeded()
     assertThat(handle.reaches(input)).isFalse()
+  }
+
+  @Test
+  fun `a settled recheck does not keep the value that went away`() = runTest {
+    val cleared = ByteArray(1 shl 20)
+    val store = QueryStore.inMemory(Fetched(cleared, TestClock.DEFAULT_START))
+    val fetch = TestFetch { ByteArray(1) }
+    val query =
+      testDataScope().query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+    val collector = backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+
+    fetch.hold()
+    store.update { null }
+    testScheduler.runCurrent()
+    // Joins the recheck the collector started for the clear
+    val handle = query.requestFetch(force = false)
+    fetch.release()
+    testScheduler.runCurrent()
+    collector.cancel()
+    testScheduler.runCurrent()
+
+    handle.assertSucceeded()
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(handle.reaches(cleared)).isFalse()
   }
 
   @Test
