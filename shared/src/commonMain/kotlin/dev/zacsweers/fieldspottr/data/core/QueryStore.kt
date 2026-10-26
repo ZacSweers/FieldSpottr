@@ -74,7 +74,11 @@ interface QueryStore<T> {
 
     /**
      * A store from its parts, for a source of truth that merges a fetch rather than replacing it.
-     * Without [invalidate], invalidating rewrites the stored value with a stale fetch time.
+     *
+     * Without [invalidate], invalidating reads the stored value and writes it back with a stale
+     * fetch time. Those are two steps, so a store that another writer shares, like a second query
+     * over the same table, can lose a value written between them. A shared store passes an
+     * [invalidate] that marks the current record stale in one update, as the built-in stores do.
      */
     fun <T> of(
       data: Flow<Fetched<T>?>,

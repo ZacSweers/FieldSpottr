@@ -110,7 +110,7 @@ private class RealDataScope(
       } else {
         Semaphore(maxFetches)
       }
-    return RealKeyedDataQueries { key ->
+    return RealKeyedDataQueries { key, holds ->
       val keyFetch: suspend () -> T =
         if (permits == null) {
           { fetch(key) }
@@ -118,7 +118,7 @@ private class RealDataScope(
           // The fetch time is taken before the wait, so a queued fetch never reads as fresher
           { permits.withPermit { fetch(key) } }
         }
-      newQuery(store(key), keyFetch, freshness(key))
+      newQuery(store(key), keyFetch, freshness(key), holds)
     }
   }
 
@@ -152,6 +152,19 @@ private class RealDataScope(
       clock = factory.clock,
     )
 
-  private fun <T> newQuery(store: QueryStore<T>, fetch: suspend () -> T, freshness: Freshness) =
-    RealDataQuery(RealDataActions(scope, factory.onFailure), store, fetch, freshness, factory.clock)
+  private fun <T> newQuery(
+    store: QueryStore<T>,
+    fetch: suspend () -> T,
+    freshness: Freshness,
+    holds: QueryHolds = QueryHolds.None,
+  ) =
+    RealDataQuery(
+      RealDataActions(scope, factory.onFailure),
+      store,
+      fetch,
+      freshness,
+      factory.clock,
+      scope,
+      holds,
+    )
 }

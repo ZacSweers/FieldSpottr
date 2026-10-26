@@ -6,15 +6,18 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
+import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
@@ -24,8 +27,12 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -339,6 +346,94 @@ class DataQueryTest {
     assertThat(byKey("b").data.first()).isEqualTo(null)
     byKey.clear()
     assertThat(byKey("a").data.first()).isEqualTo(null)
+  }
+
+  @Test
+  fun `a clear between the first check and the first value still fetches once`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(Fetched(1, START))
+    var reads = 0
+    // The first read takes 10 ms and the second 20 ms, like reads on a busy database dispatcher, so
+    // the check finishes and the clear lands before the observer's first value
+    val slowReads = flow {
+      delay(
+        when (++reads) {
+          1 -> 10.milliseconds
+          2 -> 20.milliseconds
+          else -> 0.milliseconds
+        }
+      )
+      emitAll(state)
+    }
+    val store =
+      QueryStore.of(slowReads, clear = { state.value = null }) { value, fetchedAt ->
+        state.value = Fetched(value, fetchedAt)
+      }
+    val query =
+      testDataScope(clock = testClock(START))
+        .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+    val check = query.requestFetch(force = false)
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+
+    query.mutate(requireFresh = false) { it.clear() }
+    testScheduler.advanceTimeBy(30.milliseconds)
+    testScheduler.runCurrent()
+
+    check.assertSucceeded()
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `an observer behind on older values does not recheck a clear again`() = runTest {
+    val values = MutableSharedFlow<Fetched<Int>?>(replay = 1, extraBufferCapacity = 16)
+    values.emit(Fetched(1, START))
+    val store =
+      QueryStore.of(values, clear = { values.emit(null) }) { value, fetchedAt ->
+        values.emit(Fetched(value, fetchedAt))
+      }
+    fetch.respond = { error("offline") }
+    val query =
+      testDataScope(clock = testClock(START))
+        .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+    val resume = CompletableDeferred<Unit>()
+    backgroundScope.launch { query.data.collect {} }
+    // Stops on the first value, so the newer value and the clear wait in its buffer
+    backgroundScope.launch { query.data.collect { if (it?.value == 1) resume.await() } }
+    testScheduler.runCurrent()
+
+    values.emit(Fetched(2, START))
+    testScheduler.runCurrent()
+    store.clear()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    resume.complete(Unit)
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `a forced request joins a forced fetch behind an automatic check`() = runTest {
+    stored.value = Fetched(1, START)
+    val query = dataQuery()
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    fetch.hold()
+    val first = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+
+    // Cleared under the query, so its observer queues a check behind the running fetch
+    stored.value = null
+    testScheduler.runCurrent()
+    val second = query.requestFetch(force = true)
+    fetch.release()
+    testScheduler.runCurrent()
+
+    assertThat(second).isSameInstanceAs(first)
+    first.assertSucceeded()
+    // The queued check still ran after the fetch's write, and found it fresh
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(stored.value?.value).isEqualTo(1)
   }
 
   @Test

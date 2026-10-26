@@ -37,13 +37,17 @@ class ClearPublicationTest {
   fun `one clear runs one fetch when its recheck finishes before the submitter returns`() =
     runBlocking {
       val pauseNextSubmission = AtomicBoolean(false)
+      val testThread = Thread.currentThread()
       val firstJobFinished = CountDownLatch(1)
       val returnFromFirstSubmission = CountDownLatch(1)
-      // Runs work on Default, and holds the call that dispatched the next job until released
+      // Runs work on Default, and holds the next call that dispatches a job from another thread
+      // until released. The clear itself resumes the query's watcher from this thread, so the call
+      // held is the watcher's recheck.
       val dispatcher =
         object : CoroutineDispatcher() {
           override fun dispatch(context: CoroutineContext, block: Runnable) {
-            val pauseSubmitter = pauseNextSubmission.compareAndSet(true, false)
+            val offTestThread = Thread.currentThread() !== testThread
+            val pauseSubmitter = offTestThread && pauseNextSubmission.compareAndSet(true, false)
             Dispatchers.Default.dispatch(context) {
               block.run()
               if (pauseSubmitter) {

@@ -78,8 +78,10 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
 interface DataQuery<T> {
   /**
    * The stored value and when it was fetched, or null before the first fetch. Collecting this may
-   * fetch: it checks freshness first and fetches when the data is stale, and again whenever the
-   * store empties. Use [stored] to watch the same values without starting any work.
+   * fetch: it checks freshness first and fetches when the data is stale, and checks again whenever
+   * a stored value goes away. One watcher decides these checks for every collector, so each change
+   * starts one check however many collectors see it. Use [stored] to watch the same values without
+   * starting any work.
    */
   val data: Flow<Fetched<T>?>
 
@@ -96,10 +98,11 @@ interface DataQuery<T> {
    * Runs this query's fetch when [force] is true or the stored data is stale.
    *
    * Force it when the user asks for new data, like a pull to refresh. A forced request joins a
-   * forced fetch already running since the last [invalidate] or [mutate], so callers that force at
-   * the same time share one fetch. Otherwise it fetches now, cancels a forced fetch from before
-   * that call and queues behind an unforced fetch that already started. Its status shows as
-   * `Fetching(forced = true)`.
+   * forced fetch that has not settled, even one with checks queued after it, unless an [invalidate]
+   * or [mutate] queued after it. So callers that force at the same time share one fetch. Otherwise
+   * it fetches now, cancels a forced fetch from before that call and queues behind an unforced
+   * fetch that already started. Its status shows as `Fetching(forced = true)`, and returns to
+   * `Idle` if the fetch is cancelled.
    *
    * An unforced request is single flight. It joins the fetch in flight, else checks the stored time
    * and fetches only if the data is stale.

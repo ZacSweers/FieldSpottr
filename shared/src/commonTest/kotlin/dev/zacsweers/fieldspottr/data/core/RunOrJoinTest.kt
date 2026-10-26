@@ -29,13 +29,14 @@ class RunOrJoinTest {
       actions.runOrJoin(
         FORCED,
         Forced,
-        joins = { tag ->
+        joins = { entry ->
           // Runs after this request read the key and before it links, so another caller's forced
           // fetch lands in between, like a second thread
           if (newer == null) {
-            newer = actions.runOrJoin(FORCED, Forced, joins = { it == Forced }) { ran += "newer" }
+            newer =
+              actions.runOrJoin(FORCED, Forced, joins = { it.tag == Forced }) { ran += "newer" }
           }
-          tag == Forced
+          entry.tag == Forced
         },
       ) {
         ran += "request"

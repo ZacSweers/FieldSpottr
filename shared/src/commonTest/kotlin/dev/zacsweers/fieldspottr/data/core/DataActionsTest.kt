@@ -171,6 +171,25 @@ class DataActionsTest {
   }
 
   @Test
+  fun `the newest of three queued replacing commands is the only one that runs`() = runTest {
+    for (mode in listOf(OnPrevious.Supersede, OnPrevious.Cancel)) {
+      val actions = actions()
+      val ran = mutableListOf<String>()
+
+      val a = actions.run(Ordering.Keyed("save", mode)) { ran += "a" }
+      val b = actions.run(Ordering.Keyed("save", mode)) { ran += "b" }
+      val c = actions.run(Ordering.Keyed("save", mode)) { ran += "c" }
+      // Replaced when c was submitted, so neither older block starts once work runs
+      testScheduler.runCurrent()
+
+      assertThat(ran).containsExactly("c")
+      a.assertCancelled()
+      b.assertCancelled()
+      c.assertSucceeded()
+    }
+  }
+
+  @Test
   fun `a supersede command waits for a running one and replaces only those queued`() = runTest {
     val actions = actions()
     val ran = mutableListOf<String>()

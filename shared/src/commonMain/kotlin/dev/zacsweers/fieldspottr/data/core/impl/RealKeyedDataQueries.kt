@@ -25,11 +25,13 @@ internal val KeyedDataQueries<*, *>.keysHeld: Int
 
 /**
  * [KeyedDataQueries] that builds each key's query with [build] on first use and drops it once no
- * caller and no unfinished work holds it, as [KeyEntry] describes.
+ * caller and no unfinished work holds it, as [KeyEntry] describes. [build] gets the holds the query
+ * takes on its entry.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
-internal class RealKeyedDataQueries<K : Any, T>(private val build: (K) -> RealDataQuery<T>) :
-  KeyedDataQueries<K, T> {
+internal class RealKeyedDataQueries<K : Any, T>(
+  private val build: (key: K, holds: QueryHolds) -> RealDataQuery<T>
+) : KeyedDataQueries<K, T> {
   // Compare-and-set only. Nothing observes it.
   private val entries = AtomicReference(persistentHashMapOf<K, KeyEntry<T>>())
 
@@ -39,7 +41,7 @@ internal class RealKeyedDataQueries<K : Any, T>(private val build: (K) -> RealDa
   override fun data(key: K): Flow<Fetched<T>?> = flow {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.data(onRequest = entry::holdUntilSettled))
+      emitAll(entry.query.data)
     } finally {
       entry.release()
     }
@@ -101,7 +103,7 @@ internal class RealKeyedDataQueries<K : Any, T>(private val build: (K) -> RealDa
       var entry = current[key]
       if (entry == null) {
         // Building a query starts nothing, so the copy that loses this race is simply dropped
-        val created = KeyEntry(build(key)) { remove(key, it) }
+        val created = KeyEntry({ holds -> build(key, holds) }) { remove(key, it) }
         if (!entries.compareAndSet(current, current.putting(key, created))) {
           continue
         }
@@ -127,20 +129,21 @@ internal class RealKeyedDataQueries<K : Any, T>(private val build: (K) -> RealDa
 }
 
 /**
- * A key's query and what holds it: each caller from acquire to release, and each operation a caller
- * started until its command finishes, automatic refetches and cancelled commands included. The last
- * release drops the entry, so a key's next query never runs beside unfinished work from the last
- * one, and nothing has to look for idle entries later.
+ * A key's query and what holds it: each caller from acquire to release, the query's watcher while
+ * it runs, and each operation started until its command finishes, automatic checks and cancelled
+ * commands included. The last release drops the entry, so a key's next query never runs beside
+ * unfinished work from the last one, and nothing has to look for idle entries later.
  */
 @OptIn(ExperimentalAtomicApi::class)
 private class KeyEntry<T>(
-  val query: RealDataQuery<T>,
+  build: (QueryHolds) -> RealDataQuery<T>,
   private val onDropped: (KeyEntry<T>) -> Unit,
-) {
+) : QueryHolds {
   // Callers and unfinished operations, or -1 once dropped. A dropped entry is never acquired again.
   private val holds = AtomicInt(0)
+  val query = build(this)
 
-  fun tryAcquire(): Boolean {
+  override fun tryAcquire(): Boolean {
     while (true) {
       val count = holds.load()
       if (count < 0) {
@@ -156,13 +159,13 @@ private class KeyEntry<T>(
    * Holds the entry until [operation]'s command finishes, cancelled or not. Only called while a
    * caller holds the entry, so it never revives a dropped one.
    */
-  fun holdUntilSettled(operation: Operation) {
+  override fun holdUntilSettled(operation: Operation) {
     holds.incrementAndFetch()
     operation.invokeOnSettled(::release)
   }
 
   /** Lets go of one hold, and drops the entry when it was the last. */
-  fun release() {
+  override fun release() {
     if (holds.decrementAndFetch() == 0 && holds.compareAndSet(0, -1)) {
       onDropped(this)
     }

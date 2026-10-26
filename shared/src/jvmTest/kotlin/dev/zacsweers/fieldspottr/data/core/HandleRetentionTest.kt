@@ -5,15 +5,26 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
+import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
+import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import java.lang.reflect.Modifier
 import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 
@@ -56,6 +67,78 @@ class HandleRetentionTest {
   }
 
   @Test
+  fun `a settled handle does not keep its runner's failure handler`() = runTest {
+    val reports = ByteArray(1 shl 20)
+    val owner = CoroutineScope(backgroundScope.coroutineContext + Job())
+    val handle = RealDataActions(owner, onFailure = { reports[0] = 1 }).run {}
+    testScheduler.runCurrent()
+    owner.cancel()
+    testScheduler.runCurrent()
+
+    handle.assertSucceeded()
+    assertThat(handle.reaches(reports)).isFalse()
+  }
+
+  @Test
+  fun `a superseded handle does not keep the failure of the command before it`() = runTest {
+    val actions = RealDataActions(backgroundScope, onFailure = {})
+    val response = ByteArray(1 shl 20)
+    val release = CompletableDeferred<Unit>()
+    val failed =
+      actions.run(Ordering.Keyed("k", OnPrevious.Supersede)) {
+        release.await()
+        throw ResponseException(response)
+      }
+    testScheduler.runCurrent()
+    // Queued behind the running command, then replaced before it starts
+    val superseded = actions.run(Ordering.Keyed("k", OnPrevious.Supersede)) {}
+    val newest = actions.run(Ordering.Keyed("k", OnPrevious.Supersede)) {}
+    release.complete(Unit)
+    testScheduler.runCurrent()
+
+    failed.assertFailed<ResponseException>()
+    superseded.assertCancelled()
+    newest.assertSucceeded()
+    assertThat(actions.keysHeld).isEqualTo(0)
+    assertThat(superseded.reaches(response)).isFalse()
+    // A failed handle keeps its own result
+    assertThat(failed.reaches(response)).isTrue()
+  }
+
+  @Test
+  fun `a query does not keep a failed automatic check after a later refresh`() = runTest {
+    val state = MutableStateFlow<Fetched<String>?>(Fetched("old", TestClock.DEFAULT_START))
+    val store =
+      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
+        state.value = Fetched(value, fetchedAt)
+      }
+    var thrown: ResponseException? = null
+    val fetch =
+      TestFetch<String> {
+        throw ResponseException(ByteArray(1 shl 20)).also { thrown = it }
+      }
+    val query =
+      DataScope.Factory(onFailure = {}, clock = testClock())
+        .create(backgroundScope)
+        .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+    val collector = backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+
+    // Emptied under the collector, whose automatic check then fails
+    state.value = null
+    testScheduler.runCurrent()
+    collector.cancel()
+    testScheduler.runCurrent()
+    fetch.respond = { "new" }
+    query.requestFetch(force = true)
+    testScheduler.runCurrent()
+
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+    assertThat(state.value?.value).isEqualTo("new")
+    assertThat(query.reaches(checkNotNull(thrown).response)).isFalse()
+  }
+
+  @Test
   fun `a settled handle does not keep its key`() = runTest {
     val key = ByteArray(1 shl 20)
     val handle = testDataScope().newActions().run(Ordering.Keyed(key)) {}
@@ -65,6 +148,9 @@ class HandleRetentionTest {
     assertThat(handle.reaches(key)).isFalse()
   }
 }
+
+/** A failure that carries the response that caused it, like a server error body. */
+private class ResponseException(val response: ByteArray) : Exception("Rejected")
 
 /**
  * Whether [target] is reachable from this object through instance fields, arrays, collections, maps

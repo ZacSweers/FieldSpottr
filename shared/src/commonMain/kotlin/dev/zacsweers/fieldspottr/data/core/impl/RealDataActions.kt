@@ -11,13 +11,11 @@ import dev.zacsweers.fieldspottr.data.core.Ordering
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -46,18 +44,20 @@ internal class RealDataActions(
     get() = tails.load().size
 
   override fun run(ordering: Ordering, block: suspend () -> Unit): Operation =
-    runOrJoin(ordering, tag = null, joins = { false }, block)
+    runOrJoin(ordering, tag = null, joins = { false }, block = block)
 
   /**
-   * Returns the handle of the newest command on [ordering]'s key when it has not settled and
-   * [joins] accepts its tag. Otherwise runs [block] as a new command tagged [tag]. One
-   * compare-and-set on the key's newest command decides, so a command that joins the key later,
-   * like a query's invalidation, always lines up behind every handle returned before it.
+   * Returns the handle of an unsettled command on [ordering]'s key that [joins] accepts, looking
+   * from the newest command back over the ones [passes] accepts. Otherwise runs [block] as a new
+   * command tagged [tag]. One compare-and-set on the key's newest command decides, so a command
+   * that joins the key later, like a query's invalidation, always lines up behind every handle
+   * returned before it.
    */
   internal fun runOrJoin(
     ordering: Ordering,
     tag: Any?,
-    joins: (tag: Any?) -> Boolean,
+    joins: (Entry) -> Boolean,
+    passes: (Entry) -> Boolean = { false },
     block: suspend () -> Unit,
   ): Operation {
     val key = ordering.chainKey
@@ -66,44 +66,39 @@ internal class RealDataActions(
     while (key != null) {
       val current = tails.load()
       val tail = current[key]
-      if (tail != null && tail.isJoinable && joins(tail.tag)) {
+      val joined = tail?.let { joinable(it, joins, passes) }
+      if (joined != null) {
         // Never started, so dropping it runs nothing
         entry?.job?.cancel()
-        return tail.handle
+        return joined.handle
       }
       val next = entry ?: newEntry(ordering, tag, block).also { entry = it }
+      // Written before the entry is published, so a newer command that finds it can walk past it
+      next.predecessor = tail
       if (tails.compareAndSet(current, current.putting(key, next))) {
-        next.predecessor = tail
         break
       }
     }
     return startLinked(entry ?: newEntry(ordering, tag, block), key)
   }
 
-  /**
-   * A command that runs [block] once [Prepared.start] is called, so its handle can be handed out
-   * before the command can finish. It never joins another command.
-   */
-  internal fun prepare(ordering: Ordering, tag: Any?, block: suspend () -> Unit): Prepared =
-    Prepared(newEntry(ordering, tag, block), ordering.chainKey)
-
-  /** A command from [prepare]. Nothing runs until [start]. */
-  internal inner class Prepared(private val entry: Entry, private val key: ChainKey?) {
-    val handle: Operation
-      get() = entry.handle
-
-    /** Lines the command up behind the newest one on its key and starts it. Call at most once. */
-    fun start() {
-      if (key != null) {
-        entry.predecessor = tails.fetchAndUpdate { it.putting(key, entry) }[key]
+  /** The command [joins] accepts, looking back from [newest] over the ones [passes] accepts. */
+  private fun joinable(
+    newest: Entry,
+    joins: (Entry) -> Boolean,
+    passes: (Entry) -> Boolean,
+  ): Entry? {
+    var cursor: Entry? = newest
+    while (cursor != null && cursor.isJoinable) {
+      if (joins(cursor)) {
+        return cursor
       }
-      startLinked(entry, key)
+      if (!passes(cursor)) {
+        return null
+      }
+      cursor = cursor.predecessor
     }
-
-    /** Drops a command that was never started. Nothing runs, and its handle settles Cancelled. */
-    fun drop() {
-      entry.job?.cancel()
-    }
+    return null
   }
 
   /** Starts [entry] once it is linked on [key], or at once when it has no key. */
@@ -121,7 +116,6 @@ internal class RealDataActions(
         }
       }
     }
-    entry.published.complete(Unit)
     claimPredecessors(entry)
     entry.job?.start()
     return entry.handle
@@ -170,15 +164,17 @@ internal class RealDataActions(
       // skips.
       entry.job = null
       entry.chainKey = null
+      // Runs the callbacks waiting on the settlement, like the key cleanup, first
       entry.settled.complete()
+      entry.detachHandle()
     }
     return entry
   }
 
   /**
    * Replaces what [entry] replaces as soon as it joins its key, so a queued block it replaces never
-   * starts, even one dispatched before it. Stops at an entry not yet linked to the one ahead of it,
-   * and [waitForTurn] finishes the walk.
+   * starts, even one dispatched before it. Every entry links to the one ahead before it is
+   * published, so this walk reaches each one it replaces before the newer command's submit returns.
    */
   private fun claimPredecessors(entry: Entry) {
     val mode = entry.mode
@@ -206,9 +202,6 @@ internal class RealDataActions(
           return
         }
       }
-      if (!target.published.isCompleted) {
-        return
-      }
       cursor = target.predecessor
     }
   }
@@ -225,7 +218,7 @@ internal class RealDataActions(
     val survivors = mutableListOf<Entry>()
     // Supersede only replaces the run right behind it
     var superseding = mode == OnPrevious.Supersede
-    var cursor = entry.awaitPredecessor()
+    var cursor = entry.predecessor
     while (cursor != null) {
       val target = cursor
       // The boundary
@@ -243,7 +236,7 @@ internal class RealDataActions(
       // A superseded entry never runs, usually replaced when a newer entry joined the key
       if (target.claim.load() == Claim.Superseded) {
         cancelled += target
-        cursor = target.awaitPredecessor()
+        cursor = target.predecessor
         continue
       }
       // Queued and undecided: one branch per case
@@ -273,7 +266,7 @@ internal class RealDataActions(
           }
         }
       }
-      cursor = target.awaitPredecessor()
+      cursor = target.predecessor
     }
     for (s in survivors) {
       s.settled.join()
@@ -307,36 +300,48 @@ internal class Entry(
   val settled = Job()
   // One CAS decides. Nothing observes it.
   val claim = AtomicReference(Claim.Undecided)
-  // Written before published completes. Cleared on start.
+  // Written before the entry is published on its key. Cleared on start.
   @Volatile var predecessor: Entry? = null
-  // A successor may be dispatched before its own link to this entry is written
-  val published = CompletableDeferred<Unit>()
-  val handle: Operation = RunnerOperation(this)
+  private val runnerHandle = RunnerOperation(this)
+
+  val handle: Operation
+    get() = runnerHandle
 
   /** Whether a request may still share this command's outcome. */
   val isJoinable: Boolean
     get() = claim.load() != Claim.Superseded && state.value !is OperationState.Terminal
 
-  suspend fun awaitPredecessor(): Entry? {
-    published.await()
-    return predecessor
+  /** Whether the block has started, so it may already have read what it works on. */
+  val hasStarted: Boolean
+    get() = claim.load() == Claim.Started
+
+  /**
+   * Lets go of the handle once the command settled and the callbacks waiting on it ran, so a kept
+   * handle keeps only its own result, never the runner or the commands around it.
+   */
+  fun detachHandle() {
+    runnerHandle.entry = null
   }
 }
 
 /**
- * A handle from [DataActions]. It knows its command, so it can tell when the command's job
- * completes and when waiting on it from inside another command would never end.
+ * A handle from [DataActions]. Until its command settles it knows the command, so it can tell when
+ * waiting on it from inside another command would never end.
  */
 @OptIn(DelicateDataLayerApi::class)
-private class RunnerOperation(val entry: Entry) : Operation {
+private class RunnerOperation(entry: Entry) : Operation {
   override val state: StateFlow<OperationState> = entry.state.asStateFlow()
+  // Completes once the command has finished, cancelled or not
+  val settled: Job = entry.settled
+  // Cleared once settled. Only the wait guard reads it before then.
+  @Volatile var entry: Entry? = entry
 
   override suspend fun await(): OperationState.Terminal {
     // A settled command can no longer be waiting on anything
     (state.value as? OperationState.Terminal)?.let {
       return it
     }
-    requireNotWaitingOnItself()
+    entry?.let { requireNotWaitingOnItself(it) }
     return super.await()
   }
 }
@@ -356,7 +361,7 @@ private class Holding(val entry: Entry) : AbstractCoroutineContextElement(Holdin
  * each part runs this check itself.
  */
 @OptIn(ExperimentalAtomicApi::class)
-private suspend fun RunnerOperation.requireNotWaitingOnItself() {
+private suspend fun requireNotWaitingOnItself(entry: Entry) {
   val holding = currentCoroutineContext()[Holding]?.entry ?: return
   // Any ordering, Concurrent included
   check(entry !== holding) {
@@ -385,7 +390,7 @@ internal fun Operation.Companion.of(source: StateFlow<OperationState>): Operatio
  * their command finishes, so any other handle fails here.
  */
 internal fun Operation.invokeOnSettled(handler: () -> Unit) {
-  val settled = (this as? RunnerOperation)?.entry?.settled
+  val settled = (this as? RunnerOperation)?.settled
   requireNotNull(settled) { "$this does not come from DataActions" }
   settled.invokeOnCompletion { handler() }
 }
