@@ -21,7 +21,7 @@ import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.update
 import kotlin.time.Clock
-import kotlin.time.Duration
+import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -143,13 +143,22 @@ internal class RealOutbox<E>(
    */
   private fun drain(key: String): Operation =
     actions.run(Ordering.Keyed(Drain(this, key), OnPrevious.Supersede)) {
-      while (online.value && waking.load()[key]?.job?.isActive != true) {
+      while (online.value) {
         val head =
           store.entries().first().firstOrNull { it.key == key && it.status.isSendable } ?: break
-        val remaining = head.retryAt?.let { it - clock.now() }
+        // A timer holds the key only while its row is still the head with the same deadline. One
+        // left over from a row that was discarded or retried meanwhile is dropped.
+        val timer = waking.load()[key]
+        if (timer != null && timer.job.isActive) {
+          if (timer.waitsFor(head)) {
+            break
+          }
+          timer.job.cancel()
+        }
+        val retryAt = head.retryAt
         // Still backing off, perhaps since before a restart
-        if (remaining != null && remaining.isPositive()) {
-          backOff(key, head.id, remaining)
+        if (retryAt != null && retryAt > clock.now()) {
+          backOff(key, head.id, retryAt)
           break
         }
         // Discarded first
@@ -177,25 +186,27 @@ internal class RealOutbox<E>(
             }
           }
           else -> {
-            val backoff = policy.delayFor(attempts)
+            val retryAt = clock.now() + policy.delayFor(attempts)
             store.update(
               head.copy(
                 status = OutboxStatus.Queued,
                 attempts = attempts,
                 lastError = failure.toString(),
-                retryAt = clock.now() + backoff,
+                retryAt = retryAt,
               ),
               expected = OutboxStatus.Sending,
             )
-            backOff(key, head.id, backoff)
+            // The next pass checks that the row is still the head before the timer holds the key
+            backOff(key, head.id, retryAt)
           }
         }
       }
     }
 
-  /** Wakes [key]'s drain after [wait], when the backoff of its head row [id] ends. */
-  private fun backOff(key: String, id: EntryId, wait: Duration) {
-    val timer = Timer(id, scope.launch(start = CoroutineStart.LAZY) { delay(wait) })
+  /** Wakes [key]'s drain at [deadline], when the backoff of its head row [id] ends. */
+  private fun backOff(key: String, id: EntryId, deadline: Instant) {
+    val wait = deadline - clock.now()
+    val timer = Timer(id, deadline, scope.launch(start = CoroutineStart.LAZY) { delay(wait) })
     waking.update { it.putting(key, timer) }
     timer.job.invokeOnCompletion { cause ->
       waking.update { current ->
@@ -205,7 +216,8 @@ internal class RealOutbox<E>(
           current
         }
       }
-      // Cancelled by retry() or discard(), which drain themselves
+      // Cancelled by retry(), by discard() or by a drain that found it stale, and each of those
+      // drains itself
       if (cause == null) {
         drain(key)
       }
@@ -275,8 +287,15 @@ internal class RealOutbox<E>(
 
   private data class Row(val owner: RealOutbox<*>, val id: EntryId)
 
-  /** A backoff timer and the head row it waits for. */
-  private class Timer(val id: EntryId, val job: Job)
+  /** A backoff timer, and the head row and deadline it waits for. */
+  private class Timer(val id: EntryId, val deadline: Instant, val job: Job) {
+    /**
+     * Whether [head] is still the row this timer waits for, with the same deadline. Stores may keep
+     * the deadline in epoch milliseconds, so the deadlines compare at that precision.
+     */
+    fun waitsFor(head: OutboxEntry<*>): Boolean =
+      head.id == id && head.retryAt?.toEpochMilliseconds() == deadline.toEpochMilliseconds()
+  }
 }
 
 private const val WHOLE_QUEUE = ""

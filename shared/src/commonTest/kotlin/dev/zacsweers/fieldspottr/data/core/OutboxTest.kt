@@ -24,6 +24,7 @@ import kotlin.test.Test
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -244,6 +245,43 @@ class OutboxTest {
     testScheduler.runCurrent()
 
     discarded.assertSucceeded()
+    b.assertSucceeded()
+    assertThat(send.sent).containsExactly("b")
+  }
+
+  @Test
+  fun `discarding a head while its backoff is written sends the next row now`() = runTest {
+    send.failure = { payload, _ -> IllegalStateException("Transient").takeIf { payload == "a" } }
+    val rows = inMemoryOutboxStore<String>()
+    val published = CompletableDeferred<Unit>()
+    val finishWrite = CompletableDeferred<Unit>()
+    // Shows the backoff before the write returns, like a database that notifies inside its
+    // transaction
+    val slow =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          val wrote = rows.update(entry, expected)
+          if (entry.retryAt != null && !published.isCompleted) {
+            published.complete(Unit)
+            finishWrite.await()
+          }
+          return wrote
+        }
+      }
+    val outbox =
+      testDataScope().outbox(slow, send = send, retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    val a = outbox.enqueue("a", key = "k")
+    val b = outbox.enqueue("b", key = "k")
+    published.await()
+
+    val discarded = outbox.discard(rows.entries().first().first { it.payload == "a" }.id)
+    testScheduler.runCurrent()
+    finishWrite.complete(Unit)
+    // No time passes, so the backoff written for the discarded row must not hold the key
+    testScheduler.runCurrent()
+
+    discarded.assertSucceeded()
+    a.assertCancelled()
     b.assertSucceeded()
     assertThat(send.sent).containsExactly("b")
   }
