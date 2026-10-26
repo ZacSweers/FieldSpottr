@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
 
 /** [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
@@ -154,8 +155,12 @@ internal class RealDataQuery<T>(
       store.write(value, fetchedAt)
       status.value = FetchStatus.Idle
     } catch (t: Throwable) {
-      // Cancelled by a newer forced fetch, which owns the status
-      currentCoroutineContext().ensureActive()
+      // Stopped by its owner, or replaced by a newer forced fetch that starts only after this one
+      // ends and then sets its own status
+      if (!currentCoroutineContext().isActive) {
+        status.value = FetchStatus.Idle
+        throw t
+      }
       status.value = FetchStatus.Failed(t)
       // The handle settles Failed and the failure reporter hears it
       throw t

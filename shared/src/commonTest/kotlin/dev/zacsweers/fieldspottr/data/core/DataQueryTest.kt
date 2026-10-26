@@ -8,18 +8,25 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -353,6 +360,45 @@ class DataQueryTest {
     testScheduler.runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `a forced fetch stopped with its owner leaves the status idle`() = runTest {
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val query =
+      testDataScopeFactory(clock = testClock(START))
+        .create(owner)
+        .query(store = store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+    fetch.hold()
+    val request = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = true))
+
+    owner.cancel()
+    testScheduler.runCurrent()
+
+    request.assertCancelled()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+  }
+
+  @Test
+  fun `a forced fetch replaced by a newer one leaves the status to it`() = runTest {
+    val query = dataQuery()
+    fetch.hold()
+    val first = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+
+    // Queued after the first fetch, so the next forced request starts a fetch of its own
+    query.invalidate()
+    val second = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+
+    first.assertCancelled()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = true))
+    fetch.release()
+    second.awaitSucceeded()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
   }
 
   @Test
