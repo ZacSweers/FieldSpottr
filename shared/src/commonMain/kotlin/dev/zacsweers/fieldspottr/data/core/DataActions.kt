@@ -17,9 +17,9 @@ package dev.zacsweers.fieldspottr.data.core
  *   C is Cancel     cancels A and B where they are Cancel too, then runs
  * ```
  *
- * A command replaces or cancels only predecessors of its own mode, and waits for the rest. Keys
- * never wait on each other. [Ordering.Serial] is one key of its own, and [Ordering.Concurrent] has
- * none.
+ * A command replaces or cancels only predecessors of its own mode, and waits for the rest. It does
+ * so when it is submitted, so a replaced block never starts, even one dispatched first. Keys never
+ * wait on each other. [Ordering.Serial] is one key of its own, and [Ordering.Concurrent] has none.
  *
  * Commands run on the dispatcher of the runner's scope, the way `launch` runs on its scope's. So
  * build a runner on a scope on `Dispatchers.Default`, not on Main: a Main scope, like Android's

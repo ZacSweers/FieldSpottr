@@ -7,7 +7,11 @@ import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
+import dev.zacsweers.fieldspottr.data.core.testing.assertPending
+import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
+import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
@@ -105,6 +109,75 @@ class DataActionsTest {
     self = actions.run { self.await() }
     self.await()
     self.assertFailed<IllegalStateException>()
+  }
+
+  @OptIn(DelicateDataLayerApi::class)
+  @Test
+  fun `a concurrent command awaiting its own handle fails at once`() = runTest {
+    val actions = actions()
+    lateinit var self: Operation
+
+    // Assigned before the block starts, since nothing runs until runCurrent()
+    self = actions.run(Ordering.Concurrent) { self.await() }
+    testScheduler.runCurrent()
+    self.assertFailed<IllegalStateException>()
+  }
+
+  @Test
+  fun `queued supersede commands run only the newest block`() = runTest {
+    val actions = actions()
+    val ran = mutableListOf<String>()
+
+    val old = actions.run(Ordering.Keyed("save", OnPrevious.Supersede)) { ran += "old" }
+    val new = actions.run(Ordering.Keyed("save", OnPrevious.Supersede)) { ran += "new" }
+    old.assertPending()
+    new.assertPending()
+    testScheduler.runCurrent()
+
+    assertThat(ran).containsExactly("new")
+    old.assertCancelled()
+    new.assertSucceeded()
+  }
+
+  @Test
+  fun `queued cancel commands run only the newest block`() = runTest {
+    val actions = actions()
+    val ran = mutableListOf<String>()
+
+    val old = actions.run(Ordering.Keyed("save", OnPrevious.Cancel)) { ran += "old" }
+    val new = actions.run(Ordering.Keyed("save", OnPrevious.Cancel)) { ran += "new" }
+    testScheduler.runCurrent()
+
+    assertThat(ran).containsExactly("new")
+    old.assertCancelled()
+    new.assertSucceeded()
+  }
+
+  @Test
+  fun `a supersede command waits for a running one and replaces only those queued`() = runTest {
+    val actions = actions()
+    val ran = mutableListOf<String>()
+    val release = CompletableDeferred<Unit>()
+
+    val running =
+      actions.run(Ordering.Keyed("save", OnPrevious.Supersede)) {
+        ran += "running"
+        release.await()
+      }
+    testScheduler.runCurrent()
+    val queued = actions.run(Ordering.Keyed("save", OnPrevious.Supersede)) { ran += "queued" }
+    val newest = actions.run(Ordering.Keyed("save", OnPrevious.Supersede)) { ran += "newest" }
+    testScheduler.runCurrent()
+    // The running block is never replaced, and the newest waits for it
+    running.assertRunning()
+    newest.assertPending()
+
+    release.complete(Unit)
+    testScheduler.runCurrent()
+    assertThat(ran).containsExactly("running", "newest")
+    running.assertSucceeded()
+    queued.assertCancelled()
+    newest.assertSucceeded()
   }
 
   @Test
