@@ -87,10 +87,8 @@ private class SettledOperation(terminal: OperationState.Terminal) : Operation {
 private class AllOperation(private val parts: List<Operation>) : Operation {
   override val state: StateFlow<OperationState> = AllState(parts.map { it.state })
 
-  override suspend fun await(): OperationState.Terminal {
-    coroutineScope { parts.map { async { it.await() } }.awaitAll() }
-    return super.await()
-  }
+  override suspend fun await(): OperationState.Terminal =
+    combinedTerminal(coroutineScope { parts.map { async { it.await() } }.awaitAll() })
 }
 
 /**
@@ -116,9 +114,13 @@ private class AllState(private val sources: List<StateFlow<OperationState>>) :
 private fun combinedState(states: List<OperationState>): OperationState =
   when {
     states.all { it is OperationState.Terminal } ->
-      states.firstOrNull { it is OperationState.Failed }
-        ?: states.firstOrNull { it == OperationState.Cancelled }
-        ?: OperationState.Succeeded
+      combinedTerminal(states.filterIsInstance<OperationState.Terminal>())
     states.any { it == OperationState.Running } -> OperationState.Running
     else -> OperationState.Queued
   }
+
+/** The first failure in input order, else cancelled if any part was, else succeeded. */
+private fun combinedTerminal(states: List<OperationState.Terminal>): OperationState.Terminal =
+  states.firstOrNull { it is OperationState.Failed }
+    ?: states.firstOrNull { it == OperationState.Cancelled }
+    ?: OperationState.Succeeded
