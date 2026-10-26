@@ -8,8 +8,10 @@ import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isSameInstanceAs
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
@@ -381,5 +383,44 @@ class TestFixturesTest {
       Operation.failed(cause).assertFailed<IllegalArgumentException>()
     }
     Operation.cancelled.assertCancelled()
+  }
+
+  @Test
+  fun `a test fetch released and held again lets the calls already waiting through`() = runTest {
+    val fetch = TestFetch { 1 }
+    fetch.hold()
+    val first = async { fetch() }
+    runCurrent()
+
+    // Before the waiting call resumes, so only the hold it entered decides
+    fetch.release()
+    fetch.hold()
+    val second = async { fetch() }
+    runCurrent()
+
+    assertThat(first.isCompleted).isTrue()
+    assertThat(second.isCompleted).isFalse()
+    fetch.release()
+    assertThat(second.await()).isEqualTo(1)
+  }
+
+  @Test
+  fun `a test send released and held again lets the attempts already waiting through`() = runTest {
+    val send = TestSend<String>()
+    send.hold("a")
+    val first = async { send("a") }
+    runCurrent()
+
+    // Before the waiting attempt resumes, so only the hold it entered decides
+    send.release("a")
+    send.hold("a")
+    val second = async { send("a") }
+    runCurrent()
+
+    assertThat(first.isCompleted).isTrue()
+    assertThat(second.isCompleted).isFalse()
+    send.release("a")
+    second.await()
+    assertThat(send.sent).containsExactly("a", "a")
   }
 }

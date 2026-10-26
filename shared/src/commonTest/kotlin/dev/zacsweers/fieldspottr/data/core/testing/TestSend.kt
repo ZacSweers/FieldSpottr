@@ -6,13 +6,12 @@ import dev.zacsweers.fieldspottr.data.core.PermanentFailure
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
 import kotlin.concurrent.atomics.updateAndFetch
 import kotlinx.collections.immutable.persistentListOf
-import kotlinx.collections.immutable.persistentSetOf
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
+import kotlinx.collections.immutable.persistentMapOf
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * An outbox send the test controls, with a revert that records too. Pass them as `send = send,
@@ -26,8 +25,9 @@ class TestSend<E> : suspend (E) -> Unit {
   private val attempted = AtomicReference(persistentListOf<E>())
   private val delivered = AtomicReference(persistentListOf<E>())
   private val undone = AtomicReference(persistentListOf<E>())
-  // Observed by every held attempt
-  private val heldPayloads = MutableStateFlow(persistentSetOf<E>())
+  // What held attempts wait on, by payload. Each hold opens a new gate, so a release reaches every
+  // attempt that entered before it, even when the test holds the payload again at once.
+  private val gates = AtomicReference(persistentMapOf<E, CompletableDeferred<Unit>>())
 
   /**
    * What an attempt throws, given its payload and its attempt number for that payload, starting at
@@ -74,17 +74,23 @@ class TestSend<E> : suspend (E) -> Unit {
 
   /** Makes attempts for [payload] wait before they send, until [release]. */
   fun hold(payload: E) {
-    heldPayloads.update { it.add(payload) }
+    gates.update {
+      if (payload in it) {
+        it
+      } else {
+        it.put(payload, CompletableDeferred())
+      }
+    }
   }
 
   /** Lets waiting attempts for [payload] send, and stops holding it. */
   fun release(payload: E) {
-    heldPayloads.update { it.remove(payload) }
+    gates.fetchAndUpdate { it.remove(payload) }[payload]?.complete(Unit)
   }
 
   override suspend fun invoke(payload: E) {
     val attempt = attempted.updateAndFetch { it.adding(payload) }.count { it == payload }
-    heldPayloads.first { payload !in it }
+    gates.load()[payload]?.await()
     failure(payload, attempt)?.let { throw it }
     delivered.update { it.adding(payload) }
   }

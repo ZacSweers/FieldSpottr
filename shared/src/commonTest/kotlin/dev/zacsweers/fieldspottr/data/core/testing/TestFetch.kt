@@ -11,8 +11,7 @@ import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * What a test fetch records: each call, the calls that were cancelled, and how many ran at once. It
@@ -26,8 +25,9 @@ abstract class FetchRecorder<K> internal constructor() {
   private val cancelledCalls = AtomicReference(persistentListOf<K>())
   private val inFlight = AtomicInt(0)
   private val mostInFlight = AtomicInt(0)
-  // Observed by every held call
-  private val held = MutableStateFlow(false)
+  // What held calls wait on, or null while not holding. Each hold opens a new gate, so a release
+  // reaches every call that entered before it, even when the test holds again at once.
+  private val gate = AtomicReference<CompletableDeferred<Unit>?>(null)
 
   /** Each call's key, in the order the calls started. */
   val calls: List<K>
@@ -54,12 +54,12 @@ abstract class FetchRecorder<K> internal constructor() {
 
   /** Makes calls that start from now on wait before they respond, until [release]. */
   fun hold() {
-    held.value = true
+    gate.update { it ?: CompletableDeferred() }
   }
 
   /** Lets every waiting call respond, and stops holding. */
   fun release() {
-    held.value = false
+    gate.exchange(null)?.complete(Unit)
   }
 
   /** Records a call for [key], waits while held, then returns what [respond] gives. */
@@ -68,7 +68,7 @@ abstract class FetchRecorder<K> internal constructor() {
     val now = inFlight.incrementAndFetch()
     mostInFlight.update { maxOf(it, now) }
     try {
-      held.first { !it }
+      gate.load()?.await()
       return respond()
     } catch (e: CancellationException) {
       cancelledCalls.update { it.adding(key) }

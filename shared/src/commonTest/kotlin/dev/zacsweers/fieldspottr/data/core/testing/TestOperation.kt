@@ -11,7 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * A handle the test settles by hand, for a fake that returns [Operation], like a repository fake
  * that a presenter test drives. It starts Queued. [start] moves it to Running and is optional.
- * Settling it twice throws, since that means the fake is wrong.
+ * Settling it twice throws, since that means the fake is wrong. Each move is one compare-and-set,
+ * so when two threads settle it at once, exactly one wins and the other throws.
  */
 @OptIn(DelicateDataLayerApi::class)
 class TestOperation : Operation {
@@ -21,9 +22,9 @@ class TestOperation : Operation {
 
   /** Moves a queued handle to Running. */
   fun start() {
-    val current = state.value
-    check(current == OperationState.Queued) { "start() needs a queued handle, but it is $current" }
-    state.value = OperationState.Running
+    check(state.compareAndSet(OperationState.Queued, OperationState.Running)) {
+      "start() needs a queued handle, but it is ${state.value}"
+    }
   }
 
   fun succeed() {
@@ -39,8 +40,12 @@ class TestOperation : Operation {
   }
 
   private fun settle(terminal: OperationState.Terminal) {
-    val current = state.value
-    check(current !is OperationState.Terminal) { "Already settled as $current" }
-    state.value = terminal
+    while (true) {
+      val current = state.value
+      check(current !is OperationState.Terminal) { "Already settled as $current" }
+      if (state.compareAndSet(current, terminal)) {
+        return
+      }
+    }
   }
 }
