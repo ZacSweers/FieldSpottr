@@ -56,7 +56,7 @@ class TestFixturesTest {
     var fetches = 0
     val data = testDataScope(eager = true)
     val query =
-      data.query(QueryStore.inMemory<Int>(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
+      data.query(QueryStore.inMemory(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
 
     query.requestFetch(force = true).assertSucceeded()
     assertThat(fetches).isEqualTo(1)
@@ -78,7 +78,7 @@ class TestFixturesTest {
     var fetches = 0
     val query =
       testDataScope(eager = true)
-        .query(QueryStore.inMemory<Int>(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
+        .query(QueryStore.inMemory(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
     query.requestFetch(force = false)
 
     advanceTimeBy(59.minutes)

@@ -78,14 +78,14 @@ class TestSend<E> : suspend (E) -> Unit {
       if (payload in it) {
         it
       } else {
-        it.put(payload, CompletableDeferred())
+        it.putting(payload, CompletableDeferred())
       }
     }
   }
 
   /** Lets waiting attempts for [payload] send, and stops holding it. */
   fun release(payload: E) {
-    gates.fetchAndUpdate { it.remove(payload) }[payload]?.complete(Unit)
+    gates.fetchAndUpdate { it.removing(payload) }[payload]?.complete(Unit)
   }
 
   override suspend fun invoke(payload: E) {

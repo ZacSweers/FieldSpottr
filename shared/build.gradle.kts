@@ -28,6 +28,9 @@ metro {
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
 kotlin {
+  compilerOptions {
+    optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
+  }
   android {
     namespace = "dev.zacsweers.fieldspottr.shared"
     androidResources.enable = true
