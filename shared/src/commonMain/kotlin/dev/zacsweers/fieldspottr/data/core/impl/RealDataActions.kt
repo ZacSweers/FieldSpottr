@@ -19,6 +19,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -137,7 +139,7 @@ internal class RealDataActions(
         entry.predecessor = null
         entry.state.value = OperationState.Running
         try {
-          block()
+          runScoped(block)
           // Cancelled while it ran: settles Cancelled even when the block returned normally
           ensureActive()
           entry.state.value = OperationState.Succeeded
@@ -276,6 +278,28 @@ internal class RealDataActions(
     }
     for (c in cancelled) c.settled.join()
   }
+}
+
+/**
+ * Runs [block] in a scope of its own, so coroutines it starts in its context finish before the
+ * command settles, and one that fails fails the command instead of the runner's scope. The block's
+ * own failure is rethrown as thrown. `coroutineScope` rethrows a copy of it when stack trace
+ * recovery is on, and a handle settles with what the block threw.
+ */
+private suspend fun runScoped(block: suspend () -> Unit) {
+  var thrown: Throwable? = null
+  coroutineScope {
+    try {
+      block()
+    } catch (t: Throwable) {
+      // A child that failed cancelled this scope, and coroutineScope throws the child's failure
+      ensureActive()
+      thrown = t
+      // As coroutineScope does when its block throws
+      coroutineContext.cancelChildren()
+    }
+  }
+  thrown?.let { throw it }
 }
 
 /**

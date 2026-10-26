@@ -5,6 +5,8 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isSameInstanceAs
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
@@ -13,6 +15,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
@@ -22,10 +25,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 
 /**
  * How the runner settles handles and reports failures, and the guard that fails a wait which can
@@ -270,5 +277,47 @@ class DataActionsTest {
     val mutation = query.mutate(requireFresh = false) { query.requestFetch(force = false).await() }
     mutation.await()
     mutation.assertFailed<IllegalStateException>()
+  }
+
+  @Test
+  fun `a command settles after the coroutines it starts and fails with them`() = runTest {
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val data = testDataScopeFactory().create(owner)
+    val actions = data.newActions()
+    val finish = CompletableDeferred<Unit>()
+
+    val command = actions.run {
+      // Started in the command's own context, like a helper that launches its write
+      CoroutineScope(currentCoroutineContext()).launch {
+        finish.await()
+        throw IllegalStateException("Write failed")
+      }
+    }
+    val next = actions.run {}
+    testScheduler.runCurrent()
+    command.assertRunning()
+
+    finish.complete(Unit)
+    testScheduler.runCurrent()
+    command.assertFailed<IllegalStateException>()
+    next.assertSucceeded()
+    data.actionFailures.assertSingle<IllegalStateException>()
+    assertThat(owner.isActive).isTrue()
+  }
+
+  @Test
+  fun `a command fails with the exception its block threw`() = runTest {
+    val cause = IllegalStateException("Rejected")
+
+    // Suspends first, which is when a scope around the block would hand back a recovered copy
+    val handle =
+      actions().run {
+        yield()
+        throw cause
+      }
+
+    assertThat(handle.awaitFailed<IllegalStateException>()).isSameInstanceAs(cause)
+    assertThat(data.actionFailures.assertSingle<IllegalStateException>()).isSameInstanceAs(cause)
   }
 }

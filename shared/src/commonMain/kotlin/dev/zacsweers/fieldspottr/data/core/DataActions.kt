@@ -21,6 +21,10 @@ package dev.zacsweers.fieldspottr.data.core
  * so when it is submitted, so a replaced block never starts, even one dispatched first. Keys never
  * wait on each other. [Ordering.Serial] is one key of its own, and [Ordering.Concurrent] has none.
  *
+ * A command settles once its block returns and every coroutine the block started in its own context
+ * has finished. When one of those coroutines fails, the command fails with it and the runner's
+ * failure handler hears it. The runner's scope keeps running.
+ *
  * Commands run on the dispatcher of the runner's scope, the way `launch` runs on its scope's. So
  * build a runner on a scope on `Dispatchers.Default`, not on Main: a Main scope, like Android's
  * process lifecycle scope, would run every command on the main thread. Blocking work inside a
