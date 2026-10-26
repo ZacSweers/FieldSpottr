@@ -25,6 +25,9 @@ import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
@@ -65,13 +68,18 @@ class SqlDelightOutboxStore<E>(
 ) : OutboxStore<E> {
 
   override suspend fun insert(key: String, payload: E): EntryId {
+    currentCoroutineContext().ensureActive()
     // seq orders the rows. The Uuid identifies the row everywhere.
     val id = EntryId(Uuid.random().toString())
-    withContext(io) {
-      val database = db.await()
-      database.transaction {
-        database.outboxRowQueries.pruneSettled(outbox, cutoff())
-        database.outboxRowQueries.insert(id.value, outbox, key, codec.encode(payload))
+    // Runs to the end once started, so a caller cancelled meanwhile still gets the id of the row it
+    // stored, and a throw always means nothing was stored
+    withContext(NonCancellable) {
+      withContext(io) {
+        val database = db.await()
+        database.transaction {
+          database.outboxRowQueries.pruneSettled(outbox, cutoff())
+          database.outboxRowQueries.insert(id.value, outbox, key, codec.encode(payload))
+        }
       }
     }
     return id
@@ -81,8 +89,15 @@ class SqlDelightOutboxStore<E>(
     val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.status.isSettled }
     return withContext(io) {
       val queries = db.await().outboxRowQueries
-      // The WHERE on the expected status is the compare. changes() reports whether it matched.
+      // Compares what the row means, so a stale failure cause misses and a status a newer version
+      // wrote matches the Failed it reads as. Read outside the transaction, which then starts with
+      // its write, like every other write here.
+      val row = queries.byId(outbox, entry.id.value).executeAsOneOrNull()
+      if (row == null || OutboxStatus(row.status, row.cause) != expected) {
+        return@withContext false
+      }
       queries.transactionWithResult {
+        // The WHERE on what was read makes the write a compare-and-set. changes() reports it.
         queries.compareAndSet(
           status = entry.status.storedName,
           cause = entry.status.storedCause,
@@ -98,7 +113,8 @@ class SqlDelightOutboxStore<E>(
           settledAt = settledAt,
           outbox = outbox,
           id = entry.id.value,
-          expected = expected.storedName,
+          expectedStatus = row.status,
+          expectedCause = row.cause,
         )
         queries.changes().executeAsOne() > 0
       }

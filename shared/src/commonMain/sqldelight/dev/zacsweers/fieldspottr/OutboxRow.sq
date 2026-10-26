@@ -34,6 +34,8 @@ SELECT * FROM outboxRow WHERE outbox = ? AND status NOT IN ('sent', 'discarded')
 byId:
 SELECT * FROM outboxRow WHERE outbox = ? AND id = ?;
 
+-- Matches the stored status and cause exactly as read, so a write between the read and this
+-- update makes it change nothing
 compareAndSet:
 UPDATE outboxRow
 SET
@@ -44,7 +46,7 @@ SET
   reverted = :reverted,
   retryAt = :retryAt,
   settledAt = :settledAt
-WHERE outbox = :outbox AND id = :id AND status = :expected;
+WHERE outbox = :outbox AND id = :id AND status = :expectedStatus AND cause IS :expectedCause;
 
 changes:
 SELECT changes();

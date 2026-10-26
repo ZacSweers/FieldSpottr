@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.impl.inMemoryOutboxStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
@@ -86,6 +87,19 @@ class OutboxStoresTest {
 
     second.entries.first { it.isEmpty() }
     assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
+  fun `DataStore stores keep every name inside their directory`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+
+    stores.open("../outside", String.serializer()).insert("k", "a")
+
+    assertThat(fileSystem.exists("/outside.outbox".toPath())).isFalse()
+    assertThat(fileSystem.list(directory).map { it.name }).containsExactly("..%2Foutside.outbox")
   }
 
   @Test

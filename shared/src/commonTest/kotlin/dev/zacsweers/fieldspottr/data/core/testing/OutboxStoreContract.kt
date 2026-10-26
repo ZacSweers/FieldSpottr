@@ -66,6 +66,22 @@ abstract class OutboxStoreContract {
   }
 
   @Test
+  fun `update compares a failed row's cause too`() = runTest {
+    val store = newStore(1.minutes)
+    val id = store.insert("k", "a")
+    val row = checkNotNull(store.entry(id).first())
+    assertTrue(store.update(row.copy(status = OutboxStatus.Failed("first")), OutboxStatus.Queued))
+    assertTrue(
+      store.update(row.copy(status = OutboxStatus.Failed("second")), OutboxStatus.Failed("first"))
+    )
+
+    // A stale cause no longer matches the row
+    val discarded = row.copy(status = OutboxStatus.Discarded)
+    assertFalse(store.update(discarded, OutboxStatus.Failed("first")))
+    assertEquals(OutboxStatus.Failed("second"), store.entry(id).first()?.status)
+  }
+
+  @Test
   fun `concurrent inserts and updates all land`() = runTest {
     val store = newStore(1.minutes)
 

@@ -60,7 +60,9 @@ data class OutboxEntry<E>(
 interface OutboxStore<E> {
   /**
    * Inserts a Queued row and returns its id, a Uuid, so no other install or device reuses it.
-   * Throws only when it stored nothing, since the outbox then reverts the optimistic change.
+   * Throws only when it stored nothing, since the outbox then reverts the optimistic change. So an
+   * insert that starts runs to the end, and a caller cancelled meanwhile still gets the id of the
+   * row it stored.
    */
   suspend fun insert(key: String, payload: E): EntryId
 

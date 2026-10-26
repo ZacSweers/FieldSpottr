@@ -16,9 +16,13 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialFormat
 import kotlinx.serialization.Serializable
@@ -78,7 +82,9 @@ fun outboxDataStore(
 
 /**
  * One DataStore file per outbox under [directory]. Suits an outbox of a few dozen rows that rewrite
- * as a whole. [scope] needs a dispatcher that suits blocking I/O, as with [outboxDataStore].
+ * as a whole. [scope] needs a dispatcher that suits blocking I/O, as with [outboxDataStore]. A name
+ * becomes one file name in [directory], with any character but letters, digits, `-`, `_` and `.`
+ * written as `%XX`, so no name reaches outside it.
  *
  * DataStore allows one active instance per file, so build one set per directory. Each name gets one
  * store for as long as this set lives, and an outbox built again for that name gets the same store.
@@ -104,7 +110,7 @@ class DataStoreOutboxStores(
         current[name]
           ?: lazy {
             DataStoreOutboxStore(
-              outboxDataStore(scope, { directory / "$name.outbox" }, fileSystem),
+              outboxDataStore(scope, { directory / "${fileName(name)}.outbox" }, fileSystem),
               serializer.asCodec(payloadFormat),
             )
           }
@@ -116,6 +122,30 @@ class DataStoreOutboxStores(
     }
   }
 }
+
+/**
+ * [name] as one file name. Letters, digits, `-`, `_` and `.` stay as they are, and every other byte
+ * of its UTF-8 form is written as `%XX`, so no name reaches outside the directory. A name of only
+ * dots has its dots encoded too, since `.` and `..` name directories.
+ */
+private fun fileName(name: String): String {
+  val onlyDots = name.isNotEmpty() && name.all { it == '.' }
+  return buildString {
+    for (byte in name.encodeToByteArray()) {
+      val char = (byte.toInt() and 0xFF).toChar()
+      val plain = (char.isLetterOrDigit() && char.code < 0x80) || char in "-_"
+      if (plain || (char == '.' && !onlyDots)) {
+        append(char)
+      } else {
+        append('%')
+        append(HEX[(byte.toInt() shr 4) and 0xF])
+        append(HEX[byte.toInt() and 0xF])
+      }
+    }
+  }
+}
+
+private const val HEX = "0123456789ABCDEF"
 
 /** Outbox rows in a DataStore file, kept across process death. */
 @OptIn(ExperimentalUuidApi::class)
@@ -137,8 +167,13 @@ class DataStoreOutboxStore<E>(
         payload = codec.encode(payload),
         status = OutboxStatus.Queued.storedName,
       )
-    // updateData runs one transform at a time, so the whole log changes atomically
-    dataStore.updateData { log -> OutboxLog(rows = log.rows.filterNot { it.isExpired() } + row) }
+    currentCoroutineContext().ensureActive()
+    // updateData runs one transform at a time, so the whole log changes atomically. It runs to the
+    // end once started, so a caller cancelled meanwhile still gets the id of the row it stored, and
+    // a throw always means nothing was stored.
+    withContext(NonCancellable) {
+      dataStore.updateData { log -> OutboxLog(rows = log.rows.filterNot { it.isExpired() } + row) }
+    }
     return id
   }
 
@@ -148,8 +183,9 @@ class DataStoreOutboxStore<E>(
     dataStore.updateData { log ->
       val index = log.rows.indexOfFirst { it.id == entry.id.value }
       val row = log.rows.getOrNull(index)
-      // The compare failed, so write nothing
-      if (row == null || row.status != expected.storedName) {
+      // Compares what the row means, so a stale failure cause misses and a status a newer version
+      // wrote matches the Failed it reads as. The compare failed, so write nothing.
+      if (row == null || OutboxStatus(row.status, row.cause) != expected) {
         written = false
         return@updateData log
       }
