@@ -14,9 +14,11 @@ import dev.zacsweers.fieldspottr.data.core.impl.inMemoryOutboxStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
+import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -29,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
@@ -284,6 +287,175 @@ class OutboxTest {
     a.assertCancelled()
     b.assertSucceeded()
     assertThat(send.sent).containsExactly("b")
+  }
+
+  @Test
+  fun `a discard whose owner stops during its write still undoes the change`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val pausing = PauseAfterRevertedWrite(rows)
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    var undone = 0
+    val outbox = scopes.create(owner).outbox(pausing, send = send, revert = { undone++ })
+    outbox.enqueue("a")
+    val id = rows.entries().first { it.isNotEmpty() }.single().id
+
+    outbox.discard(id)
+    pausing.written.await()
+    owner.cancel()
+    pausing.finish.complete(Unit)
+    testScheduler.runCurrent()
+
+    // The row says reverted, so the undo ran
+    assertThat(undone).isEqualTo(1)
+    assertThat(rows.entry(id).first()?.reverted).isEqualTo(true)
+  }
+
+  @Test
+  fun `a rejection whose owner stops during its write still undoes the change`() = runTest {
+    send.failPermanently()
+    val rows = inMemoryOutboxStore<String>()
+    val pausing = PauseAfterRevertedWrite(rows)
+    val scopes = testDataScopeFactory()
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    var undone = 0
+    scopes.create(owner).outbox(pausing, send = send, revert = { undone++ }).enqueue("a")
+
+    pausing.written.await()
+    owner.cancel()
+    pausing.finish.complete(Unit)
+    testScheduler.runCurrent()
+    assertThat(undone).isEqualTo(1)
+
+    // A fresh owner sees the row as failed and reverted, and a discard does not undo it twice
+    val fresh = scopes.create(backgroundScope).outbox(rows, send = send, revert = { undone++ })
+    val id = rows.entries().first().single().id
+    fresh.discard(id).awaitSucceeded()
+    assertThat(undone).isEqualTo(1)
+  }
+
+  @Test
+  fun `a store that fails to report its rows once still sends them`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    rows.insert("k", "a")
+    var failNextRead = true
+    val flaky =
+      object : OutboxStore<String> by rows {
+        override fun entries(): Flow<List<OutboxEntry<String>>> = flow {
+          if (failNextRead) {
+            failNextRead = false
+            throw IllegalStateException("Disk busy")
+          }
+          emitAll(rows.entries())
+        }
+      }
+    val data = testDataScope()
+
+    data.outbox(flaky, send = send)
+    testScheduler.runCurrent()
+    data.actionFailures.assertSingle<IllegalStateException>()
+    testScheduler.advanceTimeBy(1.minutes)
+    testScheduler.runCurrent()
+
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
+  fun `a handle keeps its own attempt's result when a retry succeeds first`() = runTest {
+    send.failPermanently()
+    val rows = inMemoryOutboxStore<String>()
+    val firstView = CompletableDeferred<Unit>()
+    var holdNextView = true
+    // Holds the first view of a row, like an observer that falls behind
+    val slowView =
+      object : OutboxStore<String> by rows {
+        override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+          if (holdNextView) {
+            holdNextView = false
+            firstView.await()
+          }
+          emitAll(rows.entry(id))
+        }
+      }
+    val outbox = testDataScope().outbox(slowView, send = send, revert = send::revert)
+    val original = outbox.enqueue("a")
+    testScheduler.runCurrent()
+
+    send.succeed()
+    val retried = outbox.retry(rows.entries().first().single().id)
+    testScheduler.runCurrent()
+    firstView.complete(Unit)
+    testScheduler.runCurrent()
+
+    retried.assertSucceeded()
+    original.assertFailed<PermanentFailure>()
+  }
+
+  @Test
+  fun `a row whose drain went offline mid read stays queued`() = runTest {
+    send.failure = { _, _ -> IllegalStateException("No network") }
+    val rows = inMemoryOutboxStore<String>()
+    val paused = CompletableDeferred<Unit>()
+    val resume = CompletableDeferred<Unit>()
+    var pauseNextRead = false
+    val slowRead =
+      object : OutboxStore<String> by rows {
+        override fun entries(): Flow<List<OutboxEntry<String>>> = flow {
+          if (pauseNextRead) {
+            pauseNextRead = false
+            paused.complete(Unit)
+            resume.await()
+          }
+          emitAll(rows.entries())
+        }
+      }
+    val data = testDataScope()
+    val outbox =
+      data.outbox(
+        slowRead,
+        send = send,
+        revert = send::revert,
+        retry = RetryPolicy(maxAttempts = 1) { 1.seconds },
+      )
+    testScheduler.runCurrent()
+
+    // The drain for the new row pauses in its read of the head
+    pauseNextRead = true
+    val handle = outbox.enqueue("a")
+    paused.await()
+    data.online.value = false
+    testScheduler.runCurrent()
+    resume.complete(Unit)
+    testScheduler.runCurrent()
+
+    assertThat(send.attempts).isEmpty()
+    assertThat(send.reverted).isEmpty()
+    handle.assertPending()
+    send.succeed()
+    data.online.value = true
+    testScheduler.runCurrent()
+    handle.assertSucceeded()
+  }
+
+  /**
+   * Pauses the first update that marks a row reverted, after it commits and before it returns, like
+   * a database that notifies inside its transaction.
+   */
+  private class PauseAfterRevertedWrite(private val rows: OutboxStore<String>) :
+    OutboxStore<String> by rows {
+    val written = CompletableDeferred<Unit>()
+    val finish = CompletableDeferred<Unit>()
+
+    override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+      val wrote = rows.update(entry, expected)
+      if (entry.reverted && !written.isCompleted) {
+        written.complete(Unit)
+        finish.await()
+      }
+      return wrote
+    }
   }
 
   @Test

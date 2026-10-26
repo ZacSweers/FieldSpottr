@@ -42,9 +42,10 @@ class PermanentFailure(message: String, cause: Throwable? = null) : Exception(me
  *                         permanent or out of attempts: Failed, then revert(payload)
  * ```
  *
- * Handles follow the row, so they survive a restart through [operation]. When the outbox's scope
- * stops, its unsettled handles settle Cancelled and the rows stay for the next outbox. Drains start
- * on enqueue, on reconnect and at startup.
+ * Handles follow the row, so they survive a restart through [operation]. A handle settles with the
+ * outcome of the attempt it follows, so after a retry an earlier handle keeps its own result. When
+ * the outbox's scope stops, its unsettled handles settle Cancelled and the rows stay for the next
+ * outbox. Drains start on enqueue, on reconnect and at startup.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface Outbox<E> {

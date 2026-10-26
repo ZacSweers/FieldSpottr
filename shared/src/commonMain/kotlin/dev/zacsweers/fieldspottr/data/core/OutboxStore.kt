@@ -39,7 +39,9 @@ data class OutboxEntry<E>(
   val lastError: String? = null,
   /**
    * The optimistic change behind this row was undone, or an undo was attempted. Revert runs at most
-   * once per row.
+   * once per row. The outbox writes this flag and attempts the undo together, even when its scope
+   * stops between the two. Process death between them can still leave the flag set without the
+   * undo.
    */
   val reverted: Boolean = false,
   /** When the current backoff ends. It lives on the row, so a restart waits it out. */

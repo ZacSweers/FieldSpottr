@@ -150,6 +150,7 @@ private class RealDataScope(
       policy = retry,
       online = factory.online,
       clock = factory.clock,
+      onFailure = factory.onActionFailure,
     )
 
   private fun <T> newQuery(

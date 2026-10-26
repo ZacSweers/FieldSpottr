@@ -17,11 +17,18 @@ import dev.zacsweers.fieldspottr.data.core.PermanentFailure
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
 import dev.zacsweers.fieldspottr.data.core.rollbackOnFailure
 import dev.zacsweers.fieldspottr.data.core.runCatchingCancellable
+import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.collections.immutable.PersistentSet
+import kotlinx.collections.immutable.persistentHashMapOf
+import kotlinx.collections.immutable.persistentHashSetOf
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +40,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
@@ -56,39 +64,64 @@ internal class RealOutbox<E>(
   private val online: StateFlow<Boolean>,
   /** Backoff deadlines outlive the process, so they use wall time. */
   private val clock: Clock,
+  /** Hears a store's failures to report its rows, which no command's handle would carry. */
+  private val onFailure: (Throwable) -> Unit,
 ) : Outbox<E> {
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
+  // The unsettled handles following each row's current attempt, so the attempt's outcome reaches
+  // them even when their view of the row falls behind. Compare-and-set only. Nothing observes it.
+  private val following =
+    AtomicReference(persistentHashMapOf<EntryId, PersistentSet<MutableStateFlow<OperationState>>>())
 
   override val entries: Flow<List<OutboxEntry<E>>> = store.entries()
 
   init {
-    scope.launch {
-      combine(online, store.entries()) { up, rows ->
-          if (up) {
-            rows.filter { it.status.isSendable }.mapTo(HashSet()) { it.key }
-          } else {
-            emptySet()
-          }
+    scope.launch { watch() }
+  }
+
+  /**
+   * Starts a drain for each key with a sendable row while online. A store that fails to report its
+   * rows is reported and watched again after a pause, so rows already stored still send.
+   */
+  private suspend fun watch() {
+    var pause = WATCH_RETRY_FIRST
+    while (true) {
+      runCatchingCancellable {
+          combine(online, store.entries()) { up, rows ->
+              if (up) {
+                rows.filter { it.status.isSendable }.mapTo(HashSet()) { it.key }
+              } else {
+                emptySet()
+              }
+            }
+            .collect { keys ->
+              pause = WATCH_RETRY_FIRST
+              keys.forEach(::drain)
+            }
         }
-        .collect { keys -> keys.forEach(::drain) }
+        .onFailure(onFailure)
+      delay(pause)
+      pause = minOf(pause * 2, WATCH_RETRY_MAX)
     }
   }
 
   override fun enqueue(payload: E, key: String?, apply: suspend () -> Unit): Operation {
     val rowKey = key ?: WHOLE_QUEUE
-    return tracked(Ordering.Keyed(Enqueue(this, rowKey))) { id ->
+    return tracked(Ordering.Keyed(Enqueue(this, rowKey))) { attempt ->
       apply()
       // Once the change is applied, the row goes in or the change is undone, even if the owner
       // stops meanwhile. A store that throws stored nothing, so no send or revert would reach it.
       withContext(NonCancellable) {
-        id.complete(rollbackOnFailure({ revert(payload) }) { store.insert(rowKey, payload) })
+        attempt.started(rollbackOnFailure({ revert(payload) }) { store.insert(rowKey, payload) })
       }
     }
   }
 
   override fun retry(id: EntryId): Operation =
-    tracked(Ordering.Keyed(Row(this, id))) { done ->
+    tracked(Ordering.Keyed(Row(this, id))) { attempt ->
+      // Before the requeue, so the new attempt's outcome reaches this handle
+      attempt.started(id)
       store.entry(id).first()?.let { row ->
         when (row.status) {
           is OutboxStatus.Failed ->
@@ -110,32 +143,39 @@ internal class RealOutbox<E>(
         }
         drain(row.key)
       }
-      done.complete(id)
     }
 
   override fun discard(id: EntryId): Operation =
     actions.run(Ordering.Keyed(Row(this, id))) {
       val row = checkNotNull(store.entry(id).first()) { "$id is gone" }
       val pending = row.status == OutboxStatus.Queued || row.status is OutboxStatus.Failed
-      val discarded =
-        pending &&
-          store.update(
-            row.copy(status = OutboxStatus.Discarded, reverted = true),
-            expected = row.status,
-          )
-      check(discarded) { "$id is no longer pending" }
-      // A head that was backing off takes its timer along, so the next row sends now
-      if (cancelTimer(row.key, id)) {
-        drain(row.key)
-      }
-      // A throw fails this handle and reaches the failure handler. The row stays Discarded.
-      if (!row.reverted) {
-        revert(row.payload)
+      // A row marked reverted promises an undo attempt, so the write that marks it and that attempt
+      // finish together even if the owner stops meanwhile
+      withContext(NonCancellable) {
+        val discarded =
+          pending &&
+            store.update(
+              row.copy(status = OutboxStatus.Discarded, reverted = true),
+              expected = row.status,
+            )
+        check(discarded) { "$id is no longer pending" }
+        settleFollowers(id, OperationState.Cancelled)
+        // A head that was backing off takes its timer along, so the next row sends now
+        if (cancelTimer(row.key, id)) {
+          drain(row.key)
+        }
+        // A throw fails this handle and reaches the failure handler. The row stays Discarded.
+        if (!row.reverted) {
+          revert(row.payload)
+        }
       }
     }
 
-  override fun operation(id: EntryId): Operation =
-    Operation.of(store.entry(id).map { it.toOperationState() }.latched())
+  override fun operation(id: EntryId): Operation {
+    val state = MutableStateFlow<OperationState>(OperationState.Queued)
+    follow(id, state)
+    return Operation.of(latched(state, { id }, store.entry(id).map { it.toOperationState() }))
+  }
 
   /**
    * One drainer per key. Sends the oldest sendable row until none is left, the network drops or a
@@ -146,6 +186,10 @@ internal class RealOutbox<E>(
       while (online.value) {
         val head =
           store.entries().first().firstOrNull { it.key == key && it.status.isSendable } ?: break
+        // The read suspends, so the network may have dropped meanwhile
+        if (!online.value) {
+          break
+        }
         // A timer holds the key only while its row is still the head with the same deadline. One
         // left over from a row that was discarded or retried meanwhile is dropped.
         val timer = waking.load()[key]
@@ -165,24 +209,38 @@ internal class RealOutbox<E>(
         if (!store.update(head.copy(status = OutboxStatus.Sending), expected = head.status)) {
           continue
         }
+        // So does the claim. A send started offline would spend an attempt for nothing.
+        if (!online.value) {
+          store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
+          break
+        }
         val failure = runCatchingCancellable { send(head.payload) }.exceptionOrNull()
         val attempts = head.attempts + 1
         when {
           failure == null ->
-            store.update(head.copy(status = OutboxStatus.Sent), expected = OutboxStatus.Sending)
+            if (
+              store.update(head.copy(status = OutboxStatus.Sent), expected = OutboxStatus.Sending)
+            ) {
+              settleFollowers(head.id, OperationState.Succeeded)
+            }
           // Poison pill: fail it, undo its local change, and let the key move on
           failure is PermanentFailure || attempts >= policy.maxAttempts -> {
-            store.update(
-              head.copy(
-                status = OutboxStatus.Failed(failure.toString()),
-                attempts = attempts,
-                reverted = true,
-              ),
-              expected = OutboxStatus.Sending,
-            )
-            // At most once per row. A throw ends this drain and reaches the failure handler.
-            if (!head.reverted) {
-              revert(head.payload)
+            val status = OutboxStatus.Failed(failure.toString())
+            // The row marked reverted promises an undo attempt, so the write and that attempt
+            // finish together even if the owner stops meanwhile
+            withContext(NonCancellable) {
+              val failed =
+                store.update(
+                  head.copy(status = status, attempts = attempts, reverted = true),
+                  expected = OutboxStatus.Sending,
+                )
+              if (failed) {
+                settleFollowers(head.id, OperationState.Failed(PermanentFailure(status.cause)))
+                // At most once per row. A throw ends this drain and reaches the failure handler.
+                if (!head.reverted) {
+                  revert(head.payload)
+                }
+              }
             }
           }
           else -> {
@@ -233,50 +291,91 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Queued until [write] completes the row's id, then a view over that row. A command that settles
-   * Cancelled after its row was written still follows the row.
+   * Queued until [write] reports its row through [Attempt.started], then a view over that row. A
+   * command that settles Cancelled after its row was written still follows the row.
    */
-  private fun tracked(
-    ordering: Ordering,
-    write: suspend (id: CompletableDeferred<EntryId>) -> Unit,
-  ): Operation {
-    val id = CompletableDeferred<EntryId>()
-    val written = actions.run(ordering) { write(id) }
-    return Operation.of(
-      flow {
-        val done = written.await()
-        if (id.isCompleted) {
-          emitAll(store.entry(id.await()).map { it.toOperationState() })
-        } else {
-          // The write itself failed or was cancelled
-          emit(done)
-        }
+  private fun tracked(ordering: Ordering, write: suspend (attempt: Attempt) -> Unit): Operation {
+    val attempt = Attempt(MutableStateFlow(OperationState.Queued))
+    val written = actions.run(ordering) { write(attempt) }
+    val rowStates = flow {
+      val done = written.await()
+      if (attempt.id.isCompleted) {
+        emitAll(store.entry(attempt.id.await()).map { it.toOperationState() })
+      } else {
+        // The write itself failed or was cancelled
+        emit(done)
       }
-        .latched()
-    )
+    }
+    return Operation.of(latched(attempt.state, { attempt.row }, rowStates))
+  }
+
+  /** Where a write reports its row, so the handle follows that row's current attempt. */
+  private inner class Attempt(val state: MutableStateFlow<OperationState>) {
+    val id = CompletableDeferred<EntryId>()
+    @Volatile var row: EntryId? = null
+
+    /** Follows [row] before anything can settle the attempt, then records it. */
+    fun started(row: EntryId) {
+      follow(row, state)
+      this.row = row
+      id.complete(row)
+    }
   }
 
   /**
-   * Collected in the outbox's scope until the first terminal state, then frozen. A retried row gets
-   * a new handle. When the scope stops first, the handle settles Cancelled and the row stays for
-   * the next owner. When the store fails to report the row, the handle settles Failed. Either way
-   * no waiter is left waiting.
+   * [state], following [rowStates] in the outbox's scope until the first terminal state, then
+   * frozen. The attempt's outcome can settle it first, through [settleFollowers], when the view of
+   * the row is behind. A retried row gets a new handle. When the scope stops first, the handle
+   * settles Cancelled and the row stays for the next owner. When the store fails to report the row,
+   * the handle settles Failed. Either way no waiter is left waiting.
    */
-  private fun Flow<OperationState>.latched(): StateFlow<OperationState> {
-    val state = MutableStateFlow<OperationState>(OperationState.Queued)
+  private fun latched(
+    state: MutableStateFlow<OperationState>,
+    id: () -> EntryId?,
+    rowStates: Flow<OperationState>,
+  ): StateFlow<OperationState> {
     val collector = scope.launch {
       runCatchingCancellable {
-        this@latched.transformWhile {
-            emit(it)
-            it !is OperationState.Terminal
+        rowStates
+          .transformWhile { next ->
+            state.update { it.settledOr(next) }
+            emit(Unit)
+            state.value !is OperationState.Terminal
           }
-          .collect { state.value = it }
+          .collect()
       }
         .onFailure { cause -> state.update { it.settledOr(OperationState.Failed(cause)) } }
     }
     // Also runs when the scope had already stopped, so the collector never started
-    collector.invokeOnCompletion { state.update { it.settledOr(OperationState.Cancelled) } }
+    collector.invokeOnCompletion {
+      state.update { it.settledOr(OperationState.Cancelled) }
+      id()?.let { unfollow(it, state) }
+    }
     return state.asStateFlow()
+  }
+
+  private fun follow(id: EntryId, state: MutableStateFlow<OperationState>) {
+    following.update { it.putting(id, (it[id] ?: persistentHashSetOf()).adding(state)) }
+  }
+
+  private fun unfollow(id: EntryId, state: MutableStateFlow<OperationState>) {
+    following.update { current ->
+      val rest = current[id]?.removing(state) ?: return@update current
+      if (rest.isEmpty()) {
+        current.removing(id)
+      } else {
+        current.putting(id, rest)
+      }
+    }
+  }
+
+  /**
+   * Settles every handle following row [id]'s current attempt with its [outcome], and forgets them,
+   * so a later attempt's handles start fresh.
+   */
+  private fun settleFollowers(id: EntryId, outcome: OperationState) {
+    val settled = following.fetchAndUpdate { it.removing(id) }[id] ?: return
+    settled.forEach { state -> state.update { it.settledOr(outcome) } }
   }
 
   // Keys this outbox owns on its DataActions. They include the instance, so two outboxes on one
@@ -300,15 +399,19 @@ internal class RealOutbox<E>(
 
 private const val WHOLE_QUEUE = ""
 
+// How long the watcher waits before reading a failing store again, doubling up to the cap
+private val WATCH_RETRY_FIRST = 1.seconds
+private val WATCH_RETRY_MAX = 1.minutes
+
 private val OutboxStatus.isSendable: Boolean
   get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending
 
-/** This state if it is terminal, else [terminal]. */
-private fun OperationState.settledOr(terminal: OperationState.Terminal): OperationState =
+/** This state if it is terminal, else [next]. A settled handle never changes again. */
+private fun OperationState.settledOr(next: OperationState): OperationState =
   if (this is OperationState.Terminal) {
     this
   } else {
-    terminal
+    next
   }
 
 private fun OutboxEntry<*>?.toOperationState(): OperationState =
