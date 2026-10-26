@@ -47,11 +47,15 @@ internal class RealDataQuery<T>(
    */
   internal fun data(onRequest: (Operation) -> Unit): Flow<Fetched<T>?> = flow {
     onRequest(fetchIfStale())
+    // The check above covers the store's first value, so only a value that later goes away checks
+    // again
+    var previous: Fetched<T>? = null
     emitAll(
-      store.data.onEach {
-        if (it == null) {
-          onRequest(fetchIfStale())
+      store.data.onEach { current ->
+        if (current == null && previous != null) {
+          onRequest(checkAfterQueued())
         }
+        previous = current
       }
     )
   }
@@ -82,6 +86,14 @@ internal class RealDataQuery<T>(
    */
   private fun fetchIfStale(): Operation =
     actions.runOrJoin(Ordering.Keyed(key), Request.Check, joins = { it is Request }, ::checkStale)
+
+  /**
+   * Checks the stored time once the commands already queued on this query are done, without joining
+   * them. A value that goes away while a fetch is still writing gets its own check after that
+   * write.
+   */
+  private fun checkAfterQueued(): Operation =
+    actions.runOrJoin(Ordering.Keyed(key), Request.Check, joins = { false }, ::checkStale)
 
   // The newest command on the key from here on, so a later request waits for it and checks the
   // store again instead of joining a fetch that started before the data changed

@@ -335,6 +335,49 @@ class DataQueryTest {
   }
 
   @Test
+  fun `one collection of an empty query makes one fetch attempt`() = runTest {
+    val failing = TestFetch<Int> { error("offline") }
+    val query =
+      testDataScope(eager = true, clock = testClock(START))
+        .query(QueryStore.inMemory(), fetch = failing, freshness = Freshness.staleAfter(1.hours))
+
+    query.data.first()
+
+    // The check on subscription already covers the store's first empty value
+    assertThat(failing.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `clearing the store while a fetch writes checks again after the write`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(null)
+    val published = CompletableDeferred<Unit>()
+    val finishWrite = CompletableDeferred<Unit>()
+    val store =
+      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
+        // Visible before the write returns, like a database that notifies inside its transaction
+        state.value = Fetched(value, fetchedAt)
+        published.complete(Unit)
+        finishWrite.await()
+      }
+    var calls = 0
+    val counting = TestFetch { ++calls }
+    val query =
+      testDataScope(clock = testClock(START))
+        .query(store, fetch = counting, freshness = Freshness.staleAfter(1.hours))
+    backgroundScope.launch { query.data.collect {} }
+
+    published.await()
+    store.clear()
+    testScheduler.runCurrent()
+    finishWrite.complete(Unit)
+    testScheduler.runCurrent()
+
+    // The emptied store is checked once the write in flight is done, and fetches again
+    assertThat(counting.callCount).isEqualTo(2)
+    assertThat(state.value?.value).isEqualTo(2)
+  }
+
+  @Test
   fun `a combined handle settles once every operation has`() = runTest {
     stored.value = Fetched(1, START)
     val query = dataQuery()
