@@ -40,6 +40,10 @@ internal class RealDataActions(
   // Compare-and-set only. Nothing observes it.
   private val tails = AtomicReference(persistentHashMapOf<ChainKey, Entry>())
 
+  /** How many keys still hold a command. For tests, which cannot see the key map any other way. */
+  internal val keysHeld: Int
+    get() = tails.load().size
+
   override fun run(ordering: Ordering, block: suspend () -> Unit): Operation =
     runOrJoin(ordering, tag = null, joins = { false }, block)
 
@@ -73,6 +77,19 @@ internal class RealDataActions(
       }
     }
     val started = entry ?: newEntry(ordering, tag, block)
+    // Registered once linked, so it also runs for a job that ended before then, like one whose
+    // scope was already cancelled
+    if (key != null) {
+      started.settled.invokeOnCompletion {
+        tails.update { m ->
+          if (m[key] === started) {
+            m.removing(key)
+          } else {
+            m
+          }
+        }
+      }
+    }
     started.published.complete(Unit)
     claimPredecessors(started)
     started.job?.start()
@@ -117,17 +134,11 @@ internal class RealDataActions(
           else -> OperationState.Failed(cause)
         }
       }
-      // The job reaches the block and everything it captured, so a kept handle must not keep it
+      // The job reaches the block and everything it captured, and the key can be as large, so a
+      // kept handle must keep neither. Only the wait guard reads the key, which a settled handle
+      // skips.
       entry.job = null
-      entry.chainKey?.let { key ->
-        tails.update { m ->
-          if (m[key] === entry) {
-            m.removing(key)
-          } else {
-            m
-          }
-        }
-      }
+      entry.chainKey = null
       entry.settled.complete()
     }
     return entry
@@ -245,16 +256,18 @@ internal class RealDataActions(
 
 /**
  * One submitted command: its job, its handle state, its claim and its link to the entry ahead. It
- * keeps its runner, key and [tag] so a wait on its handle can be checked and a query can tell what
- * kind of request it is.
+ * keeps its runner and [tag], and its key until it settles, so a wait on its handle can be checked
+ * and a query can tell what kind of request it is.
  */
 @OptIn(ExperimentalAtomicApi::class)
 internal class Entry(
   val mode: OnPrevious,
   val tag: Any?,
   val runner: RealDataActions,
-  val chainKey: ChainKey?,
+  chainKey: ChainKey?,
 ) {
+  // Cleared once the job completes
+  @Volatile var chainKey: ChainKey? = chainKey
   // Set before the entry is linked. Cleared once the job completes.
   @Volatile var job: Job? = null
   // Observed. The handle is a view over it.

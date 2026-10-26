@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
@@ -121,6 +122,22 @@ class DataActionsTest {
     self = actions.run(Ordering.Concurrent) { self.await() }
     testScheduler.runCurrent()
     self.assertFailed<IllegalStateException>()
+  }
+
+  @Test
+  fun `a runner whose scope ended keeps none of the keys given to it`() = runTest {
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val actions = RealDataActions(owner, onFailure = {})
+    owner.cancel()
+    var ran = 0
+
+    val handles = List(20) { i -> actions.run(Ordering.Keyed("key$i")) { ran++ } }
+    testScheduler.runCurrent()
+
+    handles.forEach { it.assertCancelled() }
+    assertThat(ran).isEqualTo(0)
+    assertThat(actions.keysHeld).isEqualTo(0)
   }
 
   @Test

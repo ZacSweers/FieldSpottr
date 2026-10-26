@@ -24,6 +24,16 @@ class HandleRetentionTest {
     handle.assertSucceeded()
     assertThat(handle.reaches(input)).isFalse()
   }
+
+  @Test
+  fun `a settled handle does not keep its key`() = runTest {
+    val key = ByteArray(1 shl 20)
+    val handle = testDataScope().newActions().run(Ordering.Keyed(key)) {}
+    testScheduler.runCurrent()
+
+    handle.assertSucceeded()
+    assertThat(handle.reaches(key)).isFalse()
+  }
 }
 
 /**
