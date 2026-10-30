@@ -11,3 +11,5 @@ import app.cash.sqldelight.db.SqlSchema
 fun interface SqlDriverFactory {
   suspend fun create(schema: SqlSchema<QueryResult.AsyncValue<Unit>>, name: String): SqlDriver
 }
+
+internal fun SqlDriver.createFSDatabase(): FSDatabase = FSDatabase(this)

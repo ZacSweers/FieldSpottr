@@ -13,36 +13,54 @@ import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
+import dev.zacsweers.fieldspottr.data.core.DataScope
+import dev.zacsweers.fieldspottr.data.core.impl.invoke
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.metro.suspendLazy
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
+import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.plus
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okio.FileSystem
+import okio.Path.Companion.toOkioPath
 import okio.buffer
-import okio.fakefilesystem.FakeFileSystem
 import org.junit.Rule
 
 class PermitRepositoryTest {
 
   @get:Rule val temporaryDatabase = TemporaryDatabase()
 
-  private val fakeFileSystem = FakeFileSystem()
+  // A real directory, since the repository's queries use files from several threads at once
+  private val fileSystem = FileSystem.SYSTEM
+  private val root = Files.createTempDirectory("permits").toOkioPath()
   private val json = Json { ignoreUnknownKeys = true }
-  private val appDirs = FakeFSAppDirs(fakeFileSystem)
+  private val appDirs = FakeFSAppDirs(fileSystem, root)
   private val httpClient =
     HttpClient(
       MockEngine { request ->
@@ -50,18 +68,26 @@ class PermitRepositoryTest {
       }
     )
 
+  // Tests on this repository read and import directly, so nothing runs in its scope
+  private val idleScope = CoroutineScope(SupervisorJob())
+
   private val repository =
     PermitRepositoryImpl(
+      DataScope.Factory(onFailure = {}).create(idleScope),
       appDirs,
       json,
       Logger.Companion,
       suspendLazy { temporaryDatabase.db() },
       lazyOf(httpClient),
+      // Real threads, so the import tests run against the driver's own concurrency
+      Dispatchers.IO,
     )
 
   @AfterTest
   fun closeHttpClient() {
     httpClient.close()
+    idleScope.cancel()
+    fileSystem.deleteRecursively(root)
   }
 
   private val testDate = LocalDate(2025, 9, 18)
@@ -158,9 +184,9 @@ class PermitRepositoryTest {
     val statusCode: HttpStatusCode = HttpStatusCode.OK,
   )
 
-  private fun testRepository(
+  private fun TestScope.testRepository(
     routes: MutableMap<String, TestResponse>
-  ): Pair<PermitRepository, HttpClient> {
+  ): Pair<PermitRepositoryImpl, HttpClient> {
     val client =
       HttpClient(
         MockEngine { request ->
@@ -170,11 +196,13 @@ class PermitRepositoryTest {
         }
       )
     return PermitRepositoryImpl(
+      testDataScope(clock = testClock(START)),
       appDirs,
       json,
       Logger.Companion,
       suspendLazy { temporaryDatabase.db() },
       lazyOf(client),
+      Dispatchers.IO,
     ) to client
   }
 
@@ -182,8 +210,8 @@ class PermitRepositoryTest {
 
   private fun writeCachedAreas(areaName: String = "TestArea") {
     val path = appDirs.userData / "areas.json"
-    fakeFileSystem.createDirectories(path.parent!!)
-    fakeFileSystem.sink(path).buffer().use { it.writeUtf8(testAreasJson(areaName)) }
+    fileSystem.createDirectories(path.parent!!)
+    fileSystem.sink(path).buffer().use { it.writeUtf8(testAreasJson(areaName)) }
   }
 
   private fun cachedManifest(hash: String): AvailabilityManifest {
@@ -201,8 +229,8 @@ class PermitRepositoryTest {
 
   private fun writeCachedManifest(hash: String) {
     val path = appDirs.userData / "availability" / "manifest.json"
-    fakeFileSystem.createDirectories(path.parent!!)
-    fakeFileSystem.sink(path).buffer().use {
+    fileSystem.createDirectories(path.parent!!)
+    fileSystem.sink(path).buffer().use {
       it.writeUtf8(json.encodeToString(cachedManifest(hash)))
     }
   }
@@ -363,7 +391,7 @@ class PermitRepositoryTest {
   fun `cached areas with older version load built-in areas`() {
     val areasPath = appDirs.userData / "areas.json"
     val oldAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION - 1)
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(oldAreas)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(oldAreas)) }
 
     val loaded = repository.loadLocalAreas()
     assertThat(loaded).isSameInstanceAs(Areas.default)
@@ -378,7 +406,7 @@ class PermitRepositoryTest {
   fun `cached areas with current version is not stale`() {
     val areasPath = appDirs.userData / "areas.json"
     val currentAreas = Areas(entries = Areas.default.entries, version = Areas.VERSION)
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(currentAreas)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(currentAreas)) }
 
     val loaded = repository.loadLocalAreas()
     assertThat(loaded.version).isEqualTo(Areas.VERSION)
@@ -439,7 +467,7 @@ class PermitRepositoryTest {
     // Write a cached areas.json with only the first two entries
     val subset = Areas.default.copy(entries = Areas.default.entries.take(2).toImmutableList())
     val areasPath = appDirs.userData / "areas.json"
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(subset)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(subset)) }
 
     val loaded = repository.loadLocalAreas()
 
@@ -611,7 +639,7 @@ class PermitRepositoryTest {
   }
 
   @Test
-  fun `populateDb imports manifest area feed`() = runTest {
+  fun `refresh imports manifest area feed`() = runTest {
     val routes =
       mutableMapOf(
         rawGithubPath("areas.json") to TestResponse(testAreasJson()),
@@ -654,7 +682,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.populateDb(forceRefresh = true)).isTrue()
+      refreshRepository.refresh().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -669,7 +697,97 @@ class PermitRepositoryTest {
   }
 
   @Test
-  fun `populateDb failed area feed keeps prior area rows`() = runTest {
+  fun `refresh writes several area feeds at once`() = runTest {
+    val areaNames = listOf("TestArea", "OtherArea")
+    val areas =
+      Areas(
+        entries =
+          areaNames
+            .map { Area(areaName = it, displayName = it, fieldGroups = persistentListOf()) }
+            .toImmutableList(),
+        version = Areas.VERSION,
+      )
+    val manifest =
+      AvailabilityManifest(
+        areas =
+          areaNames.map { name ->
+            AvailabilityManifestArea(
+              areaName = name,
+              path = "availability/areas/$name.json",
+              hash = "hash-$name",
+            )
+          }
+      )
+    val routes =
+      mutableMapOf(
+        rawGithubPath("areas.json") to TestResponse(json.encodeToString(areas)),
+        rawGithubPath("availability/manifest.json") to TestResponse(json.encodeToString(manifest)),
+      )
+    for (name in areaNames) {
+      val feed =
+        AvailabilityAreaFeed(
+          areaName = name,
+          rows =
+            listOf(
+              AvailabilityFeedRow(
+                groupName = testGroup,
+                fieldId = "Soccer-01",
+                start = 9.am,
+                end = 11.am,
+                title = "$name Permit",
+              )
+            ),
+        )
+      routes[rawGithubPath("availability/areas/$name.json")] =
+        TestResponse(json.encodeToString(feed))
+    }
+    val (refreshRepository, client) = testRepository(routes)
+    try {
+      refreshRepository.refresh().awaitSucceeded()
+
+      val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+      assertThat(permits.map { it.name }.toSet())
+        .isEqualTo(setOf("TestArea Permit", "OtherArea Permit"))
+    } finally {
+      client.close()
+    }
+  }
+
+  @Test
+  fun `concurrent area feed imports all land`() = runTest {
+    val areaNames = List(20) { "Area$it" }
+
+    // On IO threads, the way feed writes run, so the database sees them together
+    withContext(Dispatchers.IO) {
+      for (name in areaNames) {
+        launch {
+          repository.importAreaFeed(
+            AvailabilityAreaFeed(
+              areaName = name,
+              rows =
+                listOf(
+                  AvailabilityFeedRow(
+                    groupName = testGroup,
+                    fieldId = "Soccer-01",
+                    start = 9.am,
+                    end = 11.am,
+                    title = "$name Permit",
+                  )
+                ),
+            ),
+            AvailabilityManifestArea(areaName = name, hash = "hash-$name"),
+            fetchedAt = 300L,
+          )
+        }
+      }
+    }
+
+    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+    assertThat(permits.map { it.area }.toSet()).isEqualTo(areaNames.toSet())
+  }
+
+  @Test
+  fun `refresh failed area feed keeps prior area rows`() = runTest {
     temporaryDatabase.db().fsdbQueries.addPermit(morningPermit)
     val routes =
       mutableMapOf(
@@ -694,7 +812,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.populateDb(forceRefresh = true)).isTrue()
+      refreshRepository.refresh().awaitFailed<Throwable>()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -705,8 +823,8 @@ class PermitRepositoryTest {
   }
 
   @Test
-  fun `populateDb skips network when repo data is newer than an hour`() = runTest {
-    val now = System.now().toEpochMilliseconds()
+  fun `sync skips network when repo data is newer than an hour`() = runTest {
+    val now = START.toEpochMilliseconds()
     writeCachedAreas()
     writeCachedManifest("hash-1")
     temporaryDatabase
@@ -715,22 +833,31 @@ class PermitRepositoryTest {
       .setMetadata("last_areas_app_version", BuildConfig.VERSION_CODE.toString())
     temporaryDatabase.db().fsdbQueries.setMetadata("last_areas_fetch_at", now.toString())
     temporaryDatabase.db().fsdbQueries.setMetadata("last_manifest_fetch_at", now.toString())
+    temporaryDatabase
+      .db()
+      .fsdbQueries
+      .setMetadata("last_manifest_app_version", BuildConfig.VERSION_CODE.toString())
     repository.importAreaFeed(
       downloadedFeed("Cached Permit"),
       cachedManifest("hash-1").areas.single(),
       now,
     )
+    // No routes, so any request would fail the sync
+    val (syncRepository, client) = testRepository(mutableMapOf())
+    try {
+      syncRepository.syncIfStale().awaitSucceeded()
 
-    assertThat(repository.populateDb(forceRefresh = false)).isTrue()
-
-    val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
-    assertThat(permits).hasSize(1)
-    assertThat(permits.single().name).isEqualTo("Cached Permit")
+      val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+      assertThat(permits).hasSize(1)
+      assertThat(permits.single().name).isEqualTo("Cached Permit")
+    } finally {
+      client.close()
+    }
   }
 
   @Test
-  fun `populateDb refreshes area feeds older than an hour`() = runTest {
-    val oldFetch = System.now().toEpochMilliseconds() - 2.hours.inWholeMilliseconds
+  fun `sync refreshes area feeds older than an hour`() = runTest {
+    val oldFetch = START.toEpochMilliseconds() - 2.hours.inWholeMilliseconds
     writeCachedAreas()
     writeCachedManifest("hash-1")
     temporaryDatabase
@@ -754,7 +881,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.populateDb(forceRefresh = false)).isTrue()
+      refreshRepository.syncIfStale().awaitSucceeded()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -765,8 +892,8 @@ class PermitRepositoryTest {
   }
 
   @Test
-  fun `populateDb failed hourly area feed refresh keeps prior rows`() = runTest {
-    val oldFetch = System.now().toEpochMilliseconds() - 2.hours.inWholeMilliseconds
+  fun `sync failed hourly area feed refresh keeps prior rows`() = runTest {
+    val oldFetch = START.toEpochMilliseconds() - 2.hours.inWholeMilliseconds
     writeCachedAreas()
     writeCachedManifest("hash-1")
     temporaryDatabase
@@ -790,7 +917,7 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.populateDb(forceRefresh = false)).isTrue()
+      refreshRepository.syncIfStale().awaitFailed<Throwable>()
 
       val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
       assertThat(permits).hasSize(1)
@@ -801,7 +928,56 @@ class PermitRepositoryTest {
   }
 
   @Test
-  fun `populateDb malformed downloaded areas keeps cached catalog`() = runTest {
+  fun `sync refetches a fresh feed whose manifest hash changed`() = runTest {
+    val now = START.toEpochMilliseconds()
+    writeCachedAreas()
+    writeCachedManifest("hash-2")
+    val queries = temporaryDatabase.db().fsdbQueries
+    queries.setMetadata("last_areas_app_version", BuildConfig.VERSION_CODE.toString())
+    queries.setMetadata("last_areas_fetch_at", now.toString())
+    queries.setMetadata("last_manifest_app_version", BuildConfig.VERSION_CODE.toString())
+    queries.setMetadata("last_manifest_fetch_at", now.toString())
+    repository.importAreaFeed(
+      downloadedFeed("Cached Permit"),
+      cachedManifest("hash-1").areas.single(),
+      now,
+    )
+    // Only the feed has a route: the catalog and the manifest are fresh
+    val routes =
+      mutableMapOf(
+        rawGithubPath("availability/areas/test-area.json") to
+          TestResponse(json.encodeToString(downloadedFeed("New Hash Permit")))
+      )
+    val (syncRepository, client) = testRepository(routes)
+    try {
+      syncRepository.syncIfStale().awaitSucceeded()
+
+      val permits = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
+      assertThat(permits.single().name).isEqualTo("New Hash Permit")
+      assertThat(queries.getAreaFeed("TestArea").executeAsOne().hash).isEqualTo("hash-2")
+    } finally {
+      client.close()
+    }
+  }
+
+  @Test
+  fun `a failed sync shows a message only when no permits are stored`() = runTest {
+    val (syncRepository, client) = testRepository(mutableMapOf())
+    try {
+      syncRepository.refresh().awaitFailed<Throwable>()
+      assertThat(syncRepository.loadingMessage.first())
+        .isEqualTo("Failed to fetch areas. Please check connection and try again.")
+
+      temporaryDatabase.db().fsdbQueries.addPermit(morningPermit)
+      syncRepository.refresh().awaitFailed<Throwable>()
+      assertThat(syncRepository.loadingMessage.first()).isEqualTo(null)
+    } finally {
+      client.close()
+    }
+  }
+
+  @Test
+  fun `refresh malformed downloaded areas keeps cached catalog`() = runTest {
     val cachedAreas =
       Areas(
         entries =
@@ -815,7 +991,7 @@ class PermitRepositoryTest {
         version = Areas.VERSION,
       )
     val areasPath = appDirs.userData / "areas.json"
-    fakeFileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(cachedAreas)) }
+    fileSystem.sink(areasPath).buffer().use { it.writeUtf8(json.encodeToString(cachedAreas)) }
     val routes =
       mutableMapOf(
         rawGithubPath("areas.json") to TestResponse("{"),
@@ -824,13 +1000,11 @@ class PermitRepositoryTest {
       )
     val (refreshRepository, client) = testRepository(routes)
     try {
-      assertThat(refreshRepository.populateDb(forceRefresh = true)).isTrue()
+      refreshRepository.refresh().awaitFailed<Throwable>()
 
-      assertThat(
-          refreshRepository.areasFlow().value.entries.map { it.areaName }.contains("CachedArea")
-        )
+      assertThat(refreshRepository.areas.first().entries.map { it.areaName }.contains("CachedArea"))
         .isTrue()
-      assertThat(fakeFileSystem.source(areasPath).buffer().use { it.readUtf8() })
+      assertThat(fileSystem.source(areasPath).buffer().use { it.readUtf8() })
         .isEqualTo(json.encodeToString(cachedAreas))
     } finally {
       client.close()
@@ -884,5 +1058,10 @@ class PermitRepositoryTest {
     val allPermitsAfter = temporaryDatabase.db().fsdbQueries.getAllPermits().executeAsList()
     assertThat(allPermitsAfter).hasSize(1)
     assertThat(allPermitsAfter[0]).isEqualTo(area2Permit)
+  }
+
+  private companion object {
+    // Fixed, so cached fetch times and the repository's clock agree on every run
+    val START = Instant.parse("2026-06-10T12:00:00Z")
   }
 }

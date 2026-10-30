@@ -3,34 +3,45 @@
 package dev.zacsweers.fieldspottr.data
 
 import androidx.compose.runtime.Immutable
-import co.touchlab.kermit.Logger
+import androidx.datastore.core.CorruptionException
+import androidx.datastore.core.DataStore
+import androidx.datastore.core.DataStoreFactory
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.core.okio.OkioSerializer
+import androidx.datastore.core.okio.OkioStorage
 import dev.zacsweers.fieldspottr.FSAppDirs
-import dev.zacsweers.fieldspottr.delete
-import dev.zacsweers.fieldspottr.touch
+import dev.zacsweers.fieldspottr.data.core.DataScope
+import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.Freshness
+import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.asQueryStore
+import dev.zacsweers.fieldspottr.data.core.values
+import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
 import kotlin.math.roundToInt
-import kotlin.time.Clock.System
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Instant
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.plus
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okio.buffer
-import okio.use
+import okio.BufferedSink
+import okio.BufferedSource
 
 /**
  * Open-Meteo forecast for lower Manhattan. All tracked fields are within a couple miles of each
@@ -157,86 +168,81 @@ data class WeatherForecast(
 }
 
 @SingleIn(AppScope::class)
-@Inject
-class WeatherRepository(
-  private val appDirs: FSAppDirs,
+class WeatherRepository
+internal constructor(
+  data: DataScope,
+  store: DataStore<Fetched<OpenMeteoResponse>?>,
   private val json: Json,
-  logger: Logger,
   private val client: Lazy<HttpClient>,
 ) {
-  private val logger = logger.withTag("WeatherRepository")
-  private val cachePath by lazy { appDirs.userData / "weather.json" }
 
-  private val forecastStateFlow = MutableStateFlow<WeatherForecast?>(null)
+  @Inject
+  constructor(
+    @ForScope(AppScope::class) data: DataScope,
+    appDirs: FSAppDirs,
+    json: Json,
+    client: Lazy<HttpClient>,
+    @IoDispatcher io: CoroutineDispatcher,
+  ) : this(data, weatherStore(appDirs, json, data.scope + io), json, client)
 
-  /** Latest known forecast, or null if nothing has been loaded yet. */
-  val forecast: StateFlow<WeatherForecast?> = forecastStateFlow
+  private val query =
+    data.query(
+      store = store.asQueryStore(),
+      fetch = ::fetchForecast,
+      freshness = Freshness.staleAfter(WEATHER_REFRESH_INTERVAL),
+    )
 
-  // Only one refresh at a time - concurrent calls are dropped
-  private val refreshSemaphore = Channel<Unit>(1)
+  /** Latest known forecast, or null until one loads. Collecting it fetches first when stale. */
+  val forecast: Flow<WeatherForecast?> = query.data.values().map { it?.toWeatherForecast() }
 
-  suspend fun refresh(forceRefresh: Boolean = false) {
-    if (!refreshSemaphore.trySend(Unit).isSuccess) return
-    try {
-      withContext(Dispatchers.IO) {
-        val now = System.now().toEpochMilliseconds()
-        val cached = readCache()
-        if (cached != null && forecastStateFlow.value == null) {
-          forecastStateFlow.value = cached.response.toWeatherForecast()
-        }
-        val isFresh =
-          cached != null && now - cached.fetchedAt < WEATHER_REFRESH_INTERVAL.inWholeMilliseconds
-        if (!forceRefresh && isFresh) return@withContext
+  /** Fetches now, even when the stored forecast is fresh. */
+  fun refresh(): Operation = query.requestFetch(force = true)
 
-        val body =
-          try {
-            val response = client.value.get(OPEN_METEO_URL)
-            if (response.status.value !in 200..299) {
-              logger.i { "Weather fetch failed: ${response.status}" }
-              return@withContext
-            }
-            response.bodyAsText()
-          } catch (e: Exception) {
-            logger.e(e) { "Failed to fetch weather" }
-            return@withContext
-          }
-        val response =
-          try {
-            json.decodeFromString<OpenMeteoResponse>(body)
-          } catch (e: Exception) {
-            logger.e(e) { "Failed to decode weather response" }
-            return@withContext
-          }
-        forecastStateFlow.value = response.toWeatherForecast()
-        writeCache(CachedWeather(fetchedAt = now, response = response))
+  private suspend fun fetchForecast(): OpenMeteoResponse {
+    val response = client.value.get(OPEN_METEO_URL)
+    check(response.status.isSuccess()) { "Weather fetch failed: ${response.status}" }
+    return json.decodeFromString<OpenMeteoResponse>(response.bodyAsText())
+  }
+}
+
+/**
+ * DataStore allows one active instance per file, which the repository's graph scoping guarantees.
+ * The file's reads and writes run in [scope], and cancelling it releases the file.
+ */
+internal fun weatherStore(
+  appDirs: FSAppDirs,
+  json: Json,
+  scope: CoroutineScope,
+): DataStore<Fetched<OpenMeteoResponse>?> =
+  DataStoreFactory.create(
+    storage =
+      OkioStorage(appDirs.fs, CachedWeatherSerializer(json)) { appDirs.userData / "weather.json" },
+    // An unreadable cache is treated as empty, so the next collect fetches
+    corruptionHandler = ReplaceFileCorruptionHandler { null },
+    scope = scope,
+  )
+
+/** Reads and writes the same JSON the cache file has always held. */
+internal class CachedWeatherSerializer(private val json: Json) :
+  OkioSerializer<Fetched<OpenMeteoResponse>?> {
+  override val defaultValue: Fetched<OpenMeteoResponse>? = null
+
+  override suspend fun readFrom(source: BufferedSource): Fetched<OpenMeteoResponse>? {
+    val text = source.readUtf8()
+    if (text.isBlank()) return null
+    val cached =
+      try {
+        json.decodeFromString<CachedWeather>(text)
+      } catch (e: IllegalArgumentException) {
+        throw CorruptionException("Unreadable weather cache", e)
       }
-    } finally {
-      refreshSemaphore.tryReceive()
-    }
+    return Fetched(cached.response, Instant.fromEpochMilliseconds(cached.fetchedAt))
   }
 
-  private fun readCache(): CachedWeather? {
-    return try {
-      if (!appDirs.fs.exists(cachePath)) return null
-      json.decodeFromString<CachedWeather>(
-        appDirs.fs.source(cachePath).buffer().use { it.readUtf8() }
-      )
-    } catch (e: Exception) {
-      logger.e(e) { "Failed to read weather cache" }
-      null
-    }
-  }
-
-  private fun writeCache(cached: CachedWeather) {
-    try {
-      if (appDirs.fs.exists(cachePath)) {
-        appDirs.delete(cachePath)
-      }
-      appDirs.touch(cachePath)
-      appDirs.fs.sink(cachePath).buffer().use { it.writeUtf8(json.encodeToString(cached)) }
-    } catch (e: Exception) {
-      logger.e(e) { "Failed to write weather cache" }
-    }
+  override suspend fun writeTo(t: Fetched<OpenMeteoResponse>?, sink: BufferedSink) {
+    if (t == null) return
+    val cached = CachedWeather(t.fetchedAt.toEpochMilliseconds(), t.value)
+    sink.writeUtf8(json.encodeToString(cached))
   }
 }
 
