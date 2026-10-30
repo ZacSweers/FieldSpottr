@@ -8066,32 +8066,6 @@
       "areaName": "Columbus Park",
       "groupName": "Columbus Park",
       "fieldId": "Soccer-01",
-      "start": 1793300400000,
-      "end": 1793304000000,
-      "title": "PS 130 - Hernando De Soto",
-      "org": "PS 130 - Hernando De Soto",
-      "status": "Permit #975550",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1793304000000,
-      "end": 1793305800000,
-      "title": "Manhattan Youth Recreation and Resources",
-      "org": "Manhattan Youth Recreation and Resources",
-      "status": "Permit #937130",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
       "start": 1793304000000,
       "end": 1793311200000,
       "title": "Columbus Park : Soccer-01 Renewal Renewal",
@@ -8099,19 +8073,6 @@
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1793305800000,
-      "end": 1793311200000,
-      "title": "Manhattan Youth Recreation and Resources",
-      "org": "Manhattan Youth Recreation and Resources",
-      "status": "Permit #937130",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
