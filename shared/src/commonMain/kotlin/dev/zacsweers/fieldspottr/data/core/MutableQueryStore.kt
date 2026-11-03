@@ -201,9 +201,13 @@ inline fun <T, reified M> DataScope.mutableStore(
 /**
  * [mutableStore] per key, for a [DataScope.keyed] query: a store for each key over the store [base]
  * gives for it, all sharing the outbox called [name]. [base] is called once per key, and the store
- * it returns serves that key's views and its commits for as long as this set lives. Keys need a
- * stable `toString`, which orders the rows, and [keySerializer], which stores them. [send] gets the
- * key beside the change and its id.
+ * it returns serves that key's views and its commits for as long as this set lives. So the set
+ * keeps one base store object per key it has seen, and nothing frees a key while the set lives.
+ * What each one holds is up to [base]: for keys without bound, like thread ids, give it views over
+ * one capped map, as [QueryStore.inMemoryByKey] returns, or over the database, so the object kept
+ * per key is small and the values have a bound of their own. Keys need a stable `toString`, which
+ * orders the rows, and [keySerializer], which stores them. [send] gets the key beside the change
+ * and its id.
  */
 inline fun <reified K : Any, T, reified M> DataScope.mutableStores(
   name: String,
