@@ -373,7 +373,7 @@ class TestFixturesTest {
 
   @Test
   fun `assertions name the state they found`() = runTest {
-    val error = assertFailsWith<AssertionError> { Operation.Done.assertFailed<Throwable>() }
+    val error = assertFailsWith<AssertionError> { Operation.succeeded.assertFailed<Throwable>() }
     assertThat(error.message.orEmpty()).contains("Succeeded")
 
     val cause = IllegalStateException("rejected")

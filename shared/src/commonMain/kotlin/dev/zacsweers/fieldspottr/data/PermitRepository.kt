@@ -21,6 +21,7 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.awaitOrThrow
 import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.fieldspottr.util.atStartOfDayInNy
 import dev.zacsweers.fieldspottr.util.hashOf
@@ -306,29 +307,23 @@ internal constructor(
     log("Starting sync with force=$force")
     // The catalog and the manifest load together. Feeds wait for both, since they decide which
     // feeds exist.
-    val catalogState =
-      Operation.all(listOf(areasQuery.requestFetch(force), manifestQuery.requestFetch(force)))
-        .await()
+    val catalog = Operation.all(areasQuery.requestFetch(force), manifestQuery.requestFetch(force))
+    catalog.await()
 
     // A failed download leaves the stored catalog and manifest in place, so feeds still sync
     val areaNames =
       (areasStore.data.first()?.value?.let(::mergeWithDefaults) ?: Areas.default).areaNames
     val manifest = manifestStore.data.first()?.value
-    val feedsState =
+    val feedSync =
       if (manifest == null) {
-        null
+        Operation.succeeded
       } else {
         val keys = manifest.areas.filter { it.resolvedAreaName in areaNames }
-        feeds.requestFetch(keys, force).await()
+        feeds.requestFetch(keys, force)
       }
 
-    val failure =
-      listOfNotNull(catalogState, feedsState)
-        .filterIsInstance<OperationState.Failed>()
-        .firstOrNull()
-    if (failure != null) {
-      throw failure.cause
-    }
+    // Once every fetch has settled, the first failure, catalog before feeds, fails the sync
+    Operation.all(catalog, feedSync).awaitOrThrow()
   }
 
   override fun permitDateRangeFlow(): Flow<Pair<LocalDate, LocalDate>?> {

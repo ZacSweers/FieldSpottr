@@ -64,7 +64,7 @@ interface Operation {
 
   companion object {
     /** Already succeeded. What a call returns when there is nothing to do. */
-    val Done: Operation = SettledOperation(OperationState.Succeeded)
+    val succeeded: Operation = SettledOperation(OperationState.Succeeded)
 
     /**
      * Already cancelled. What a call returns when it drops its work before starting, like a request
@@ -82,11 +82,28 @@ interface Operation {
     /** One handle over [operations]. Settles once all of them have: failed if any failed. */
     fun all(operations: Collection<Operation>): Operation =
       if (operations.isEmpty()) {
-        Done
+        succeeded
       } else {
         AllOperation(operations.toList())
       }
+
+    /** [all] over handles given one by one. */
+    fun all(vararg operations: Operation): Operation = all(operations.asList())
   }
+}
+
+/**
+ * [Operation.await], throwing the cause when the work failed. For a command that composes other
+ * handles and should fail when one of them does, like a sync over [Operation.all] of its fetches. A
+ * cancelled handle is returned, since its outcome is unknown and throwing a cancellation from here
+ * would cancel the caller.
+ */
+suspend fun Operation.awaitOrThrow(): OperationState.Terminal {
+  val state = await()
+  if (state is OperationState.Failed) {
+    throw state.cause
+  }
+  return state
 }
 
 /** A handle whose work ended before anyone got it. Its state never changes. */
