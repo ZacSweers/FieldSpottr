@@ -94,8 +94,9 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
 interface DataQuery<T> {
   /**
    * The stored value and when it was fetched, or null before the first fetch. Collecting this may
-   * fetch: it checks freshness first and fetches when the data is stale, and checks again whenever
-   * a stored value goes away. One watcher decides these checks for every collector, so each change
+   * fetch: each collector checks freshness when it subscribes, joining a check already queued, and
+   * fetches when the data is stale. That holds for a collector that takes one value and leaves,
+   * like `first()`. One watcher checks again whenever a stored value goes away, so each change
    * starts one check however many collectors see it. Use [stored] to watch the same values without
    * starting any work.
    */

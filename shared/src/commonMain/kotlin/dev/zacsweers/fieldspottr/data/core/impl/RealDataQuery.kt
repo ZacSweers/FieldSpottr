@@ -56,13 +56,14 @@ internal class RealDataQuery<T>(
   private val watching = AtomicReference(Watching(observers = 0, watcher = null))
 
   /**
-   * The store's values. The first observer starts the watcher, which checks the store when it first
-   * reads it. A later observer checks when it subscribes, since the data can go stale meanwhile.
+   * The store's values. Each observer checks the stored time when it subscribes, joining a check
+   * already queued, since the data can go stale between observers. The check is a command of its
+   * own, so an observer that takes the first value and leaves, like `first()`, still started it.
+   * The first observer also starts the watcher, which checks again whenever a value goes away.
    */
   override val data: Flow<Fetched<T>?> = flow {
-    if (!startWatching()) {
-      holds.holdUntilSettled(fetchIfStale())
-    }
+    startWatching()
+    holds.holdUntilSettled(fetchIfStale())
     try {
       emitAll(store.data)
     } finally {
@@ -72,13 +73,13 @@ internal class RealDataQuery<T>(
 
   override val stored: Flow<Fetched<T>?> = store.data
 
-  /** Counts an observer in, and starts the watcher for the first one. Returns whether it did. */
-  private fun startWatching(): Boolean {
+  /** Counts an observer in, and starts the watcher for the first one. */
+  private fun startWatching() {
     while (true) {
       val current = watching.load()
       if (current.observers > 0) {
         if (watching.compareAndSet(current, Watching(current.observers + 1, current.watcher))) {
-          return false
+          return
         }
         continue
       }
@@ -91,7 +92,7 @@ internal class RealDataQuery<T>(
         } else {
           watcher.cancel()
         }
-        return true
+        return
       }
       watcher.cancel()
     }
@@ -119,19 +120,17 @@ internal class RealDataQuery<T>(
 
   /**
    * One ordered view of the store for every observer, so each change starts one check however many
-   * observers see it, and however late. Its first value checks the stored time, joining a check
-   * already queued. A value that later goes away is checked again once the work already queued is
-   * done, so a value cleared while a fetch is still writing gets a check after that write.
+   * observers see it, and however late. A value that goes away is checked again once the work
+   * already queued is done, so a value cleared while a fetch is still writing gets a check after
+   * that write. The first value needs no check here, since the observer that started the watcher
+   * made one.
    */
   private suspend fun watch() {
-    var first = true
     var previous: Fetched<T>? = null
     store.data.collect { current ->
-      when {
-        first -> holds.holdUntilSettled(fetchIfStale())
-        current == null && previous != null -> holds.holdUntilSettled(recheck())
+      if (current == null && previous != null) {
+        holds.holdUntilSettled(recheck())
       }
-      first = false
       previous = current
     }
   }

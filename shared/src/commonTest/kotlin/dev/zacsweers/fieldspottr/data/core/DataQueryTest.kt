@@ -72,6 +72,18 @@ class DataQueryTest {
   }
 
   @Test
+  fun `a collector that takes the first value and leaves still starts the check`() = runTest {
+    val query = dataQuery()
+
+    assertThat(query.data.first()).isEqualTo(null)
+    // The check is a command of its own, so it runs although the collector is gone
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(stored.value).isEqualTo(Fetched(1, START))
+  }
+
+  @Test
   fun `stored fetch time past the window fetches and stores the clock time`() = runTest {
     stored.value = Fetched(1, START - 2.hours)
     val query = dataQuery()
