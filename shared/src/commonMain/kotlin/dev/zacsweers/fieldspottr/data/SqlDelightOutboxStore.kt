@@ -89,9 +89,10 @@ class SqlDelightOutboxStore<E>(
     val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.status.isSettled }
     return withContext(io) {
       val queries = db.await().outboxRowQueries
-      // Compares what the row means, so a stale failure cause misses and a status a newer version
-      // wrote matches the Failed it reads as. Read outside the transaction, which then starts with
-      // its write, like every other write here.
+      // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
+      // since the expectation was built no longer matches, and a status written by a newer app
+      // version still matches the Failed it decodes to. The row is read outside the transaction, so
+      // the transaction below starts with its write, like every other write in this store.
       val row = queries.byId(outbox, entry.id.value).executeAsOneOrNull()
       if (row == null || OutboxStatus(row.status, row.cause) != expected) {
         return@withContext false

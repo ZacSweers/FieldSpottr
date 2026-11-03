@@ -16,7 +16,7 @@ import kotlinx.collections.immutable.persistentListOf
  */
 @OptIn(ExperimentalAtomicApi::class)
 class TestFailures : (Throwable) -> Unit {
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val recorded = AtomicReference(persistentListOf<Throwable>())
 
   /** Every failure so far, oldest first. */

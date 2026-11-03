@@ -20,7 +20,7 @@ import kotlinx.coroutines.CompletableDeferred
  */
 @OptIn(ExperimentalAtomicApi::class)
 abstract class FetchRecorder<K> internal constructor() {
-  // Compare-and-set only. Nothing observes these.
+  // Updated by compare-and-set only. Nothing observes these, so they need no StateFlow.
   private val started = AtomicReference(persistentListOf<K>())
   private val cancelledCalls = AtomicReference(persistentListOf<K>())
   private val inFlight = AtomicInt(0)

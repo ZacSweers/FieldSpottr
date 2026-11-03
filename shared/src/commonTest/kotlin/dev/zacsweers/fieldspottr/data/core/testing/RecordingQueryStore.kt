@@ -31,7 +31,7 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
     data object Clear : Call<Nothing>
   }
 
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val recorded = AtomicReference(persistentListOf<Call<T>>())
 
   /** Every call, oldest first. */

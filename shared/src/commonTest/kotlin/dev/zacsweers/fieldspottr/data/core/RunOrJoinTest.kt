@@ -11,9 +11,10 @@ import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
 
 /**
- * How a request joins or lines up on its key when another caller changes the key between the
- * request's read and its link. A query's requests go through this one step, which keeps a handle it
- * returns ahead of any invalidation queued after it.
+ * Tests how a request joins an existing command, or lines up behind it, when another caller changes
+ * the key between the moment the request reads the key's tail and the moment it links itself on.
+ * Every request a query makes goes through this one step, which guarantees that the handle the
+ * request returns is ordered ahead of any invalidation queued after it.
  */
 class RunOrJoinTest {
 

@@ -13,8 +13,10 @@ import kotlinx.serialization.StringFormat
  * the codec knows the payload format, and the repository knows neither.
  */
 interface PayloadCodec<E> {
+  /** [payload] as the text a store keeps in its row. */
   fun encode(payload: E): String
 
+  /** The payload that [encode] turned into [encoded]. */
   fun decode(encoded: String): E
 }
 

@@ -100,7 +100,7 @@ class DataStoreOutboxStores(
   private val payloadFormat: SerialFormat = Json,
   private val fileSystem: FileSystem = FileSystem.SYSTEM,
 ) : OutboxStores {
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val opened = AtomicReference(persistentHashMapOf<String, Lazy<OutboxStore<*>>>())
 
   override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
@@ -183,8 +183,9 @@ class DataStoreOutboxStore<E>(
     dataStore.updateData { log ->
       val index = log.rows.indexOfFirst { it.id == entry.id.value }
       val row = log.rows.getOrNull(index)
-      // Compares what the row means, so a stale failure cause misses and a status a newer version
-      // wrote matches the Failed it reads as. The compare failed, so write nothing.
+      // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
+      // since the expectation was built no longer matches, and a status written by a newer app
+      // version still matches the Failed it decodes to. On a mismatch the log is left as it is.
       if (row == null || OutboxStatus(row.status, row.cause) != expected) {
         written = false
         return@updateData log

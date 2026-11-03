@@ -54,7 +54,7 @@ private class RealDataScopeFactory(
   val stores: OutboxStores,
   val clock: Clock,
 ) : DataScope.Factory {
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val runningOutboxes = AtomicReference(persistentHashSetOf<String>())
 
   override fun create(scope: CoroutineScope): DataScope = RealDataScope(scope, this)

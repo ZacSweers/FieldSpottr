@@ -25,7 +25,8 @@ import kotlinx.serialization.serializer
 class TestDataScopeFactory
 internal constructor(
   private val delegate: DataScope.Factory,
-  // Added to every scope it creates, to run their work eagerly. Null leaves each scope's own.
+  // A dispatcher added to the scope of every data scope this factory creates, so their work runs
+  // eagerly. Null keeps whatever dispatcher each scope already has.
   private val dispatcher: CoroutineDispatcher?,
   /** The clock every query and outbox from this factory reads. */
   val clock: TestClock,

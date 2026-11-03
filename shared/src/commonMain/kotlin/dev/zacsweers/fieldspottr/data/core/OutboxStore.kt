@@ -10,6 +10,7 @@ import kotlinx.serialization.KSerializer
 /** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
 @JvmInline value class EntryId(val value: String)
 
+/** Where an outbox row stands. [Sent] and [Discarded] are final, and the store prunes such rows. */
 sealed interface OutboxStatus {
   /** Waiting for its turn, the network or a backoff. */
   data object Queued : OutboxStatus
@@ -20,14 +21,18 @@ sealed interface OutboxStatus {
   /** Rejected or out of attempts. Needs [Outbox.retry] or [Outbox.discard]. */
   data class Failed(val cause: String) : OutboxStatus
 
+  /** Delivered. */
   data object Sent : OutboxStatus
 
+  /** Dropped by [Outbox.discard] without being sent. */
   data object Discarded : OutboxStatus
 }
 
+/** Whether the row has reached a final status, [OutboxStatus.Sent] or [OutboxStatus.Discarded]. */
 val OutboxStatus.isSettled: Boolean
   get() = this == OutboxStatus.Sent || this == OutboxStatus.Discarded
 
+/** One row of an outbox: the payload to send, its place in the order and where its send stands. */
 data class OutboxEntry<E>(
   val id: EntryId,
   /** Rows with equal keys send in order. An empty key is the outbox-wide default. */
@@ -38,10 +43,10 @@ data class OutboxEntry<E>(
   val attempts: Int = 0,
   val lastError: String? = null,
   /**
-   * The optimistic change behind this row was undone, or an undo was attempted. Revert runs at most
-   * once per row. The outbox writes this flag and attempts the undo together, even when its scope
-   * stops between the two. Process death between them can still leave the flag set without the
-   * undo.
+   * Whether the outbox has run, or at least attempted, the revert of this row's optimistic change.
+   * A revert runs at most once per row. The outbox sets this flag and attempts the revert as one
+   * step that a cancelled scope cannot split, so only process death between the two can leave the
+   * flag set without the revert having run.
    */
   val reverted: Boolean = false,
   /** When the current backoff ends. It lives on the row, so a restart waits it out. */
@@ -56,8 +61,8 @@ data class OutboxEntry<E>(
  * store over a shared resource, like a database, must allow that or take turns itself.
  *
  * Calls come from the outbox's runner, on its scope's dispatcher, usually `Dispatchers.Default`, so
- * they must not block that thread. A store whose calls block moves them with `withContext` onto a
- * dispatcher it was given, as [QueryStore] describes.
+ * they must not block that thread. A store whose calls block a thread should wrap them in
+ * `withContext` with an I/O dispatcher passed to its constructor, as [QueryStore] describes.
  */
 interface OutboxStore<E> {
   /**
@@ -85,14 +90,16 @@ interface OutboxStore<E> {
 }
 
 /**
- * The app's store choice, made once. Each outbox opens its own store from it by name. A durable
- * store set also takes the payload format, so the app chooses the format with the store.
+ * A set of [OutboxStore]s keyed by outbox name. The app builds one set and hands it to
+ * [DataScope.Factory], and that choice decides where every outbox's rows live: in memory, in the
+ * database or in files. Each outbox then opens its own store from the set by name. A durable set
+ * also takes the payload format, so choosing the set chooses the format too.
  */
 interface OutboxStores {
   /**
    * The store for the outbox called [name]. Calls with the same name return stores over the same
-   * rows, so an outbox built again after its scope ended finds the rows it left. Open a name with
-   * one payload type. A durable store encodes each payload with [serializer] in its set's format.
+   * rows, so an outbox built again after its scope ended finds the rows it left. Use one payload
+   * type per name. A durable store encodes each payload with [serializer] in the set's format.
    */
   fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E>
 }

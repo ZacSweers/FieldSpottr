@@ -8,12 +8,16 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.serializer
 
 /**
- * One coroutine scope plus the failure handlers, clock, outbox store set and network state its data
- * work uses. Every runner, query and outbox built here runs in that scope and stops when it is
- * cancelled, so the code that picks a data scope states how long its work lives.
+ * The entry point for a repository's data work. It builds the repository's reads ([query] and
+ * [keyed]), its command runner ([newActions]) and its writes that must reach the server ([outbox],
+ * [mutableStore] and [mutableStores]). Everything built here runs in [scope] and stops when that
+ * scope is cancelled, so choosing the data scope chooses how long the work lives.
  *
  * A repository takes one from the graph, like an app-scoped binding, or builds one over its own
- * scope with [Factory.create].
+ * scope with [Factory.create]. The failure handlers, clock, outbox stores and network state come
+ * from the factory. Three words recur in these docs: an action is a repository function like
+ * `star(id)`, a command is the block that action submits to [DataActions.run], and an [Operation]
+ * is the handle the caller gets back.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface DataScope {
@@ -27,15 +31,17 @@ interface DataScope {
    * A new runner in this scope. Each call returns another runner, so build one per owner and keep
    * it: commands on one runner share its [Ordering.Serial] line and its keys.
    *
-   * Its failures go to [onFailure], like a message that names the owner. When that is null, they go
-   * to the factory's handler for failures other than fetches.
+   * Failed commands are reported to [onFailure], which lets a repository log them under its own
+   * name. When [onFailure] is null they go to the `onActionFailure` handler the factory was built
+   * with, which covers every failure other than a fetch.
    */
   fun newActions(onFailure: ((Throwable) -> Unit)? = null): DataActions
 
   /**
    * A query over [store] that fills it with [fetch]. Its checks, fetches and store calls run on
    * this scope's dispatcher, usually `Dispatchers.Default`, which suits decoding a response. A
-   * fetch that blocks moves that part with `withContext` onto a dispatcher it was given.
+   * fetch that blocks a thread should wrap that part in `withContext` with an I/O dispatcher
+   * injected into its owner.
    */
   fun <T> query(store: QueryStore<T>, fetch: suspend () -> T, freshness: Freshness): DataQuery<T>
 
@@ -45,9 +51,9 @@ interface DataScope {
    * shorter window for today than for later dates. [maxFetches] caps the fetches in flight across
    * all keys. It does not cap store writes, which still run at the same time for different keys.
    *
-   * A key's query is dropped as soon as no caller uses it and none of its fetches, checks,
-   * invalidations or mutations is queued or running. Its data stays in its store, so the next query
-   * for the key picks up the stored value and fetch time.
+   * A key's query is dropped as soon as no caller uses it and none of its fetches, checks or
+   * invalidations is queued or running. Its data stays in its store, so the next query for the key
+   * picks up the stored value and fetch time.
    */
   fun <K : Any, T> keyed(
     store: (key: K) -> QueryStore<T>,
@@ -65,10 +71,11 @@ interface DataScope {
   ): KeyedDataQueries<K, T> = keyed(store, fetch, { freshness }, maxFetches)
 
   /**
-   * An outbox called [name], over the store that the store set opens for that name, draining in
-   * this scope. Data scopes from one factory may run only one outbox per name at a time, so build
-   * it in the one owner that sends these writes. Cancelling this scope stops the drains and keeps
-   * the rows, and the next outbox built for [name] sends them.
+   * An outbox called [name]: writes that must reach the server, kept as rows and sent in order per
+   * key, as [Outbox] describes. Its rows live in the store that the factory's store set opens for
+   * [name], and its drains run in this scope. Cancelling this scope stops the drains and keeps the
+   * rows, and the next outbox built for [name] sends them. The data scopes of one factory may run
+   * only one outbox per name at a time, so build it in the one owner that sends these writes.
    *
    * [serializer] is required even when the stores are in memory, so changing the store set needs no
    * change where outboxes are built.

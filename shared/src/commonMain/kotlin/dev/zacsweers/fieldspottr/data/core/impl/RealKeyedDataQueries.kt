@@ -32,7 +32,7 @@ internal val KeyedDataQueries<*, *>.keysHeld: Int
 internal class RealKeyedDataQueries<K : Any, T>(
   private val build: (key: K, holds: QueryHolds) -> RealDataQuery<T>
 ) : KeyedDataQueries<K, T> {
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val entries = AtomicReference(persistentHashMapOf<K, KeyEntry<T>>())
 
   val keysHeld: Int

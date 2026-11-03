@@ -4,16 +4,21 @@ package dev.zacsweers.fieldspottr.data.core
 
 import kotlin.math.pow
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.Flow
 
 /** How often and how long a row waits after a transient failure. */
 class RetryPolicy(val maxAttempts: Int, val delayFor: (attempt: Int) -> Duration) {
   companion object {
-    /** Doubles the wait from [initial] after each attempt, up to [max]. */
+    /**
+     * Doubles the wait from [initial] after each attempt, up to [max]. With the defaults a row that
+     * keeps failing is given up after about an hour of attempts. Time spent offline does not count,
+     * since drains wait for the network. Throw [PermanentFailure] from send to give up sooner.
+     */
     fun exponential(
       initial: Duration = 1.seconds,
-      max: Duration,
+      max: Duration = 5.minutes,
       maxAttempts: Int = 20,
     ): RetryPolicy =
       RetryPolicy(maxAttempts) { attempt -> minOf(max, initial * 2.0.pow(attempt - 1)) }

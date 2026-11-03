@@ -38,7 +38,7 @@ internal class RealDataActions(
   private val scope: CoroutineScope,
   private val onFailure: (Throwable) -> Unit,
 ) : DataActions {
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val tails = AtomicReference(persistentHashMapOf<ChainKey, Entry>())
 
   /** How many keys still hold a command. For tests, which cannot see the key map any other way. */
@@ -161,9 +161,9 @@ internal class RealDataActions(
           else -> OperationState.Failed(cause)
         }
       }
-      // The job reaches the block and everything it captured, and the key can be as large, so a
-      // kept handle must keep neither. Only the wait guard reads the key, which a settled handle
-      // skips.
+      // A caller may keep the handle for a long time. The job references the block and everything
+      // it captured, and the key can be just as large, so both are cleared here. Only
+      // requireNotWaitingOnItself reads the key, and await() skips that check once settled.
       entry.job = null
       entry.chainKey = null
       // Runs the callbacks waiting on the settlement, like the key cleanup, first
@@ -214,16 +214,18 @@ internal class RealDataActions(
    */
   private suspend fun waitForTurn(entry: Entry) {
     val mode = entry.mode
-    // Same-mode entries removed from the line, joined last
+    // Predecessors of this command's mode that it removed from the line. They are joined last, once
+    // the walk is done.
     val cancelled = mutableListOf<Entry>()
-    // Cancel only: other-mode entries met on the walk
+    // Only in Cancel mode: predecessors of another mode met on the walk, which this command must
+    // still wait for.
     val survivors = mutableListOf<Entry>()
-    // Supersede only replaces the run right behind it
+    // Supersede replaces only the unbroken run of Supersede entries right behind this command
     var superseding = mode == OnPrevious.Supersede
     var cursor = entry.predecessor
     while (cursor != null) {
       val target = cursor
-      // The boundary
+      // A started entry ends the walk, since everything ahead of it has already finished
       if (target.claim.load() == Claim.Started) {
         when {
           mode != OnPrevious.Cancel -> target.settled.join()
@@ -282,9 +284,10 @@ internal class RealDataActions(
 
 /**
  * Runs [block] in a scope of its own, so coroutines it starts in its context finish before the
- * command settles, and one that fails fails the command instead of the runner's scope. The block's
- * own failure is rethrown as thrown. `coroutineScope` rethrows a copy of it when stack trace
- * recovery is on, and a handle settles with what the block threw.
+ * command settles, and one that fails fails the command instead of the runner's scope. When the
+ * block itself throws, the same exception instance is rethrown: `coroutineScope` would rethrow a
+ * copy of it when stack trace recovery is on, and the handle should settle with exactly what the
+ * block threw.
  */
 private suspend fun runScoped(block: suspend () -> Unit) {
   var thrown: Throwable? = null
@@ -357,7 +360,7 @@ private class RunnerOperation(entry: Entry) : Operation {
   override val state: StateFlow<OperationState> = entry.state.asStateFlow()
   // Completes once the command has finished, cancelled or not
   val settled: Job = entry.settled
-  // Cleared once settled. Only the wait guard reads it before then.
+  // Cleared once the command settles. Until then only requireNotWaitingOnItself reads it.
   @Volatile var entry: Entry? = entry
 
   override suspend fun await(): OperationState.Terminal {

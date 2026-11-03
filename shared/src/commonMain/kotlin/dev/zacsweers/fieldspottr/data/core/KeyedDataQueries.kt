@@ -20,7 +20,7 @@ interface KeyedDataQueries<K : Any, T> {
 
   /**
    * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
-   * Duplicate keys collapse, and no keys emits an empty map.
+   * Duplicate keys count once, and an empty collection of keys emits one empty map.
    */
   fun data(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> {
     val distinct = keys.distinct()

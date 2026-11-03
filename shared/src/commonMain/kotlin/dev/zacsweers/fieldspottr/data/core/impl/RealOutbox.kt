@@ -76,11 +76,12 @@ internal class RealOutbox<E>(
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
   // The unsettled handles following each row's current attempt, so the attempt's outcome reaches
-  // them even when their view of the row falls behind. Compare-and-set only. Nothing observes it.
+  // them even when their view of the row falls behind. Updated by compare-and-set only, and nothing
+  // observes it, so it needs no StateFlow.
   private val following =
     AtomicReference(persistentHashMapOf<EntryId, PersistentSet<MutableStateFlow<OperationState>>>())
   // How long each key whose drain failed waits before its next try, doubling while it keeps
-  // failing. Cleared by a drain that finishes. Compare-and-set only.
+  // failing. Cleared by a drain that finishes. Updated by compare-and-set only.
   private val failing = AtomicReference(persistentMapOf<String, Duration>())
 
   override val entries: Flow<List<OutboxEntry<E>>> = store.entries()
@@ -259,11 +260,13 @@ internal class RealOutbox<E>(
         backOff(key, head.id, retryAt)
         break
       }
-      // Discarded first
+      // Claims the row by moving it to Sending. If the row was discarded or retried between the
+      // read and this write, the compare-and-set fails and the loop reads the head again.
       if (!store.update(head.copy(status = OutboxStatus.Sending), expected = head.status)) {
         continue
       }
-      // So does the claim. A send started offline would spend an attempt for nothing.
+      // The claim suspends too, so check the network once more. A send started offline would spend
+      // an attempt for nothing, so the row goes back to Queued instead.
       if (!online.value) {
         store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
         break

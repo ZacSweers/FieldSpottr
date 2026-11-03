@@ -17,9 +17,10 @@ package dev.zacsweers.fieldspottr.data.core
  *   C is Cancel     cancels A and B where they are Cancel too, then runs
  * ```
  *
- * A command replaces or cancels only predecessors of its own mode, and waits for the rest. It does
- * so when it is submitted, so a replaced block never starts, even one dispatched first. Keys never
- * wait on each other. [Ordering.Serial] is one key of its own, and [Ordering.Concurrent] has none.
+ * A command replaces or cancels only predecessors that chose its own mode, and waits for the rest.
+ * This happens when the command is submitted, so a replaced block never starts, even if it was
+ * dispatched before the command that replaced it. Keys never wait on each other. [Ordering.Serial]
+ * is one key of its own, and [Ordering.Concurrent] has none.
  *
  * A command settles once its block returns and every coroutine the block started in its own context
  * has finished. When one of those coroutines fails, the command fails with it and the runner's

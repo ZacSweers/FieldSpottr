@@ -31,8 +31,9 @@ import kotlinx.coroutines.launch
 
 /**
  * [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. Its
- * watcher runs in [scope] while anyone collects [data], and [holds] keeps the query's owner, like a
- * keyed query's entry, for as long as the watcher or a request still needs it.
+ * watcher runs in [scope] while anyone collects [data]. [holds] keeps whatever owns this query
+ * alive, such as the per-key entry inside a keyed query, for as long as the watcher or a request
+ * still needs it.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealDataQuery<T>(
@@ -50,7 +51,8 @@ internal class RealDataQuery<T>(
   private val actions = RealDataActions(scope, ::report)
   // Private, so only this query's commands chain on it
   private val key = Any()
-  // How many observers collect data, and the watcher that runs while any do. Compare-and-set only.
+  // How many observers collect data, and the watcher that runs while any do. Updated by
+  // compare-and-set only.
   private val watching = AtomicReference(Watching(observers = 0, watcher = null))
 
   /**
@@ -82,7 +84,7 @@ internal class RealDataQuery<T>(
       }
       val watcher = scope.launch(start = CoroutineStart.LAZY) { watch() }
       if (watching.compareAndSet(current, Watching(observers = 1, watcher))) {
-        // The watcher holds the query's owner, so the requests it makes are held as well
+        // The watcher takes a hold on the owner, which also covers the requests the watcher makes
         if (holds.tryAcquire()) {
           watcher.invokeOnCompletion { holds.release() }
           watcher.start()
@@ -260,8 +262,10 @@ internal class RealDataQuery<T>(
 }
 
 /**
- * What keeps a query's owner while the query still needs it, like a keyed query's entry. Holds are
- * taken only while the owner is already held, so they never revive a dropped one.
+ * Holds that keep a query's owner alive while the query still needs it. The owner is whatever
+ * created the query and may drop it once it is unused, such as the per-key entry inside a keyed
+ * query. A hold can be taken only while the owner is already held, so a hold never revives an owner
+ * that was dropped.
  */
 internal interface QueryHolds {
   /** Takes a hold, or returns false once the owner was dropped. */

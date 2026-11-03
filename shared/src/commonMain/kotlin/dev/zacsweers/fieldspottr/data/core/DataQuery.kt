@@ -7,7 +7,9 @@ import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
+/** What a query's fetches are doing, from [DataQuery.status]. */
 sealed interface FetchStatus {
+  /** No fetch is running, and the last one, if any, succeeded. */
   data object Idle : FetchStatus
 
   /** A fetch is running. [forced] is true when a forced [DataQuery.requestFetch] started it. */
@@ -95,17 +97,11 @@ interface DataQuery<T> {
   val status: StateFlow<FetchStatus>
 
   /**
-   * Runs this query's fetch when [force] is true or the stored data is stale.
-   *
-   * Force it when the user asks for new data, like a pull to refresh. A forced request joins a
-   * forced fetch that has not settled, even one with checks queued after it, unless an [invalidate]
-   * or [mutate] queued after it. So callers that force at the same time share one fetch. Otherwise
-   * it fetches now, cancels a forced fetch from before that call and queues behind an unforced
-   * fetch that already started. Its status shows as `Fetching(forced = true)`, and returns to
-   * `Idle` if the fetch is cancelled.
-   *
-   * An unforced request is single flight. It joins the fetch in flight, else checks the stored time
-   * and fetches only if the data is stale.
+   * Fetches when [force] is true or the stored data is stale. Force it when the user asks for new
+   * data, like a pull to refresh. Forced requests made at the same time share one fetch. An
+   * unforced request joins a fetch in flight, else fetches only if the data is stale, so collecting
+   * [data] and calling this with `force = false` never fetch fresh data twice. The handle follows
+   * the fetch this request ran or joined, and [status] shows `Fetching` while it runs.
    */
   fun requestFetch(force: Boolean): Operation
 

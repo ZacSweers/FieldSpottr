@@ -33,9 +33,10 @@ fun <T> Flow<Fetched<T>?>.values(): Flow<T?> = map { it?.value }
  * concurrent calls and must allow them or take turns themselves.
  *
  * Calls come from the query's runner, on the dispatcher of the scope the query was built with,
- * usually `Dispatchers.Default`, so they must not block that thread. A store whose calls block,
- * like a JDBC driver or file I/O, moves them with `withContext` onto a dispatcher it was given. A
- * store whose calls only suspend, like DataStore or an in-memory store, needs nothing.
+ * usually `Dispatchers.Default`, so they must not block that thread. A store whose calls block a
+ * thread, like a JDBC driver or file I/O, should wrap them in `withContext` with an I/O dispatcher
+ * passed to its constructor. A store whose calls only suspend, like DataStore or an in-memory
+ * store, needs nothing.
  */
 interface QueryStore<T> {
   /** The stored value and its fetch time, or null when nothing is stored. Emits on every change. */
@@ -69,8 +70,8 @@ interface QueryStore<T> {
      * a value, a write drops the key fetched longest ago, and that key's query fetches again the
      * next time it is collected. Keep [maxEntries] above the number of keys collected at once.
      */
-    fun <K : Any, T> inMemoryByKey(maxEntries: Int = Int.MAX_VALUE): InMemoryStores<K, T> =
-      InMemoryStores(maxEntries)
+    fun <K : Any, T> inMemoryByKey(maxEntries: Int = Int.MAX_VALUE): InMemoryQueryStores<K, T> =
+      InMemoryQueryStores(maxEntries)
 
     /**
      * A store from its parts, for a source of truth that merges a fetch rather than replacing it.
@@ -153,7 +154,7 @@ private class SingleValueStore<T>(initial: Fetched<T>?) : InMemoryQueryStore<T>(
  * In-memory stores for many keys, from [QueryStore.inMemoryByKey]. Every key's value lives in one
  * map, and each store is a view of its key, so stores for one key always agree.
  */
-class InMemoryStores<K : Any, T> internal constructor(private val maxEntries: Int) :
+class InMemoryQueryStores<K : Any, T> internal constructor(private val maxEntries: Int) :
   (K) -> InMemoryQueryStore<T> {
   init {
     require(maxEntries > 0) { "maxEntries must be positive, was $maxEntries" }
@@ -185,7 +186,10 @@ class InMemoryStores<K : Any, T> internal constructor(private val maxEntries: In
     }
   }
 
-  /** Drops the key fetched longest ago, other than [kept], once more than the cap hold a value. */
+  /**
+   * Once more keys than [maxEntries] hold a value, drops the key whose value was fetched longest
+   * ago, skipping [kept].
+   */
   private fun PersistentMap<K, Fetched<T>>.capped(kept: K): PersistentMap<K, Fetched<T>> {
     if (size <= maxEntries) {
       return this
