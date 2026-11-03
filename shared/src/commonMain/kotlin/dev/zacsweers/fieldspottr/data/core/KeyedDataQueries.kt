@@ -80,3 +80,18 @@ interface KeyedDataQueries<K : Any, T> {
   fun invalidate(keys: Collection<K>): Operation =
     Operation.all(keys.distinct().map { invalidate(it) })
 }
+
+/** [KeyedDataQueries.requestFetch] for [key] with `force = true`: fetches now. */
+fun <K : Any, T> KeyedDataQueries<K, T>.refresh(key: K): Operation = requestFetch(key, force = true)
+
+/** [KeyedDataQueries.requestFetch] for [key] with `force = false`: fetches only if stale. */
+fun <K : Any, T> KeyedDataQueries<K, T>.fetchIfStale(key: K): Operation =
+  requestFetch(key, force = false)
+
+/** [refresh] for every key. The handle settles once every request has, failed if any failed. */
+fun <K : Any, T> KeyedDataQueries<K, T>.refresh(keys: Collection<K>): Operation =
+  requestFetch(keys, force = true)
+
+/** [fetchIfStale] for every key. The handle settles once every request has. */
+fun <K : Any, T> KeyedDataQueries<K, T>.fetchIfStale(keys: Collection<K>): Operation =
+  requestFetch(keys, force = false)

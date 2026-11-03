@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.inFile
+import dev.zacsweers.fieldspottr.data.core.refresh
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.metro.AppScope
@@ -197,7 +198,7 @@ internal constructor(
   val forecast: Flow<WeatherForecast?> = query.data.values().map { it?.toWeatherForecast() }
 
   /** Fetches now, even when the stored forecast is fresh. */
-  fun refresh(): Operation = query.requestFetch(force = true)
+  fun refresh(): Operation = query.refresh()
 
   private suspend fun fetchForecast(): OpenMeteoResponse {
     val response = client.value.get(OPEN_METEO_URL)

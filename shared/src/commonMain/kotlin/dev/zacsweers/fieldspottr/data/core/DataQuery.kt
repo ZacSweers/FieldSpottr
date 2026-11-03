@@ -40,6 +40,20 @@ sealed interface Freshness {
     fun staleAfter(duration: Duration): Freshness = FixedFreshness(duration)
 
     /**
+     * Never stale once fetched, so the query fetches on the first collect, then only on a forced
+     * [DataQuery.requestFetch] or after [DataQuery.invalidate]. For data that changes only when
+     * this app changes it.
+     */
+    val NeverStale: Freshness = FixedFreshness(Duration.INFINITE)
+
+    /**
+     * Stale as soon as fetched, so every collect of [DataQuery.data] fetches again unless a fetch
+     * is already in flight, and so does every unforced request. For data that must be checked on
+     * every visit.
+     */
+    val AlwaysStale: Freshness = FixedFreshness(Duration.ZERO)
+
+    /**
      * Decides on every check, for rules that change over time or depend on when the data was
      * fetched. [isStale] must be cheap and must not suspend, since collectors call it.
      */
@@ -113,3 +127,9 @@ interface DataQuery<T> {
    */
   fun invalidate(): Operation
 }
+
+/** [DataQuery.requestFetch] with `force = true`: fetches now, as a pull to refresh asks. */
+fun <T> DataQuery<T>.refresh(): Operation = requestFetch(force = true)
+
+/** [DataQuery.requestFetch] with `force = false`: fetches only if the stored data is stale. */
+fun <T> DataQuery<T>.fetchIfStale(): Operation = requestFetch(force = false)
