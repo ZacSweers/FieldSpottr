@@ -9,7 +9,6 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
-import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch

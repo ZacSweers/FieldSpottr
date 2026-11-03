@@ -7,7 +7,6 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
-import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled

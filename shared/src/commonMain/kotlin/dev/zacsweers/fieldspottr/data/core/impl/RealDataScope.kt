@@ -41,26 +41,13 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.KSerializer
 
 /**
- * Builds data scopes. Failed fetches go to [onFailure]. Every other failure goes to
- * [onActionFailure], which defaults to [onFailure]: commands on runners, outbox drains, and query
- * commands that fail without a fetch, like an invalidate() whose store throws. Outboxes open their
- * rows on [stores] and drain while [online] is true. Pass scopes on `Dispatchers.Default`, not on
- * Main, as [DataActions] explains.
- */
-operator fun DataScope.Factory.Companion.invoke(
-  onFailure: (Throwable) -> Unit,
-  onActionFailure: (Throwable) -> Unit = onFailure,
-  online: StateFlow<Boolean> = MutableStateFlow(true),
-  stores: OutboxStores = InMemoryOutboxStores(),
-  clock: Clock = Clock.System,
-): DataScope.Factory = RealDataScopeFactory(onFailure, onActionFailure, online, stores, clock)
-
-/**
- * The settings every data scope from one factory shares, and the outbox names they have running.
- * The names live here, so scopes from one factory cannot run two outboxes over the same rows.
+ * The factory behind [DataScope.Factory.invoke]: the settings every data scope from one factory
+ * shares, the outbox names they have running, and what every running outbox still has to send. The
+ * names live here, so scopes from one factory cannot run two outboxes over the same rows. The
+ * backlogs live here, so one combined state reaches [backlog] and the scheduler.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
-private class RealDataScopeFactory(
+internal class RealDataScopeFactory(
   val onFailure: (Throwable) -> Unit,
   val onActionFailure: (Throwable) -> Unit,
   val online: StateFlow<Boolean>,

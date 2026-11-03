@@ -8,8 +8,7 @@ import dev.zacsweers.fieldspottr.data.core.InMemoryOutboxStores
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
-import dev.zacsweers.fieldspottr.data.core.impl.InMemoryOutboxStores
-import dev.zacsweers.fieldspottr.data.core.impl.invoke
+import dev.zacsweers.fieldspottr.data.core.invoke
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi

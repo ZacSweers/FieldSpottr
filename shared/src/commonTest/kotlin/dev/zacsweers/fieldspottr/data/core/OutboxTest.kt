@@ -10,9 +10,6 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
-import dev.zacsweers.fieldspottr.data.core.impl.InMemoryOutboxStores
-import dev.zacsweers.fieldspottr.data.core.impl.inMemoryOutboxStore
-import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled

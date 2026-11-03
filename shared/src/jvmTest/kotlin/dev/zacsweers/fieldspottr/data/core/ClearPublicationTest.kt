@@ -4,7 +4,6 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
-import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit

@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
+import dev.zacsweers.fieldspottr.data.core.impl.RealDataScopeFactory
+import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.serializer
 
@@ -156,6 +161,24 @@ interface DataScope {
 
   companion object
 }
+
+/**
+ * Builds the factory an app or a test hands its repositories. Failed fetches go to [onFailure].
+ * Every other failure goes to [onActionFailure], which defaults to [onFailure]: commands on
+ * runners, outbox drains, and query commands that fail without a fetch, like an invalidate() whose
+ * store throws. Outboxes open their rows on [stores], drain while [online] is true, and tell
+ * [scheduler] when rows wait, as [OutboxScheduler] describes. Pass scopes on `Dispatchers.Default`,
+ * not on Main, as [DataActions] explains.
+ */
+operator fun DataScope.Factory.Companion.invoke(
+  onFailure: (Throwable) -> Unit,
+  onActionFailure: (Throwable) -> Unit = onFailure,
+  online: StateFlow<Boolean> = MutableStateFlow(true),
+  stores: OutboxStores = InMemoryOutboxStores(),
+  scheduler: OutboxScheduler = OutboxScheduler.None,
+  clock: Clock = Clock.System,
+): DataScope.Factory =
+  RealDataScopeFactory(onFailure, onActionFailure, online, stores, scheduler, clock)
 
 /** [DataScope.outbox] with the serializer for a `@Serializable` payload. */
 inline fun <reified E> DataScope.outbox(
