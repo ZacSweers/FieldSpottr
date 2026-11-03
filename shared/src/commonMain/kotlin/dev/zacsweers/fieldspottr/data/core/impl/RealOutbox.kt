@@ -64,7 +64,7 @@ internal class RealOutbox<E>(
   /** Runs the row views and the backoff timers. */
   private val scope: CoroutineScope,
   private val actions: DataActions,
-  private val send: suspend (E) -> Unit,
+  private val send: suspend (E, EntryId) -> Unit,
   private val revert: suspend (E) -> Unit,
   private val store: OutboxStore<E>,
   private val policy: RetryPolicy,
@@ -296,7 +296,7 @@ internal class RealOutbox<E>(
         store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
         break
       }
-      val failure = runCatchingCancellable { send(head.payload) }.exceptionOrNull()
+      val failure = runCatchingCancellable { send(head.payload, head.id) }.exceptionOrNull()
       val attempts = head.attempts + 1
       when {
         failure == null ->

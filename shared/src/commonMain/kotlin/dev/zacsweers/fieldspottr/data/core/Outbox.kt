@@ -41,7 +41,7 @@ class PermanentFailure(message: String, cause: Throwable? = null) : Exception(me
  *                         online, not backing off, sendable row at the head
  *                                                             |
  *                                                             v
- *                                       Sending --> send(payload) --> Sent
+ *                                       Sending --> send(payload, id) --> Sent
  *                                                             |
  *                         transient: Queued with retryAt, then a timer drains again
  *                         permanent or out of attempts: Failed, then revert(payload)

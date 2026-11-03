@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.testing
 
+import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.PermanentFailure
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
@@ -20,8 +21,8 @@ import kotlinx.coroutines.CompletableDeferred
  * any thread.
  */
 @OptIn(ExperimentalAtomicApi::class)
-class TestSend<E> : suspend (E) -> Unit {
-  // Compare-and-set only. Nothing observes these.
+class TestSend<E> : suspend (E, EntryId) -> Unit {
+  // Updated by compare-and-set only. Nothing observes these, so they need no StateFlow.
   private val attempted = AtomicReference(persistentListOf<E>())
   private val delivered = AtomicReference(persistentListOf<E>())
   private val undone = AtomicReference(persistentListOf<E>())
@@ -88,7 +89,7 @@ class TestSend<E> : suspend (E) -> Unit {
     gates.fetchAndUpdate { it.removing(payload) }[payload]?.complete(Unit)
   }
 
-  override suspend fun invoke(payload: E) {
+  override suspend fun invoke(payload: E, id: EntryId) {
     val attempt = attempted.updateAndFetch { it.adding(payload) }.count { it == payload }
     gates.load()[payload]?.await()
     failure(payload, attempt)?.let { throw it }

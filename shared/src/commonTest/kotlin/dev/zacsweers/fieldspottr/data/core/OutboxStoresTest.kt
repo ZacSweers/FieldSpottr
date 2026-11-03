@@ -50,9 +50,9 @@ class OutboxStoresTest {
   @Test
   fun `a second running outbox on one name fails`() = runTest {
     val data = testDataScope()
-    data.outbox<String>("notes", send = {})
+    data.outbox<String>("notes", send = { _, _ -> })
 
-    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send = {}) }
+    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send = { _, _ -> }) }
   }
 
   @Test

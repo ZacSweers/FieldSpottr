@@ -85,16 +85,18 @@ interface DataScope {
    * [serializer] is required even when the stores are in memory, so changing the store set needs no
    * change where outboxes are built.
    *
-   * @param send delivers one payload. It runs on this scope's dispatcher, usually
-   *   `Dispatchers.Default`, so a send that blocks moves that part with `withContext` onto a
-   *   dispatcher it was given.
+   * @param send delivers one payload, with its row's id, the same id the row keeps across a
+   *   restart. Pass it to the server as the request's idempotency key, since a row still sending
+   *   when the process dies is sent again. It runs on this scope's dispatcher, usually
+   *   `Dispatchers.Default`, so a send that blocks a thread should wrap that part in `withContext`
+   *   with an I/O dispatcher injected into its owner.
    * @param revert undoes the optimistic change when a row fails for good or is discarded. It reads
    *   only the payload, so it works after a restart too.
    */
   fun <E> outbox(
     name: String,
     serializer: KSerializer<E>,
-    send: suspend (E) -> Unit,
+    send: suspend (payload: E, id: EntryId) -> Unit,
     revert: suspend (E) -> Unit = {},
     retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   ): Outbox<E>
@@ -106,7 +108,7 @@ interface DataScope {
    */
   fun <E> outbox(
     store: OutboxStore<E>,
-    send: suspend (E) -> Unit,
+    send: suspend (payload: E, id: EntryId) -> Unit,
     revert: suspend (E) -> Unit = {},
     retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   ): Outbox<E>
@@ -183,7 +185,7 @@ operator fun DataScope.Factory.Companion.invoke(
 /** [DataScope.outbox] with the serializer for a `@Serializable` payload. */
 inline fun <reified E> DataScope.outbox(
   name: String,
-  noinline send: suspend (E) -> Unit,
+  noinline send: suspend (payload: E, id: EntryId) -> Unit,
   noinline revert: suspend (E) -> Unit = {},
   retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
 ): Outbox<E> = outbox(name, serializer<E>(), send, revert, retry)

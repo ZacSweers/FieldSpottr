@@ -12,6 +12,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
@@ -146,7 +147,7 @@ class TestFixturesTest {
   fun `outbox rows are readable by name while offline`() = runTest {
     val sent = mutableListOf<String>()
     val data = testDataScope(eager = true, online = false)
-    val outbox = data.outbox<String>("notes", send = { sent += it })
+    val outbox = data.outbox<String>("notes", send = { payload, _ -> sent += payload })
 
     val handle = outbox.enqueue("a")
     handle.assertPending()
@@ -165,7 +166,7 @@ class TestFixturesTest {
       testDataScope(eager = true)
         .outbox<String>(
           "notes",
-          send = {
+          send = { _, _ ->
             if (++attempts == 1) {
               error("transient")
             }
@@ -408,13 +409,13 @@ class TestFixturesTest {
   fun `a test send released and held again lets the attempts already waiting through`() = runTest {
     val send = TestSend<String>()
     send.hold("a")
-    val first = async { send("a") }
+    val first = async { send("a", EntryId("1")) }
     runCurrent()
 
     // Before the waiting attempt resumes, so only the hold it entered decides
     send.release("a")
     send.hold("a")
-    val second = async { send("a") }
+    val second = async { send("a", EntryId("2")) }
     runCurrent()
 
     assertThat(first.isCompleted).isTrue()

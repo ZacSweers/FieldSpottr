@@ -226,14 +226,14 @@ private class RealDataScope(
   override fun <E> outbox(
     name: String,
     serializer: KSerializer<E>,
-    send: suspend (E) -> Unit,
+    send: suspend (E, EntryId) -> Unit,
     revert: suspend (E) -> Unit,
     retry: RetryPolicy,
   ): Outbox<E> = claimed(name, serializer) { store -> outbox(store, send, revert, retry) }
 
   override fun <E> outbox(
     store: OutboxStore<E>,
-    send: suspend (E) -> Unit,
+    send: suspend (E, EntryId) -> Unit,
     revert: suspend (E) -> Unit,
     retry: RetryPolicy,
   ): Outbox<E> =
