@@ -89,6 +89,7 @@ kotlin {
         implementation(libs.androidx.appCompat)
         implementation(libs.androidx.compose.integration.activity)
         implementation(libs.androidx.splash)
+        implementation(libs.androidx.work.runtime)
         implementation(libs.bugsnag.android)
         implementation(libs.compose.ui.tooling)
         implementation(libs.compose.ui.tooling.preview)
@@ -97,6 +98,16 @@ kotlin {
         implementation(libs.sqldelight.driver.android)
         implementation(project.dependencies.platform(libs.kotlin.bom))
         implementation(libs.maps.compose)
+      }
+    }
+    // Robolectric tests for the WorkManager pieces, which need a device-like environment
+    getByName("androidHostTest") {
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.assertk)
+        implementation(libs.coroutines.test)
+        implementation(libs.androidx.work.testing)
+        implementation(libs.robolectric)
       }
     }
     jvmMain {

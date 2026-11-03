@@ -16,12 +16,18 @@ import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.createFSDatabase
+import dev.zacsweers.fieldspottr.data.NetworkMonitor
+import dev.zacsweers.fieldspottr.data.OutboxOwner
+import dev.zacsweers.fieldspottr.data.SqlDelightOutboxStores
 import dev.zacsweers.fieldspottr.data.core.DataScope
-import dev.zacsweers.fieldspottr.data.core.impl.invoke
+import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
+import dev.zacsweers.fieldspottr.data.core.OutboxStores
+import dev.zacsweers.fieldspottr.data.core.invoke
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
+import dev.zacsweers.metro.SuspendLazy
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -36,6 +42,17 @@ import okio.SYSTEM
 
 interface FSGraph {
   val fsApp: FieldSpottrApp
+
+  /**
+   * The factory behind every data scope here, for a background drain that waits on its outboxes.
+   */
+  val dataScopeFactory: DataScope.Factory
+
+  /**
+   * Every repository that owns an outbox. Reading it constructs the ones not built yet, so their
+   * outboxes read their rows and send. A background drain reads it before it waits.
+   */
+  val outboxOwners: Set<OutboxOwner>
 
   @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM
 
@@ -71,14 +88,30 @@ interface FSGraph {
     )
   }
 
+  /** Outbox rows live in the app's database, so they survive a restart. */
   @Provides
   @SingleIn(AppScope::class)
-  fun provideDataScopeFactory(logger: Logger): DataScope.Factory {
+  fun provideOutboxStores(
+    db: SuspendLazy<FSDatabase>,
+    @IoDispatcher io: CoroutineDispatcher,
+  ): OutboxStores = SqlDelightOutboxStores(db, io)
+
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideDataScopeFactory(
+    logger: Logger,
+    network: NetworkMonitor,
+    stores: OutboxStores,
+    scheduler: OutboxScheduler,
+  ): DataScope.Factory {
     val log = logger.withTag("Data")
     return DataScope.Factory(
       onFailure = { log.e(it) { "Fetch failed" } },
       // Each fetch reports its own failure, so an action that fails with one only summarizes it
       onActionFailure = { log.w(it) { "Action failed" } },
+      online = network.online,
+      stores = stores,
+      scheduler = scheduler,
     )
   }
 
