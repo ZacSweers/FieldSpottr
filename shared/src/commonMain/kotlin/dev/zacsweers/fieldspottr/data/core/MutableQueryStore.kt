@@ -43,9 +43,11 @@ interface MutableQueryStore<T, M> : QueryStore<T> {
   /**
    * Shows [mutation] in [data] now, stores it as a row and sends it after the rows before it. The
    * handle follows the row: Succeeded once sent, Failed once rejected for good or out of attempts,
-   * Cancelled once discarded. It survives a restart through the row, like [Outbox.enqueue]'s.
+   * Cancelled once discarded. It survives a restart through the row, like [Outbox.enqueue]'s. Its
+   * [OutboxOperation.stored] settles once the row is written, for a caller that only needs the
+   * change kept, not yet delivered.
    */
-  fun mutate(mutation: M): Operation
+  fun mutate(mutation: M): OutboxOperation
 
   /** Changes the server has not confirmed, oldest first: waiting, sending or failed. */
   val pending: Flow<List<PendingMutation<M>>>
@@ -57,9 +59,10 @@ interface MutableQueryStore<T, M> : QueryStore<T> {
   fun discard(id: EntryId): Operation
 
   /**
-   * Removes the truth and drops this store's waiting and failed changes, so nothing sends for it
-   * later, as on logout. A change already sending finishes, and its result lands in the truth, so
-   * cancel the owning scope first when that must not happen.
+   * Removes the truth and drops every change of this store's that the server has not confirmed,
+   * waiting, sending or failed, so nothing sends for it later, as on logout. A change whose send is
+   * in flight may still reach the server, but its result no longer lands here, and its handle
+   * settles Cancelled. A change still being stored is dropped once it is in.
    */
   override suspend fun clear()
 }
@@ -88,7 +91,7 @@ data class PendingMutation<M>(
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface MutableQueryStores<K : Any, T, M> : (K) -> MutableQueryStore<T, M> {
   /** [MutableQueryStore.mutate] on [key]'s store. */
-  fun mutate(key: K, mutation: M): Operation
+  fun mutate(key: K, mutation: M): OutboxOperation
 
   /** [key]'s changes the server has not confirmed, oldest first. */
   fun pending(key: K): Flow<List<PendingMutation<M>>>

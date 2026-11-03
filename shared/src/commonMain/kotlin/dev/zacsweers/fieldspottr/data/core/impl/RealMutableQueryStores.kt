@@ -10,8 +10,10 @@ import dev.zacsweers.fieldspottr.data.core.KeyedMutation
 import dev.zacsweers.fieldspottr.data.core.MutableQueryStore
 import dev.zacsweers.fieldspottr.data.core.MutableQueryStores
 import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Outbox
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
+import dev.zacsweers.fieldspottr.data.core.OutboxOperation
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
@@ -19,6 +21,7 @@ import dev.zacsweers.fieldspottr.data.core.QueryStore
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.update
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -34,6 +37,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -54,6 +59,13 @@ import kotlinx.coroutines.withContext
  * [apply] gets a value that already holds the change, so [apply] must be idempotent, as
  * [dev.zacsweers.fieldspottr.data.core.mutableStore] requires. Each commit checks this on the value
  * it folded, and the first change found not to be idempotent is reported to [onFailure], once.
+ *
+ * Each key's truth has two writers, the query's fetch and the outbox's commit, and they take turns
+ * on the key's lock. A fetch write is dropped when the truth's fetch time has moved past the fetch
+ * meanwhile, the rule the query itself applies before it writes, applied here where the writers
+ * meet, so a commit from a later time is never written over. A write or clear also waits for the
+ * rows requested before it to be in the store, so the value it publishes never lacks a change
+ * already made.
  */
 @OptIn(DelicateDataLayerApi::class, ExperimentalAtomicApi::class)
 internal class RealMutableQueryStores<K : Any, T, M>(
@@ -78,9 +90,13 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   // Whether an apply that is not idempotent has been reported. Once is enough to fix it.
   private val reportedApply = AtomicBoolean(false)
   // One base store per key, shared by the key's views and its commits, so a store that keeps state
-  // of its own, like one that caches what it loaded, sees every write. Updated by compare-and-set
-  // only.
-  private val bases = AtomicReference(persistentHashMapOf<K, QueryStore<T>>())
+  // of its own, like one that caches what it loaded, sees every write. Kept for as long as this set
+  // lives, as mutableStores promises. Updated by compare-and-set only.
+  private val bases = AtomicReference(persistentHashMapOf<K, Base<T>>())
+  // Changes whose rows are still being written, by key, so a write or clear can wait for the ones
+  // requested before it. Settled entries are dropped as new ones come in. Updated by
+  // compare-and-set only.
+  private val storing = AtomicReference(persistentListOf<Storing<K>>())
   private val outbox = outbox(::send)
 
   /** How many sent changes are still on record. For tests, which cannot see pruning otherwise. */
@@ -90,21 +106,38 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   override fun invoke(key: K): MutableQueryStore<T, M> = KeyStore(key, baseFor(key))
 
   /** [key]'s base store, built on first use. The copy that loses a race was never written to. */
-  private fun baseFor(key: K): QueryStore<T> {
+  private fun baseFor(key: K): Base<T> {
     while (true) {
       val current = bases.load()
       current[key]?.let {
         return it
       }
-      val created = base(key)
+      val created = Base(base(key))
       if (bases.compareAndSet(current, current.putting(key, created))) {
         return created
       }
     }
   }
 
-  override fun mutate(key: K, mutation: M): Operation =
-    outbox.enqueue(KeyedMutation(key, mutation), key = key.toString())
+  override fun mutate(key: K, mutation: M): OutboxOperation {
+    val handle = outbox.enqueue(KeyedMutation(key, mutation), key = key.toString())
+    storing.update { all ->
+      all
+        .filter { it.stored.state.value !is OperationState.Terminal }
+        .toPersistentList()
+        .adding(Storing(key, handle.stored))
+    }
+    return handle
+  }
+
+  /** Waits until every change for [key] requested so far is in the store, or failed to be. */
+  private suspend fun awaitStored(key: K) {
+    for (entry in storing.load()) {
+      if (entry.key == key) {
+        entry.stored.await()
+      }
+    }
+  }
 
   override fun pending(key: K): Flow<List<PendingMutation<M>>> =
     rows
@@ -136,6 +169,9 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * shows it, which already includes earlier sent changes that a fetch may have left out, and the
    * truth keeps its old fetch time. The one exception is a fetch that started after the send
    * finished: it read the server with the change already in it, so the truth is left as it is.
+   *
+   * Runs on the key's lock, so no fetch write lands between the read and the write here. A row that
+   * a clear discarded while the send ran has no truth to land in, so its change is dropped.
    */
   private suspend fun commit(
     id: EntryId,
@@ -144,36 +180,42 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     sentAt: Instant,
   ) {
     val key = payload.key
-    val truth = baseFor(key)
-    val current = truth.data.first()
-    val sent = committed.value.filter { it.key == key }
-    val alreadyFetched = current != null && current.fetchedAt > sentAt
-    val next =
-      when {
-        result is Delivery.Replaced -> Fetched(result.value, sentAt)
-        alreadyFetched -> current
-        else -> {
-          val folded = applied(withSent(current, sent), payload.mutation)
-          checkIdempotent(folded, payload.mutation)
-          folded
-        }
+    val base = baseFor(key)
+    base.lock.withLock {
+      if (rows.entry(id).first()?.status != OutboxStatus.Sending) {
+        return
       }
-    // Views show this in place of the row from here, so the writes below never show as a gap. This
-    // key's records that the truth already confirms can go.
-    val live = rows.entries().first().mapTo(HashSet()) { it.id }
-    committed.update { all ->
-      all
-        .filter { keeps(it, key, live, current?.fetchedAt) }
-        .toPersistentList()
-        .adding(Committed(id, key, payload.mutation, sentAt, next))
-    }
-    if (alreadyFetched) {
-      return
-    }
-    if (next == null) {
-      truth.clear()
-    } else {
-      truth.write(next.value, next.fetchedAt)
+      val current = base.store.data.first()
+      val sent = committed.value.filter { it.key == key }
+      val alreadyFetched = current != null && current.fetchedAt > sentAt
+      val replaced = result is Delivery.Replaced
+      val next =
+        when {
+          result is Delivery.Replaced -> Fetched(result.value, sentAt)
+          alreadyFetched -> current
+          else -> {
+            val folded = applied(withSent(current, sent), payload.mutation)
+            checkIdempotent(folded, payload.mutation)
+            folded
+          }
+        }
+      // Views show this in place of the row from here, so the writes below never show as a gap.
+      // This key's records that the truth already confirms can go.
+      val live = rows.entries().first().mapTo(HashSet()) { it.id }
+      committed.update { all ->
+        all
+          .filter { keeps(it, key, live, current?.fetchedAt) }
+          .toPersistentList()
+          .adding(Committed(id, key, payload.mutation, sentAt, next, replaced))
+      }
+      if (alreadyFetched) {
+        return
+      }
+      if (next == null) {
+        base.store.clear()
+      } else {
+        base.store.write(next.value, next.fetchedAt)
+      }
     }
   }
 
@@ -230,14 +272,16 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Discards [key]'s waiting and failed rows by writing their status, so they drop out whether or
-   * not the outbox still runs, like after its scope was cancelled for a logout. Handles that follow
-   * them settle Cancelled through the row, and the outbox's watcher moves the key on. A row already
-   * sending belongs to its drain and finishes on its own.
+   * Discards [key]'s rows the server has not confirmed, sending ones included, by writing their
+   * status, so they drop out whether or not the outbox still runs, like after its scope was
+   * cancelled for a logout. Handles that follow them settle Cancelled through the row, and the
+   * outbox's watcher moves the key on. A row left sending by an owner that stopped would send again
+   * under the next owner, so it goes too. A drain still sending it finds the row gone when it
+   * reports the result, and [commit] drops the change.
    */
-  private suspend fun discardWaiting(key: K) {
+  private suspend fun discardPending(key: K) {
     for (row in rows.entries().first()) {
-      if (row.payload.key != key || row.status == OutboxStatus.Sending) {
+      if (row.payload.key != key) {
         continue
       }
       rows.update(
@@ -248,12 +292,14 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   }
 
   /**
-   * [stored] with every sent change it may be missing applied again, oldest first. A sent change is
+   * [stored] with every sent change it may be missing put back, oldest first. A sent change is
    * already in [stored] in two cases. Either [stored] is the value that the change's own commit, or
    * a later one, wrote, since each commit folds onto the view and so carries the earlier changes
    * with it. Or [stored] was fetched after the change was sent, so the server already included it.
    * Every other sent change is missing, because [stored] came from a fetch that read the server too
-   * early or from a commit whose write has not landed in the store yet.
+   * early or from a commit whose write has not landed in the store yet. A missing change the server
+   * answered with a value is put back as that value, which holds everything sent before it, since
+   * applying the change again could only rebuild the client's version of it.
    */
   private fun withSent(stored: Fetched<T>?, sent: List<Committed<K, T, M>>): Fetched<T>? {
     // The newest record whose truth the store holds. Every record up to it is in the truth.
@@ -261,9 +307,15 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     var result = stored
     sent.forEachIndexed { index, record ->
       val inTruth = index <= held || (stored != null && stored.fetchedAt > record.sentAt)
-      if (!inTruth) {
-        result = applied(result, record.mutation)
+      if (inTruth) {
+        return@forEachIndexed
       }
+      result =
+        if (record.replaced) {
+          record.truth
+        } else {
+          applied(result, record.mutation)
+        }
     }
     return result
   }
@@ -300,8 +352,10 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * [key]'s view: the truth with the key's sent and in-flight changes on top. The overlay runs on
    * [context], and only a value that differs from the last crosses to the collector.
    */
-  private inner class KeyStore(private val key: K, private val truth: QueryStore<T>) :
+  private inner class KeyStore(private val key: K, private val base: Base<T>) :
     MutableQueryStore<T, M> {
+    private val truth = base.store
+
     override val data: Flow<Fetched<T>?> =
       combine(truth.data, rows.entries(), committed) { stored, all, sent ->
           overlay(
@@ -313,21 +367,39 @@ internal class RealMutableQueryStores<K : Any, T, M>(
         .distinctUntilChanged()
         .flowOn(context)
 
+    /**
+     * The query's fetch write, once the changes requested before it are in the store, so the value
+     * it publishes carries them. On the key's lock, a value older than what a commit wrote
+     * meanwhile is dropped, as the query would have dropped it had it seen the commit first. A
+     * truth time ahead of the clock is a bad record, which the fetch replaces.
+     */
     override suspend fun write(value: T, fetchedAt: Instant) {
-      truth.write(value, fetchedAt)
+      awaitStored(key)
+      base.lock.withLock {
+        val storedAt = truth.data.first()?.fetchedAt
+        val newerStored = storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
+        if (!newerStored) {
+          truth.write(value, fetchedAt)
+        }
+      }
       prune(key, fetchedAt)
     }
 
     override suspend fun clear() {
-      discardWaiting(key)
-      // Nothing sent before the clear belongs on top of what comes after it
-      committed.update { all -> all.filter { it.key != key }.toPersistentList() }
-      truth.clear()
+      // A change still being stored would land after the rows below were read and then send
+      awaitStored(key)
+      base.lock.withLock {
+        discardPending(key)
+        // Nothing sent before the clear belongs on top of what comes after it
+        committed.update { all -> all.filter { it.key != key }.toPersistentList() }
+        truth.clear()
+      }
     }
 
     override suspend fun invalidate() = truth.invalidate()
 
-    override fun mutate(mutation: M): Operation = this@RealMutableQueryStores.mutate(key, mutation)
+    override fun mutate(mutation: M): OutboxOperation =
+      this@RealMutableQueryStores.mutate(key, mutation)
 
     override val pending: Flow<List<PendingMutation<M>>> = this@RealMutableQueryStores.pending(key)
 
@@ -338,8 +410,9 @@ internal class RealMutableQueryStores<K : Any, T, M>(
 
   /**
    * A sent change: its row, what the truth held once its commit landed, and when the send finished.
-   * A truth fetched after [sentAt] holds the change. One fetched before may not, so a view applies
-   * the change again on top of it.
+   * A truth fetched after [sentAt] holds the change. One fetched before may not, so a view puts the
+   * change back on top of it: [truth] itself when the server answered with that value, and
+   * [replaced] says so, else the change applied again.
    */
   private class Committed<K, T, M>(
     val id: EntryId,
@@ -347,7 +420,16 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     val mutation: M,
     val sentAt: Instant,
     val truth: Fetched<T>?,
+    val replaced: Boolean,
   )
+
+  /** A key's base store and the lock its two writers, fetch and commit, take turns on. */
+  private class Base<T>(val store: QueryStore<T>) {
+    val lock = Mutex()
+  }
+
+  /** A change requested for [key], and whether its row is in the store yet. */
+  private class Storing<K>(val key: K, val stored: Operation)
 }
 
 /** Queued or Sending: the row's change still shows, and it has not been rejected. */

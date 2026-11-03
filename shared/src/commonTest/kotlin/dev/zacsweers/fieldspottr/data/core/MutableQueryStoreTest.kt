@@ -7,26 +7,38 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
 import assertk.assertions.messageContains
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 
 class MutableQueryStoreTest {
@@ -459,6 +471,202 @@ class MutableQueryStoreTest {
     assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "b"), START))
     data.assertNoFailures()
   }
+
+  @Test
+  fun `the stored milestone settles once the row is kept while the send still runs`() = runTest {
+    send.hold(Add("b"))
+    val (store, query) = tags()
+
+    val handle = store.mutate(Add("b"))
+    handle.stored.awaitSucceeded()
+
+    // The change is kept and shows, and the server has not answered yet
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "b"))
+    assertThat(handle.state.value is OperationState.Terminal).isFalse()
+    assertThat(send.sent).isEmpty()
+    send.release(Add("b"))
+    handle.awaitSucceeded()
+  }
+
+  @Test
+  fun `a refresh publishes no value that lacks a change requested before it`() = runTest {
+    val inserts = HoldingOutboxStores()
+    val failures = TestFailures()
+    val scope =
+      DataScope.Factory(
+          onFailure = failures,
+          onActionFailure = failures,
+          online = MutableStateFlow(false),
+          stores = inserts,
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    truth = QueryStore.inMemory(Fetched(listOf("old"), START))
+    val store =
+      scope.mutableStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::addOnce,
+        send = { _, _ -> },
+      )
+    fetch.respond = { listOf("new") }
+    // Never stale, so collecting the seeded value starts no fetch of its own
+    val query = scope.query(store, fetch, Freshness.NeverStale)
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { query.data.collect { seen += it?.value } }
+    runCurrent()
+    assertThat(seen).containsExactly(listOf("old"))
+
+    // The first row is still being written when the refresh's fetch returns
+    inserts.hold()
+    store.mutate(Add("first"))
+    runCurrent()
+    store.mutate(Add("second"))
+    val refresh = query.refresh()
+    runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(seen).containsExactly(listOf("old"))
+
+    inserts.release()
+    refresh.awaitSucceeded()
+    runCurrent()
+
+    // The fetched value waited for the rows, so it never showed without the changes
+    assertThat(seen.last()).isEqualTo(listOf("new", "first", "second"))
+    for (value in seen) {
+      if ("new" in value.orEmpty()) {
+        assertThat(value).isEqualTo(listOf("new", "first", "second"))
+      }
+    }
+    failures.assertNone()
+  }
+
+  @Test
+  fun `a fetch write that lands after a commit from a later time is dropped`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START - 2.hours))
+    val gate = CompletableDeferred<Unit>()
+    // A base whose write of the fetched value stalls, like a slow file
+    val base =
+      QueryStore.of(truth.data, clear = { truth.clear() }, invalidate = { truth.invalidate() }) {
+        value,
+        fetchedAt ->
+        if (value == listOf("old")) {
+          gate.await()
+        }
+        truth.write(value, fetchedAt)
+      }
+    val store =
+      data.mutableStore<List<String>, Add>(
+        name = "tags",
+        base = base,
+        apply = ::addOnce,
+        exchange = { _, _ -> listOf("confirmed") },
+      )
+    fetch.respond = { listOf("old") }
+    val query = data.query(store, fetch, Freshness.staleAfter(1.hours))
+
+    val refresh = query.refresh()
+    runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    advanceTimeBy(1.seconds)
+    val change = store.mutate(Add("b"))
+    runCurrent()
+    // The commit takes its turn after the write in progress
+    assertThat(truth.data.value?.value).isEqualTo(listOf("a"))
+
+    gate.complete(Unit)
+    refresh.awaitSucceeded()
+    change.awaitSucceeded()
+
+    // The older fetch landed first, and the commit from after it replaced it
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("confirmed"), START + 1.seconds))
+    assertThat(query.stored.first()?.value).isEqualTo(listOf("confirmed"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an older truth shows a server answer as that answer`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    val store =
+      data.mutableStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::addOnce,
+        // The server normalizes what it stores
+        exchange = { add, _ -> listOf("a", add.tag.uppercase()) },
+      )
+    val query = data.query(store, fetch, Freshness.staleAfter(2.hours))
+    store.mutate(Add("b")).awaitSucceeded()
+    assertThat(query.stored.first()).isEqualTo(Fetched(listOf("a", "B"), START))
+
+    // A fetch from before the send that lands through the store is dropped
+    store.write(listOf("a"), START - 1.minutes)
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "B"), START))
+    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "B"))
+
+    // One that reaches the truth itself, as the store holds it between a commit's record and its
+    // write, shows the answer put back, which applying the change again could not rebuild
+    truth.write(listOf("a"), START - 1.minutes)
+    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "B"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `clear drops a change left sending by an owner that stopped`() = runTest {
+    val scopes = testDataScopeFactory(clock = testClock(START))
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    fun DataScope.tags() =
+      mutableStore<List<String>, Add>(name = "tags", base = truth, apply = ::addOnce, send = send)
+    val before = scopes.create(owner).tags()
+    send.hold(Add("b"))
+    before.mutate(Add("b"))
+    before.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
+
+    // The owner dies with the send in flight, so the row stays Sending
+    owner.cancel()
+    owner.coroutineContext.job.join()
+    before.clear()
+
+    assertThat(before.data.first()).isNull()
+    assertThat(before.pending.first()).isEmpty()
+
+    // The next owner over the same rows finds nothing to send
+    val after = scopes.create(backgroundScope).tags()
+    runCurrent()
+    assertThat(after.data.first()).isNull()
+    assertThat(send.attempts).containsExactly(Add("b"))
+    scopes.assertNoFailures()
+  }
+}
+
+/** Outbox stores whose inserts wait while held, like a database that is slow to write. */
+private class HoldingOutboxStores : OutboxStores {
+  private val delegate = InMemoryOutboxStores()
+  private val held = MutableStateFlow(false)
+
+  fun hold() {
+    held.value = true
+  }
+
+  fun release() {
+    held.value = false
+  }
+
+  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+    val rows = delegate.open(name, serializer)
+    return object : OutboxStore<E> by rows {
+      override suspend fun insert(key: String, payload: E): EntryId {
+        held.first { !it }
+        return rows.insert(key, payload)
+      }
+    }
+  }
+
+  override suspend fun clearAll() = delegate.clearAll()
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
