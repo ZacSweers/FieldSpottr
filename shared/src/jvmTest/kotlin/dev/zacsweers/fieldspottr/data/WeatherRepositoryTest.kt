@@ -10,6 +10,8 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
+import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
@@ -36,6 +38,11 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
 import okio.fakefilesystem.FakeFileSystem
 
 class WeatherRepositoryTest {
@@ -163,7 +170,7 @@ class WeatherRepositoryTest {
     val forecast = repository.forecast.first { it != null }
     assertThat(forecast!!.current!!.tempF).isEqualTo(FETCHED_TEMP)
     assertThat(requests.get()).isEqualTo(1)
-    assertThat(readCache().fetchedAt).isEqualTo(START.toEpochMilliseconds())
+    assertThat(cachedAt()).isEqualTo(START.toEpochMilliseconds())
   }
 
   @Test
@@ -210,7 +217,7 @@ class WeatherRepositoryTest {
 
     repository.refresh().awaitSucceeded()
     assertThat(requests.get()).isEqualTo(1)
-    assertThat(readCache().fetchedAt).isEqualTo(START.toEpochMilliseconds())
+    assertThat(cachedAt()).isEqualTo(START.toEpochMilliseconds())
     assertThat(repository.forecast.first()!!.current!!.tempF).isEqualTo(FETCHED_TEMP)
   }
 
@@ -237,21 +244,29 @@ class WeatherRepositoryTest {
 
   private fun TestScope.repository(): WeatherRepository {
     data = testDataScope(clock = testClock(START))
-    return WeatherRepository(
-      data,
-      weatherStore(appDirs, json, backgroundScope),
-      json,
-      lazyOf(client),
-    )
+    val store =
+      QueryStore.inFile<OpenMeteoResponse>(backgroundScope, { cachePath }, json, fileSystem = fs)
+    return WeatherRepository(data, store, json, lazyOf(client))
   }
 
+  /** Writes the file as the store does: the response under "value" beside its fetch time. */
   private fun writeCache(fetchedAt: Instant) {
-    val stored = json.decodeFromString<OpenMeteoResponse>(sampleResponse.replace("72.6", "50.0"))
-    val cached = CachedWeather(fetchedAt.toEpochMilliseconds(), stored)
-    fs.write(cachePath) { writeUtf8(json.encodeToString(cached)) }
+    val stored = json.parseToJsonElement(sampleResponse.replace("72.6", "50.0"))
+    val record = buildJsonObject {
+      put("fetchedAt", fetchedAt.toEpochMilliseconds())
+      put("value", stored)
+    }
+    fs.write(cachePath) { writeUtf8(record.toString()) }
   }
 
-  private fun readCache(): CachedWeather = json.decodeFromString(fs.read(cachePath) { readUtf8() })
+  /** The fetch time the file holds, in epoch milliseconds. */
+  private fun cachedAt(): Long =
+    json
+      .parseToJsonElement(fs.read(cachePath) { readUtf8() })
+      .jsonObject
+      .getValue("fetchedAt")
+      .jsonPrimitive
+      .long
 
   private companion object {
     val START = Instant.parse("2026-06-10T12:00:00Z")

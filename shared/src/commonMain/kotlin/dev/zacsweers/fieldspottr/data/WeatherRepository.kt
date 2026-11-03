@@ -3,18 +3,12 @@
 package dev.zacsweers.fieldspottr.data
 
 import androidx.compose.runtime.Immutable
-import androidx.datastore.core.CorruptionException
-import androidx.datastore.core.DataStore
-import androidx.datastore.core.DataStoreFactory
-import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
-import androidx.datastore.core.okio.OkioSerializer
-import androidx.datastore.core.okio.OkioStorage
 import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.fieldspottr.data.core.DataScope
-import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
-import dev.zacsweers.fieldspottr.data.core.asQueryStore
+import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.metro.AppScope
@@ -27,11 +21,9 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.hours
-import kotlin.time.Instant
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.plus
@@ -40,8 +32,6 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okio.BufferedSink
-import okio.BufferedSource
 
 /**
  * Open-Meteo forecast for lower Manhattan. All tracked fields are within a couple miles of each
@@ -171,7 +161,7 @@ data class WeatherForecast(
 class WeatherRepository
 internal constructor(
   data: DataScope,
-  store: DataStore<Fetched<OpenMeteoResponse>?>,
+  store: QueryStore<OpenMeteoResponse>,
   private val json: Json,
   private val client: Lazy<HttpClient>,
 ) {
@@ -183,11 +173,22 @@ internal constructor(
     json: Json,
     client: Lazy<HttpClient>,
     @IoDispatcher io: CoroutineDispatcher,
-  ) : this(data, weatherStore(appDirs, json, data.scope + io), json, client)
+  ) : this(
+    data,
+    // The cache file, kept open for the app's life and read and written on the I/O dispatcher
+    QueryStore.inFile<OpenMeteoResponse>(
+      scope = data.scope + io,
+      path = { appDirs.userData / "weather.json" },
+      json = json,
+      fileSystem = appDirs.fs,
+    ),
+    json,
+    client,
+  )
 
   private val query =
     data.query(
-      store = store.asQueryStore(),
+      store = store,
       fetch = ::fetchForecast,
       freshness = Freshness.staleAfter(WEATHER_REFRESH_INTERVAL),
     )
@@ -204,50 +205,6 @@ internal constructor(
     return json.decodeFromString<OpenMeteoResponse>(response.bodyAsText())
   }
 }
-
-/**
- * DataStore allows one active instance per file, which the repository's graph scoping guarantees.
- * The file's reads and writes run in [scope], and cancelling it releases the file.
- */
-internal fun weatherStore(
-  appDirs: FSAppDirs,
-  json: Json,
-  scope: CoroutineScope,
-): DataStore<Fetched<OpenMeteoResponse>?> =
-  DataStoreFactory.create(
-    storage =
-      OkioStorage(appDirs.fs, CachedWeatherSerializer(json)) { appDirs.userData / "weather.json" },
-    // An unreadable cache is treated as empty, so the next collect fetches
-    corruptionHandler = ReplaceFileCorruptionHandler { null },
-    scope = scope,
-  )
-
-/** Reads and writes the same JSON the cache file has always held. */
-internal class CachedWeatherSerializer(private val json: Json) :
-  OkioSerializer<Fetched<OpenMeteoResponse>?> {
-  override val defaultValue: Fetched<OpenMeteoResponse>? = null
-
-  override suspend fun readFrom(source: BufferedSource): Fetched<OpenMeteoResponse>? {
-    val text = source.readUtf8()
-    if (text.isBlank()) return null
-    val cached =
-      try {
-        json.decodeFromString<CachedWeather>(text)
-      } catch (e: IllegalArgumentException) {
-        throw CorruptionException("Unreadable weather cache", e)
-      }
-    return Fetched(cached.response, Instant.fromEpochMilliseconds(cached.fetchedAt))
-  }
-
-  override suspend fun writeTo(t: Fetched<OpenMeteoResponse>?, sink: BufferedSink) {
-    if (t == null) return
-    val cached = CachedWeather(t.fetchedAt.toEpochMilliseconds(), t.value)
-    sink.writeUtf8(json.encodeToString(cached))
-  }
-}
-
-@Serializable
-internal data class CachedWeather(val fetchedAt: Long, val response: OpenMeteoResponse)
 
 @Serializable
 internal data class OpenMeteoResponse(
