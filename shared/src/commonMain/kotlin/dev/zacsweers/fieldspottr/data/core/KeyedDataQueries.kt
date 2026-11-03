@@ -79,14 +79,4 @@ interface KeyedDataQueries<K : Any, T> {
   /** Marks every key's stored data stale without fetching. */
   fun invalidate(keys: Collection<K>): Operation =
     Operation.all(keys.distinct().map { invalidate(it) })
-
-  /**
-   * [DataQuery.mutate] for [key]. [block] gets the key's store and runs after any fetch in flight
-   * for the key, and fetches requested for the key after this returns run after it.
-   */
-  fun mutate(
-    key: K,
-    requireFresh: Boolean,
-    block: suspend (store: QueryStore<T>) -> Unit,
-  ): Operation
 }

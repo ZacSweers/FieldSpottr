@@ -20,7 +20,6 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -200,22 +199,6 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `a key's mutation runs after its fetch in flight`() = runTest {
-    fetch.hold()
-    val values = values()
-
-    val request = values.requestFetch("a", force = false)
-    testScheduler.runCurrent()
-    val mutation = values.mutate("a", requireFresh = false) { it.write("edited", START) }
-    fetch.release()
-    request.await()
-    mutation.await()
-    // The fetch's older result landed first, so the edit is what stays
-    assertThat(values.data("a").first()?.value).isEqualTo("edited")
-    assertThat(fetch.calls).containsExactly("a")
-  }
-
-  @Test
   fun `stored shows a key's store without fetching`() = runTest {
     val stores = QueryStore.inMemoryByKey<String, String>()
     stores("a").write("cached", START - 2.hours)
@@ -334,13 +317,11 @@ class KeyedDataQueriesTest {
 
     val request = values.requestFetch("a", force = true)
     val invalidate = values.invalidate("a")
-    val mutation = values.mutate("a", requireFresh = false) { it.write("edited", START) }
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(1)
     fetch.release()
     assertThat(request.await()).isEqualTo(OperationState.Succeeded)
     assertThat(invalidate.await()).isEqualTo(OperationState.Succeeded)
-    assertThat(mutation.await()).isEqualTo(OperationState.Succeeded)
     testScheduler.runCurrent()
     assertThat(values.keysHeld).isEqualTo(0)
   }
@@ -369,31 +350,6 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `a key keeps its query while a mutation runs so later requests order behind it`() = runTest {
-    val release = CompletableDeferred<Unit>()
-    val values = values()
-
-    val mutation =
-      values.mutate("a", requireFresh = false) {
-        release.await()
-        it.write("edited", START)
-      }
-    testScheduler.runCurrent()
-    assertThat(values.keysHeld).isEqualTo(1)
-    val request = values.requestFetch("a", force = false)
-    testScheduler.runCurrent()
-    // The same query, so the request waits for the mutation instead of fetching beside it
-    assertThat(fetch.calls).isEmpty()
-    release.complete(Unit)
-    assertThat(mutation.await()).isEqualTo(OperationState.Succeeded)
-    assertThat(request.await()).isEqualTo(OperationState.Succeeded)
-    // The mutation's write is fresh, so the request found nothing to fetch
-    assertThat(fetch.calls).isEmpty()
-    testScheduler.runCurrent()
-    assertThat(values.keysHeld).isEqualTo(0)
-  }
-
-  @Test
   fun `keys drop once concurrent work on other threads settles`() = runTest {
     val clock = testClock(START)
     withContext(Dispatchers.Default) {
@@ -410,8 +366,8 @@ class KeyedDataQueriesTest {
               },
               freshness = Freshness.staleAfter(1.hours),
             )
-        // Invalidations and mutations let later forced fetches cancel earlier ones, so cancelled
-        // commands are in the mix too
+        // Invalidations let later forced fetches cancel earlier ones, so cancelled commands are in
+        // the mix too
         List(500) { i ->
             async {
               val key = i % 3
@@ -419,7 +375,7 @@ class KeyedDataQueriesTest {
                 0 -> values.requestFetch(key, force = true).await()
                 1 -> values.requestFetch(key, force = false).await()
                 2 -> values.invalidate(key).await()
-                3 -> values.mutate(key, requireFresh = i % 2 == 0) { it.write(key, START) }.await()
+                3 -> values.stored(key).first()
                 else -> values.data(key).first { it != null }
               }
             }

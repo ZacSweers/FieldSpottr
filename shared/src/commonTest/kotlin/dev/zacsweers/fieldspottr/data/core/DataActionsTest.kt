@@ -19,7 +19,6 @@ import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
-import kotlin.time.Duration.Companion.hours
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -262,21 +261,6 @@ class DataActionsTest {
 
     assertThat(own.all).containsExactly(boom)
     assertThat(data.actionFailures.all).containsExactly(boom)
-  }
-
-  @Test
-  fun `a mutation that awaits a request on its own query fails at once`() = runTest {
-    val query =
-      testDataScope()
-        .query(
-          QueryStore.inMemory(),
-          fetch = { 1 },
-          freshness = Freshness.staleAfter(1.hours),
-        )
-
-    val mutation = query.mutate(requireFresh = false) { query.requestFetch(force = false).await() }
-    mutation.await()
-    mutation.assertFailed<IllegalStateException>()
   }
 
   @Test

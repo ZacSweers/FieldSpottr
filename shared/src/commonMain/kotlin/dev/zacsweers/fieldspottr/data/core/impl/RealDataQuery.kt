@@ -148,8 +148,8 @@ internal class RealDataQuery<T>(
 
   /**
    * Joins a forced fetch that has not settled, even behind checks queued after it, else fetches
-   * now. An invalidate() or mutate queued after it stops the search, so a later request never joins
-   * a fetch from before the data changed. See [requestFetch].
+   * now. An invalidate() queued after it stops the search, so a later request never joins a fetch
+   * from before the data changed. See [requestFetch].
    */
   private fun fetchNow(): Operation =
     actions.runOrJoin(
@@ -189,17 +189,6 @@ internal class RealDataQuery<T>(
   // store again instead of joining a fetch that started before the data changed
   override fun invalidate(): Operation = actions.run(Ordering.Keyed(key)) { store.invalidate() }
 
-  override fun mutate(
-    requireFresh: Boolean,
-    block: suspend (store: QueryStore<T>) -> Unit,
-  ): Operation =
-    actions.run(Ordering.Keyed(key)) {
-      if (requireFresh && isStale(store.data.first()?.fetchedAt)) {
-        fetchOnce(forced = false)
-      }
-      block(store)
-    }
-
   // Reads the store on this query's key, so it never races a fetch
   private suspend fun checkStale() {
     if (isStale(store.data.first()?.fetchedAt)) {
@@ -223,7 +212,15 @@ internal class RealDataQuery<T>(
       val value = fetch()
       // A fetch superseded while it ran never writes, even one whose fetch ignored cancellation
       currentCoroutineContext().ensureActive()
-      store.write(value, fetchedAt)
+      // A fetch also never overwrites data that another writer put in the store meanwhile with a
+      // newer fetch time, like a pushed update or a sent change the server already holds. A fetch
+      // time ahead of the clock is a bad record, which isStale treats as stale, so the fetch does
+      // replace that.
+      val storedAt = store.data.first()?.fetchedAt
+      val newerStored = storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
+      if (!newerStored) {
+        store.write(value, fetchedAt)
+      }
       status.value = FetchStatus.Idle
     } catch (t: Throwable) {
       // Stopped by its owner, or replaced by a newer forced fetch that starts only after this one

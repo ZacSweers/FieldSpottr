@@ -104,7 +104,9 @@ class ClearPublicationTest {
               fastSawInitial.await(8, TimeUnit.SECONDS) && slowSawInitial.await(8, TimeUnit.SECONDS)
             )
             assertThat(attempts.get()).isEqualTo(0)
-            assertThat(query.mutate(requireFresh = false) {}.await())
+            // A check on the query's key. The data is fresh, so it only waits for the work queued
+            // before it.
+            assertThat(query.requestFetch(force = false).await())
               .isEqualTo(OperationState.Succeeded)
             pauseNextSubmission.set(true)
             store.clear()
@@ -120,9 +122,8 @@ class ClearPublicationTest {
               fast.join()
               slow.join()
               // Queued on the query's key, so it waits for any second recheck the slow collector
-              // submitted
-              assertThat(query.mutate(requireFresh = false) {}.await())
-                .isEqualTo(OperationState.Succeeded)
+              // submitted. The store is empty, so marking it stale changes nothing.
+              assertThat(query.invalidate().await()).isEqualTo(OperationState.Succeeded)
             }
             attempts.get()
           } finally {

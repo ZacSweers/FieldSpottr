@@ -5,7 +5,6 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
-import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
@@ -66,7 +65,8 @@ class DataQueryTest {
     val query = dataQuery()
 
     assertThat(query.data.values().first()).isEqualTo(1)
-    // Joins the check the collector started. advanceUntilIdle() skips backgroundScope work.
+    // Joins the freshness check the collector already started. The test awaits the handle because
+    // advanceUntilIdle() skips backgroundScope work.
     query.requestFetch(force = false).await()
     assertThat(fetch.callCount).isEqualTo(0)
   }
@@ -203,19 +203,38 @@ class DataQueryTest {
   }
 
   @Test
-  fun `a forced request after a mutation starts its own fetch`() = runTest {
+  fun `a forced request after an invalidation starts its own fetch`() = runTest {
     fetch.hold()
     val query = dataQuery()
 
     val before = query.requestFetch(force = true)
     testScheduler.runCurrent()
-    query.mutate(requireFresh = false) { it.write(100, START) }
+    store.write(100, START)
+    query.invalidate()
     val after = query.requestFetch(force = true)
     fetch.release()
-    // The fetch from before the write is cancelled, and the one after it lands last
+    // The fetch from before the invalidation is cancelled, and the one after it lands last
     assertThat(before.await()).isEqualTo(OperationState.Cancelled)
     assertThat(after.await()).isEqualTo(OperationState.Succeeded)
     assertThat(stored.value).isEqualTo(Fetched(101, START))
+  }
+
+  @Test
+  fun `a fetch does not write over data with a newer fetch time`() = runTest {
+    fetch.hold()
+    val query = dataQuery()
+
+    val request = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    // Another writer, like a pushed update or a sent change, lands while the fetch is out
+    data.clock.shift(1.minutes)
+    store.write(100, START + 1.minutes)
+    fetch.release()
+
+    assertThat(request.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(stored.value).isEqualTo(Fetched(100, START + 1.minutes))
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+    assertThat(fetch.callCount).isEqualTo(1)
   }
 
   @Test
@@ -287,49 +306,6 @@ class DataQueryTest {
   }
 
   @Test
-  fun `a mutation waits for the fetch in flight and later requests wait for it`() = runTest {
-    fetch.hold()
-    val query = dataQuery()
-
-    val request = query.requestFetch(force = false)
-    testScheduler.runCurrent()
-    val mutation = query.mutate(requireFresh = false) { it.write(100, START) }
-    val later = query.requestFetch(force = false)
-    fetch.release()
-    request.await()
-    mutation.await()
-    later.await()
-    // The fetch's older result landed first, and the later request found the mutation's write fresh
-    assertThat(stored.value).isEqualTo(Fetched(100, START))
-    assertThat(fetch.callCount).isEqualTo(1)
-  }
-
-  @Test
-  fun `a mutation that requires fresh data fetches stale data first`() = runTest {
-    stored.value = Fetched(1, START - 2.hours)
-    val query = dataQuery()
-    var seen: Int? = null
-
-    query.mutate(requireFresh = true) { seen = it.data.first()?.value }.await()
-    assertThat(seen).isEqualTo(2)
-    assertThat(fetch.callCount).isEqualTo(1)
-    // Fresh now, so this one skips the fetch
-    query.mutate(requireFresh = true) { seen = it.data.first()?.value }.await()
-    assertThat(fetch.callCount).isEqualTo(1)
-  }
-
-  @Test
-  fun `a failed fetch before a mutation fails it and skips the block`() = runTest {
-    fetch.respond = { error("fetch failed") }
-    val query = dataQuery()
-    var ran = false
-
-    assertThat(query.mutate(requireFresh = true) { ran = true }.await())
-      .isInstanceOf<OperationState.Failed>()
-    assertThat(ran).isEqualTo(false)
-  }
-
-  @Test
   fun `in-memory stores clear and invalidate`() = runTest {
     val single = QueryStore.inMemory<Int>()
     single.write(1, START)
@@ -377,8 +353,10 @@ class DataQueryTest {
     backgroundScope.launch { query.data.collect {} }
     testScheduler.runCurrent()
 
-    query.mutate(requireFresh = false) { it.clear() }
-    testScheduler.advanceTimeBy(30.milliseconds)
+    // The check's read finishes at 10 ms and the observer's at 20 ms, so the clear lands between
+    testScheduler.advanceTimeBy(15.milliseconds)
+    state.value = null
+    testScheduler.advanceTimeBy(15.milliseconds)
     testScheduler.runCurrent()
 
     check.assertSucceeded()
@@ -584,7 +562,6 @@ class DataQueryTest {
   @Test
   fun `a query command that fails without a fetch reports as an action`() = runTest {
     val data = testDataScope(clock = testClock(START))
-    val rejected = IllegalStateException("Edit rejected")
     val notMarked = IllegalStateException("Could not mark stale")
     val backing = QueryStore.inMemory(Fetched(1, START))
     val failingInvalidate =
@@ -595,26 +572,11 @@ class DataQueryTest {
       }
     val query = data.query(failingInvalidate, fetch, Freshness.staleAfter(1.hours))
 
-    assertThat(query.mutate(requireFresh = false) { throw rejected }.awaitFailed<Throwable>())
-      .isSameInstanceAs(rejected)
     assertThat(query.invalidate().awaitFailed<Throwable>()).isSameInstanceAs(notMarked)
 
     assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
-    assertThat(data.actionFailures.take()).containsExactly(rejected, notMarked)
+    assertThat(data.actionFailures.take()).containsExactly(notMarked)
     data.fetchFailures.assertNone()
-  }
-
-  @Test
-  fun `a fetch that fails inside mutate reports as a fetch and skips the edit`() = runTest {
-    val query = dataQuery()
-    fetch.respond = { error("Offline") }
-    var edited = false
-
-    query.mutate(requireFresh = true) { edited = true }.awaitFailed<IllegalStateException>()
-
-    assertThat(edited).isFalse()
-    data.fetchFailures.assertSingle<IllegalStateException>()
-    data.actionFailures.assertNone()
   }
 
   private companion object {

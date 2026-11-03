@@ -72,9 +72,9 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
  *   fetch                           +--> status: Fetching, then Idle or Failed
  * ```
  *
- * Checks, fetches, invalidations and mutations run one at a time on the query's own key, so a check
- * never races a fetch and a fetch never races a write. `fetchedAt` is the clock time just before
- * the fetch.
+ * Checks, fetches and invalidations run one at a time on the query's own key, so a check never
+ * races a fetch. `fetchedAt` is the clock time just before the fetch, and a fetch never writes over
+ * data with a newer fetch time, like a value another writer put in the store while it ran.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface DataQuery<T> {
@@ -112,23 +112,4 @@ interface DataQuery<T> {
    * one fetches again. Use a forced [requestFetch] instead when the data is on screen.
    */
   fun invalidate(): Operation
-
-  /**
-   * Runs [block], a write that changes what this query fetches, on this query's key. It runs after
-   * any fetch in flight, and fetches requested after this returns run after it, so no fetch that
-   * started before the write can land after it. The key stays held until [block] returns, remote
-   * call included.
-   *
-   * This is on the query because its fetches run on a runner of their own, and commands on a
-   * repository's [DataActions] cannot order against them. A repository that also orders its own
-   * writes by key, like saves to one item that must land in call order, calls this from inside that
-   * action and awaits the handle. The action then holds its key until the mutation finishes.
-   *
-   * With [requireFresh], a stale store fetches first, so [block] sees current data, like a revision
-   * to check before writing. A failed fetch fails the handle and [block] never runs.
-   *
-   * [block] gets the store, to mark it stale before a remote write whose outcome may be unclear and
-   * to write the confirmed result after it.
-   */
-  fun mutate(requireFresh: Boolean, block: suspend (store: QueryStore<T>) -> Unit): Operation
 }

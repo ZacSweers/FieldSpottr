@@ -7,7 +7,6 @@ import dev.zacsweers.fieldspottr.data.core.FetchStatus
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.KeyedDataQueries
 import dev.zacsweers.fieldspottr.data.core.Operation
-import dev.zacsweers.fieldspottr.data.core.QueryStore
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -78,19 +77,6 @@ internal class RealKeyedDataQueries<K : Any, T>(
     val entry = acquire(key)
     try {
       return entry.query.invalidate().also(entry::holdUntilSettled)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun mutate(
-    key: K,
-    requireFresh: Boolean,
-    block: suspend (store: QueryStore<T>) -> Unit,
-  ): Operation {
-    val entry = acquire(key)
-    try {
-      return entry.query.mutate(requireFresh, block).also(entry::holdUntilSettled)
     } finally {
       entry.release()
     }
