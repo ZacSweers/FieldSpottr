@@ -65,4 +65,10 @@ suspend inline fun <reified T : Throwable> Operation.awaitFailed(): T {
   return assertFailed<T>()
 }
 
+/** Waits for this handle to settle, then fails the test unless it was cancelled. */
+suspend fun Operation.awaitCancelled() {
+  await()
+  assertCancelled()
+}
+
 private fun OperationState.failureCause(): Throwable? = (this as? OperationState.Failed)?.cause

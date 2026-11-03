@@ -12,6 +12,7 @@ import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.Outbox
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
+import dev.zacsweers.fieldspottr.data.core.OutboxOperation
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.PermanentFailure
@@ -143,7 +144,7 @@ internal class RealOutbox<E>(
     return earliest?.let { OutboxBacklog.BackingOff(it) } ?: OutboxBacklog.Empty
   }
 
-  override fun enqueue(payload: E, key: String?, apply: suspend () -> Unit): Operation {
+  override fun enqueue(payload: E, key: String?, apply: suspend () -> Unit): OutboxOperation {
     val rowKey = key ?: WHOLE_QUEUE
     return tracked(Ordering.Keyed(Enqueue(this, rowKey))) { attempt ->
       apply()
@@ -374,11 +375,22 @@ internal class RealOutbox<E>(
 
   /**
    * Queued until [write] reports its row through [Attempt.started], then a view over that row. A
-   * command that settles Cancelled after its row was written still follows the row.
+   * command that settles Cancelled after its row was written still follows the row. The handle's
+   * `stored` succeeds as soon as the row is reported, and otherwise ends as the write did.
    */
-  private fun tracked(ordering: Ordering, write: suspend (attempt: Attempt) -> Unit): Operation {
+  private fun tracked(
+    ordering: Ordering,
+    write: suspend (attempt: Attempt) -> Unit,
+  ): OutboxOperation {
     val attempt = Attempt(MutableStateFlow(OperationState.Queued))
     val written = actions.run(ordering) { write(attempt) }
+    // A write that ends without reporting a row stored nothing, whether it failed or was cancelled
+    // before the insert. The state is terminal by the time the command settles.
+    written.invokeOnSettled {
+      if (!attempt.id.isCompleted) {
+        attempt.stored.update { it.settledOr(written.state.value) }
+      }
+    }
     val rowStates = flow {
       val done = written.await()
       if (attempt.id.isCompleted) {
@@ -388,21 +400,33 @@ internal class RealOutbox<E>(
         emit(done)
       }
     }
-    return Operation.of(latched(attempt.state, { attempt.row }, rowStates))
+    return RowOperation(
+      latched(attempt.state, { attempt.row }, rowStates),
+      Operation.of(attempt.stored.asStateFlow()),
+    )
   }
 
   /** Where a write reports its row, so the handle follows that row's current attempt. */
   private inner class Attempt(val state: MutableStateFlow<OperationState>) {
     val id = CompletableDeferred<EntryId>()
     @Volatile var row: EntryId? = null
+    // Whether the row is in the store, for the handle's stored milestone
+    val stored = MutableStateFlow<OperationState>(OperationState.Queued)
 
     /** Follows [row] before anything can settle the attempt, then records it. */
     fun started(row: EntryId) {
       follow(row, state)
       this.row = row
       id.complete(row)
+      stored.value = OperationState.Succeeded
     }
   }
+
+  /** A handle over a row's current attempt, with [stored] over the write that put the row in. */
+  private class RowOperation(
+    override val state: StateFlow<OperationState>,
+    override val stored: Operation,
+  ) : OutboxOperation
 
   /**
    * [state], following [rowStates] in the outbox's scope until the first terminal state, then

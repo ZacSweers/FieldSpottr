@@ -16,6 +16,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -200,10 +201,42 @@ class OutboxTest {
     var applied = false
     val outbox = testDataScope().outbox(full, send = send, revert = { applied = false })
 
-    outbox.enqueue("a") { applied = true }.awaitFailed<IllegalStateException>()
+    val handle = outbox.enqueue("a") { applied = true }
+    handle.awaitFailed<IllegalStateException>()
 
+    // Nothing was stored, so the stored milestone failed too
+    handle.stored.assertFailed<IllegalStateException>()
     assertThat(applied).isFalse()
     assertThat(rows.entries().first()).isEmpty()
+  }
+
+  @Test
+  fun `the stored milestone settles once the row is in and before the send`() = runTest {
+    val outbox = outbox(online = false)
+
+    val handle = outbox.enqueue("a")
+    handle.stored.awaitSucceeded()
+
+    // The row waits for the network, and the handle still follows it
+    handle.assertPending()
+    assertThat(send.attempts).isEmpty()
+    data.online.value = true
+    handle.awaitSucceeded()
+  }
+
+  @Test
+  fun `an enqueue whose owner stopped before the write cancels the stored milestone`() = runTest {
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val outbox = scopes.create(owner).outbox<String>("notes", send = send)
+    owner.cancel()
+
+    val handle = outbox.enqueue("a")
+
+    handle.stored.awaitCancelled()
+    handle.awaitCancelled()
+    assertThat(scopes.outboxStore<String>("notes").entries().first()).isEmpty()
   }
 
   @Test
@@ -218,7 +251,8 @@ class OutboxTest {
     testScheduler.runCurrent()
 
     handle.assertCancelled()
-    // The next owner sends it
+    // The row is in, so the stored milestone stands, and the next owner sends it
+    handle.stored.assertSucceeded()
     assertThat(scopes.outboxStore<String>("notes").entries().first()).hasSize(1)
   }
 

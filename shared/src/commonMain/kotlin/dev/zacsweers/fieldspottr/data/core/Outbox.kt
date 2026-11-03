@@ -61,9 +61,10 @@ interface Outbox<E> {
    * Runs [apply], the optimistic local change, then inserts a row, in one command. If apply throws,
    * nothing is inserted and the handle fails. If the insert throws, revert undoes the change and
    * the handle fails. Once apply returns, the insert runs to the end even if the outbox's scope
-   * stops. Without a [key], every row shares one order.
+   * stops. Without a [key], every row shares one order. The handle's [OutboxOperation.stored]
+   * settles once the row is in, before any send.
    */
-  fun enqueue(payload: E, key: String? = null, apply: suspend () -> Unit = {}): Operation
+  fun enqueue(payload: E, key: String? = null, apply: suspend () -> Unit = {}): OutboxOperation
 
   /**
    * Requeues a failed row with its attempts reset, or ends a backoff early. The handle follows the
@@ -84,4 +85,21 @@ interface Outbox<E> {
   fun operation(id: EntryId): Operation
 
   companion object
+}
+
+/**
+ * The handle [Outbox.enqueue] and [MutableQueryStore.mutate] return. As an [Operation] it follows
+ * the row's send, as [Outbox] describes: Succeeded once sent, Failed once rejected for good,
+ * Cancelled once discarded. [stored] settles earlier, once the row is in the store.
+ */
+@SubclassOptInRequired(DelicateDataLayerApi::class)
+interface OutboxOperation : Operation {
+  /**
+   * Whether the change reached the store. Succeeded once its row is written, so from then on it
+   * survives a restart and sends when it can. Failed when the store rejected it, so nothing sends,
+   * and Cancelled when the owner stopped before the row was written. For a caller that waits for
+   * the local commit alone, like a message send whose screen then follows the delivery through the
+   * data it already shows.
+   */
+  val stored: Operation
 }
