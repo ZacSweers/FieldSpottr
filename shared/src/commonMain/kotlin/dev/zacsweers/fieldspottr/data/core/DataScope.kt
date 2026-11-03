@@ -106,6 +106,35 @@ interface DataScope {
     retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   ): Outbox<E>
 
+  /**
+   * The store under [mutableStore] and [mutableStores], which choose a [deliver] for a server that
+   * answers each change with nothing or with its value. Call one of those, and this only for a
+   * server that does both. It is a store for each key over the store [base] gives for it, whose
+   * values callers change before the server confirms them, as [MutableQueryStore] describes, with
+   * every waiting change kept as a row in the outbox called [name], opened from the factory's store
+   * set. Only one outbox per name may run at a time, so build the set once, in the one owner that
+   * changes this data, just as with [outbox]. [base] is called once per key, and the store it
+   * returns serves that key's views and its commits for as long as this set lives. Keys need a
+   * stable `toString`, which orders the rows, and [keySerializer], which stores them.
+   *
+   * @param apply the change [mutation] makes to the current value, with the contract [mutableStore]
+   *   describes: cheap, pure and idempotent.
+   * @param deliver sends one change, with the row's id as the request's idempotency key, and
+   *   returns what the truth takes: [Delivery.Acknowledged] applies the change to it with [apply],
+   *   and [Delivery.Replaced] writes the server's value to it as fresh data. It runs on this
+   *   scope's dispatcher, as [outbox]'s send does, and throws [PermanentFailure] for a rejection
+   *   that retrying cannot fix.
+   */
+  fun <K : Any, T, M> mutableStores(
+    name: String,
+    base: (key: K) -> QueryStore<T>,
+    keySerializer: KSerializer<K>,
+    serializer: KSerializer<M>,
+    apply: (current: T?, mutation: M) -> T?,
+    deliver: suspend (key: K, mutation: M, id: EntryId) -> Delivery<T>,
+    retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
+  ): MutableQueryStores<K, T, M>
+
   /** Builds data scopes that share their failure handlers, clock, store set and network state. */
   @SubclassOptInRequired(DelicateDataLayerApi::class)
   interface Factory {
