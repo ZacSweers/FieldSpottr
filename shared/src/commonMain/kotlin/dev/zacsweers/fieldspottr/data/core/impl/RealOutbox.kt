@@ -10,6 +10,7 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.Outbox
+import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -72,6 +73,8 @@ internal class RealOutbox<E>(
   private val clock: Clock,
   /** Hears a store's failures to report its rows, which no command's handle would carry. */
   private val onFailure: (Throwable) -> Unit,
+  /** Hears what the rows still have to send, on every read of them and every network change. */
+  private val onBacklog: (OutboxBacklog) -> Unit,
 ) : Outbox<E> {
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
@@ -91,24 +94,22 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Starts a drain for each key with a sendable row while online. A store that fails to report its
-   * rows is reported and watched again after a pause, or at once on reconnect, so rows already
-   * stored still send.
+   * Reports the backlog on every read of the rows and every network change, and starts a drain for
+   * each key with a sendable row while online. A store that fails to report its rows is reported
+   * and watched again after a pause, or at once on reconnect, so rows already stored still send.
    */
   private suspend fun watch() {
     var pause = STORE_RETRY_FIRST
     while (true) {
       runCatchingCancellable {
-          combine(online, store.entries()) { up, rows ->
-              if (up) {
-                rows.filter { it.status.isSendable }.mapTo(HashSet()) { it.key }
-              } else {
-                emptySet()
-              }
-            }
-            .collect { keys ->
+          combine(online, store.entries()) { up, rows -> up to rows }
+            .collect { (up, rows) ->
               pause = STORE_RETRY_FIRST
-              keys.forEach(::drain)
+              // Offline too, so a platform can schedule a drain for when the network is back
+              onBacklog(backlogOf(rows))
+              if (up) {
+                rows.filter { it.status.isSendable }.mapTo(HashSet()) { it.key }.forEach(::drain)
+              }
             }
         }
         .onFailure(onFailure)
@@ -116,6 +117,30 @@ internal class RealOutbox<E>(
       withTimeoutOrNull(pause) { online.dropWhile { it }.first { it } }
       pause = minOf(pause * 2, STORE_RETRY_MAX)
     }
+  }
+
+  /**
+   * What [rows] still have to send. Each key waits on its oldest sendable row, so a key whose head
+   * backs off holds its later rows too. A row in Sending counts as ready, since a restart sends it
+   * again at once, and so does a backoff whose deadline has passed.
+   */
+  private fun backlogOf(rows: List<OutboxEntry<E>>): OutboxBacklog {
+    val now = clock.now()
+    val keysSeen = HashSet<String>()
+    var earliest: Instant? = null
+    for (row in rows) {
+      if (!row.status.isSendable || !keysSeen.add(row.key)) {
+        continue
+      }
+      val retryAt = row.retryAt
+      if (row.status == OutboxStatus.Sending || retryAt == null || retryAt <= now) {
+        return OutboxBacklog.Ready
+      }
+      if (earliest == null || retryAt < earliest) {
+        earliest = retryAt
+      }
+    }
+    return earliest?.let { OutboxBacklog.BackingOff(it) } ?: OutboxBacklog.Empty
   }
 
   override fun enqueue(payload: E, key: String?, apply: suspend () -> Unit): Operation {

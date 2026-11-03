@@ -4,12 +4,16 @@ package dev.zacsweers.fieldspottr.data.core.testing
 
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
+import dev.zacsweers.fieldspottr.data.core.InMemoryOutboxStores
+import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
+import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.impl.InMemoryOutboxStores
 import dev.zacsweers.fieldspottr.data.core.impl.invoke
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
@@ -42,6 +46,12 @@ internal constructor(
   /** The outbox rows, by outbox name. Tests read them through [outboxStore]. */
   @PublishedApi internal val outboxStores: InMemoryOutboxStores,
 ) : DataScope.Factory {
+  /**
+   * What the outboxes running from this factory still have to send, as the real factory reports.
+   */
+  override val backlog: Flow<OutboxBacklog>
+    get() = delegate.backlog
+
   /** A data scope over [scope], which owns how long its work lives. */
   override fun create(scope: CoroutineScope): TestDataScope {
     val target =
@@ -121,6 +131,8 @@ fun TestScope.testDataScopeFactory(
   eager: Boolean = false,
   clock: TestClock = testClock(),
   online: Boolean = true,
+  /** Hears when rows wait, like a [RecordingOutboxScheduler]. */
+  scheduler: OutboxScheduler = OutboxScheduler.None,
 ): TestDataScopeFactory {
   val onlineState = MutableStateFlow(online)
   val fetchFailures = TestFailures()
@@ -132,6 +144,7 @@ fun TestScope.testDataScopeFactory(
       onActionFailure = actionFailures,
       online = onlineState,
       stores = stores,
+      scheduler = scheduler,
       clock = clock,
     )
   return TestDataScopeFactory(
@@ -158,4 +171,5 @@ fun TestScope.testDataScope(
   eager: Boolean = false,
   clock: TestClock = testClock(),
   online: Boolean = true,
-): TestDataScope = testDataScopeFactory(eager, clock, online).create(backgroundScope)
+  scheduler: OutboxScheduler = OutboxScheduler.None,
+): TestDataScope = testDataScopeFactory(eager, clock, online, scheduler).create(backgroundScope)

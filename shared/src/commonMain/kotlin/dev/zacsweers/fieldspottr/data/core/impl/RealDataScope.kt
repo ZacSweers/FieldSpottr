@@ -13,6 +13,8 @@ import dev.zacsweers.fieldspottr.data.core.KeyedDataQueries
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
 import dev.zacsweers.fieldspottr.data.core.MutableQueryStores
 import dev.zacsweers.fieldspottr.data.core.Outbox
+import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
+import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
 import dev.zacsweers.fieldspottr.data.core.QueryStore
@@ -23,12 +25,17 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.update
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.collections.immutable.persistentHashSetOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.KSerializer
@@ -58,12 +65,101 @@ private class RealDataScopeFactory(
   val onActionFailure: (Throwable) -> Unit,
   val online: StateFlow<Boolean>,
   val stores: OutboxStores,
+  private val scheduler: OutboxScheduler,
   val clock: Clock,
 ) : DataScope.Factory {
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val runningOutboxes = AtomicReference(persistentHashSetOf<String>())
+  // Each running outbox's last reported backlog, null until its first read. Updated by
+  // compare-and-set only.
+  private val reported = AtomicReference(persistentHashMapOf<Any, OutboxBacklog?>())
+  // The combined backlog, null while a running outbox has not read its rows yet
+  private val combined = MutableStateFlow<OutboxBacklog?>(OutboxBacklog.Empty)
+  // The last combined result, so the scheduler hears each change once
+  private val told = AtomicReference<OutboxBacklog?>(null)
+  // One publisher at a time, so the scheduler hears changes in order. A report made while one
+  // publishes marks it dirty, and the publisher goes round again.
+  private val publishing = AtomicBoolean(false)
+  private val dirty = AtomicBoolean(false)
+
+  override val backlog: Flow<OutboxBacklog> = combined.filterNotNull().distinctUntilChanged()
 
   override fun create(scope: CoroutineScope): DataScope = RealDataScope(scope, this)
+
+  /**
+   * Counts a new outbox in [scope] as running, with its backlog unknown until it first reads its
+   * rows, and stops counting it when the scope completes. Returns the callback the outbox reports
+   * its backlog through. A scope without a job never completes, so its outbox stays counted for
+   * good, the same way [claimOutbox] keeps such an outbox's name claimed.
+   */
+  fun track(scope: CoroutineScope): (OutboxBacklog) -> Unit {
+    val token = Any()
+    report(token, null)
+    scope.coroutineContext[Job]?.invokeOnCompletion {
+      reported.update { it.removing(token) }
+      publish()
+    }
+    return { state -> report(token, state) }
+  }
+
+  private fun report(token: Any, state: OutboxBacklog?) {
+    reported.update { it.putting(token, state) }
+    publish()
+  }
+
+  /**
+   * Combines the reports into [combined] and tells the scheduler when the result changed to rows
+   * that wait. An empty result is kept but not told, as [OutboxScheduler] explains. A scheduler
+   * that throws is reported, and neither holds up the drain that reported nor the next report.
+   */
+  private fun publish() {
+    dirty.store(true)
+    while (dirty.load() && publishing.compareAndSet(expectedValue = false, newValue = true)) {
+      try {
+        dirty.store(false)
+        val next = combinedOf(reported.load().values)
+        combined.value = next
+        if (next != null && next != told.load()) {
+          told.store(next)
+          runCatching {
+              when (next) {
+                OutboxBacklog.Empty -> Unit
+                is OutboxBacklog.Waiting -> scheduler.rowsWaiting(next)
+              }
+            }
+            .onFailure(onActionFailure)
+        }
+      } finally {
+        publishing.store(false)
+      }
+    }
+  }
+
+  /**
+   * Combines the running outboxes' backlogs: Ready if any outbox is ready, otherwise null if any
+   * outbox has not read its rows yet, otherwise BackingOff with the earliest deadline, otherwise
+   * Empty.
+   */
+  private fun combinedOf(states: Collection<OutboxBacklog?>): OutboxBacklog? {
+    var unknown = false
+    var earliest: Instant? = null
+    for (state in states) {
+      when (state) {
+        OutboxBacklog.Ready -> return OutboxBacklog.Ready
+        null -> unknown = true
+        is OutboxBacklog.BackingOff ->
+          if (earliest == null || state.until < earliest) {
+            earliest = state.until
+          }
+        OutboxBacklog.Empty -> Unit
+      }
+    }
+    return when {
+      unknown -> null
+      earliest != null -> OutboxBacklog.BackingOff(earliest)
+      else -> OutboxBacklog.Empty
+    }
+  }
 
   /**
    * Records an outbox for [name] until [scope] completes or the returned release runs, whichever
@@ -164,6 +260,7 @@ private class RealDataScope(
       online = factory.online,
       clock = factory.clock,
       onFailure = factory.onActionFailure,
+      onBacklog = factory.track(scope),
     )
 
   override fun <K : Any, T, M> mutableStores(

@@ -141,6 +141,16 @@ interface DataScope {
     /** A data scope whose work runs in [scope] and stops when it is cancelled. */
     fun create(scope: CoroutineScope): DataScope
 
+    /**
+     * What the outboxes running from this factory still have to send, combined:
+     * [OutboxBacklog.Ready] if any has a row that can send now, else the earliest
+     * [OutboxBacklog.BackingOff], else [OutboxBacklog.Empty]. It emits once every running outbox
+     * has read its rows, then on each change. An outbox counts only while its scope runs, so rows
+     * left in a store no outbox has opened are not in it, and with no outbox running it is Empty.
+     * The factory's [OutboxScheduler] hears the same changes.
+     */
+    val backlog: Flow<OutboxBacklog>
+
     companion object
   }
 
