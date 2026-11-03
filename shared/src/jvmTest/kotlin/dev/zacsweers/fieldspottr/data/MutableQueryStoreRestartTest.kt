@@ -17,7 +17,6 @@ import dev.zacsweers.fieldspottr.data.core.mutableStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
-import dev.zacsweers.metro.suspendLazy
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.time.Instant
@@ -59,7 +58,7 @@ class MutableQueryStoreRestartTest {
       onFailure = TestFailures(),
       onActionFailure = TestFailures(),
       online = online,
-      stores = SqlDelightOutboxStores(suspendLazy { temporaryDatabase.db() }, Dispatchers.IO),
+      stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO),
       clock = testClock(START),
     )
 

@@ -94,7 +94,7 @@ interface FSGraph {
   fun provideOutboxStores(
     db: SuspendLazy<FSDatabase>,
     @IoDispatcher io: CoroutineDispatcher,
-  ): OutboxStores = SqlDelightOutboxStores(db, io)
+  ): OutboxStores = SqlDelightOutboxStores({ db.await().outboxRowQueries }, io)
 
   @Provides
   @SingleIn(AppScope::class)

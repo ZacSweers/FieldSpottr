@@ -5,8 +5,8 @@ package dev.zacsweers.fieldspottr.data
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOneOrNull
-import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.OutboxRow
+import dev.zacsweers.fieldspottr.OutboxRowQueries
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
@@ -17,7 +17,6 @@ import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.isSettled
 import dev.zacsweers.fieldspottr.data.core.storedCause
 import dev.zacsweers.fieldspottr.data.core.storedName
-import dev.zacsweers.metro.SuspendLazy
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -38,21 +37,32 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialFormat
 import kotlinx.serialization.json.Json
 
-/** Every outbox's rows in the app's database, one partition of the `outboxRow` table per name. */
+/**
+ * Every outbox's rows in the app's database, one partition of the `outboxRow` table per name.
+ * [queries] opens the generated queries on first use, for a database that opens lazily. A database
+ * already open passes its queries to the other constructor.
+ */
 class SqlDelightOutboxStores(
-  private val db: SuspendLazy<FSDatabase>,
+  private val queries: suspend () -> OutboxRowQueries,
   private val io: CoroutineDispatcher,
   /**
    * Encodes each payload into its row. A binary format is stored as Base64, as [asCodec] describes.
    */
   private val payloadFormat: SerialFormat = Json,
 ) : OutboxStores {
+  /** Over a database that is already open. */
+  constructor(
+    queries: OutboxRowQueries,
+    io: CoroutineDispatcher,
+    payloadFormat: SerialFormat = Json,
+  ) : this({ queries }, io, payloadFormat)
+
   override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
-    SqlDelightOutboxStore(db, name, serializer.asCodec(payloadFormat), io)
+    SqlDelightOutboxStore(queries, name, serializer.asCodec(payloadFormat), io)
 
   // One table holds every outbox's rows, so one statement clears them all
   override suspend fun clearAll() {
-    withContext(io) { db.await().outboxRowQueries.deleteAll() }
+    withContext(io) { queries().deleteAll() }
   }
 }
 
@@ -63,7 +73,7 @@ class SqlDelightOutboxStores(
  */
 @OptIn(ExperimentalUuidApi::class)
 class SqlDelightOutboxStore<E>(
-  private val db: SuspendLazy<FSDatabase>,
+  private val queries: suspend () -> OutboxRowQueries,
   private val outbox: String,
   private val codec: PayloadCodec<E>,
   /** Runs the database calls, which block. */
@@ -80,10 +90,10 @@ class SqlDelightOutboxStore<E>(
     // stored, and a throw always means nothing was stored
     withContext(NonCancellable) {
       withContext(io) {
-        val database = db.await()
-        database.transaction {
-          database.outboxRowQueries.pruneSettled(outbox, cutoff())
-          database.outboxRowQueries.insert(id.value, outbox, key, codec.encode(payload))
+        val queries = queries()
+        queries.transaction {
+          queries.pruneSettled(outbox, cutoff())
+          queries.insert(id.value, outbox, key, codec.encode(payload))
         }
       }
     }
@@ -93,7 +103,7 @@ class SqlDelightOutboxStore<E>(
   override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
     val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.status.isSettled }
     return withContext(io) {
-      val queries = db.await().outboxRowQueries
+      val queries = queries()
       // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
       // since the expectation was built no longer matches, and a status written by a newer app
       // version still matches the Failed it decodes to. The row is read outside the transaction, so
@@ -128,14 +138,14 @@ class SqlDelightOutboxStore<E>(
   }
 
   override fun entries(): Flow<List<OutboxEntry<E>>> = flow {
-    emitAll(db.await().outboxRowQueries.pending(outbox).asFlow().mapToList(io))
+    emitAll(queries().pending(outbox).asFlow().mapToList(io))
   }
     .map { rows -> rows.map { it.toEntry() } }
     .distinctUntilChanged()
 
   // An id that is not one of ours finds no row, so its handle settles Cancelled
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> = flow {
-    emitAll(db.await().outboxRowQueries.byId(outbox, id.value).asFlow().mapToOneOrNull(io))
+    emitAll(queries().byId(outbox, id.value).asFlow().mapToOneOrNull(io))
   }
     .map { row -> row?.takeUnless { it.isExpired() }?.toEntry() }
     .distinctUntilChanged()

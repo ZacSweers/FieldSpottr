@@ -9,6 +9,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.OutboxRowQueries
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -40,7 +41,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
   override fun TestScope.newStore(keepSettledFor: Duration): OutboxStore<String> {
     clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
     return SqlDelightOutboxStore(
-      db = suspendLazy { temporaryDatabase.db() },
+      queries = { temporaryDatabase.db().outboxRowQueries },
       outbox = "test",
       codec = String.serializer().asCodec(Json),
       // Real threads, so the concurrency test reaches the driver
@@ -56,9 +57,9 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
 
   @Test
   fun `the store set encodes payloads in its format`() = runTest {
-    val db = suspendLazy { temporaryDatabase.db() }
+    val queries: suspend () -> OutboxRowQueries = { temporaryDatabase.db().outboxRowQueries }
     val store =
-      SqlDelightOutboxStores(db, Dispatchers.IO, payloadFormat = TaggedFormat)
+      SqlDelightOutboxStores(queries, Dispatchers.IO, payloadFormat = TaggedFormat)
         .open("notes", String.serializer())
 
     store.insert("k", "hello")
@@ -71,7 +72,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
 
         override fun decode(encoded: String) = encoded
       }
-    val raw = SqlDelightOutboxStore(db, "notes", stored, Dispatchers.IO)
+    val raw = SqlDelightOutboxStore(queries, "notes", stored, Dispatchers.IO)
     assertThat(raw.entries().first().single().payload).isEqualTo("tagged:\"hello\"")
   }
 
@@ -79,7 +80,12 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
   fun `a status a newer version wrote reads as failed and can be requeued`() = runTest {
     val db = suspendLazy { temporaryDatabase.db() }
     val store =
-      SqlDelightOutboxStore(db, "future", String.serializer().asCodec(Json), Dispatchers.IO)
+      SqlDelightOutboxStore(
+        { db.await().outboxRowQueries },
+        "future",
+        String.serializer().asCodec(Json),
+        Dispatchers.IO,
+      )
     val id = store.insert("k", "a")
     // As a newer version would write it
     db
@@ -116,7 +122,8 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
 
         override fun decode(encoded: String) = encoded
       }
-    val store = SqlDelightOutboxStore(db, "cancel", cancelling, Dispatchers.IO)
+    val store =
+      SqlDelightOutboxStore({ db.await().outboxRowQueries }, "cancel", cancelling, Dispatchers.IO)
     var inserted: Result<EntryId>? = null
 
     caller = launch { inserted = runCatching { store.insert("k", "a") } }
@@ -134,7 +141,7 @@ class SqlDelightOutboxStoresClearAllTest {
 
   @Test
   fun `clearing the set empties every outbox in the table`() = runTest {
-    val stores = SqlDelightOutboxStores(suspendLazy { temporaryDatabase.db() }, Dispatchers.IO)
+    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
     val tags = stores.open("tags", String.serializer())
     val notes = stores.open("notes", String.serializer())
     val id = tags.insert("k", "a")
