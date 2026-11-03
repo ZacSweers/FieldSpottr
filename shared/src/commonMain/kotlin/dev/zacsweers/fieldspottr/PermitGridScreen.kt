@@ -11,6 +11,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
@@ -21,8 +22,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Icon
@@ -61,6 +64,8 @@ import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
+import dev.zacsweers.fieldspottr.data.core.OutboxStatus
+import dev.zacsweers.fieldspottr.data.favorites.FavoritesRepository
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.currentNyHour
 import dev.zacsweers.fieldspottr.ui.formatHour12
@@ -94,11 +99,30 @@ data object PermitGridScreen : Screen {
     val viewMode: GridViewMode,
     val week: WeekAvailability?,
     val isDebug: Boolean,
+    val favorite: Favorite,
     val eventSink: (Event) -> Unit = {},
   ) : CircuitUiState
 
+  /**
+   * The selected group's favorite state, with the local change shown before the server confirms it,
+   * and the favorites changes across every group the server has not confirmed.
+   */
+  data class Favorite(
+    val on: Boolean,
+    /** A change to this group is still waiting on the server. */
+    val pending: Boolean,
+    val unsynced: Int,
+    /** At least one change was rejected, so a retry is offered. */
+    val failed: Boolean,
+  )
+
   sealed interface Event {
     data object Refresh : Event
+
+    data object ToggleFavorite : Event
+
+    /** Sends the rejected favorites changes again. */
+    data object RetryFavorites : Event
 
     data object UseBuiltInAreas : Event
 
@@ -128,6 +152,7 @@ data object PermitGridScreen : Screen {
 fun PermitGridPresenter(
   repository: PermitRepository,
   weatherRepository: WeatherRepository,
+  favoritesRepository: FavoritesRepository,
   preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): PermitGridScreen.State {
@@ -190,6 +215,19 @@ fun PermitGridPresenter(
   // Weather
   val weather by weatherRepository.forecast.collectAsRetainedState(null)
 
+  // Favorites, local changes included, and the changes the server has not confirmed
+  val favorites by favoritesRepository.favorites.collectAsRetainedState(emptySet())
+  val unsyncedFavorites by favoritesRepository.unsynced.collectAsRetainedState(emptyList())
+  val favorite =
+    remember(selectedGroup, favorites, unsyncedFavorites) {
+      PermitGridScreen.Favorite(
+        on = selectedGroup in favorites,
+        pending = unsyncedFavorites.any { it.mutation.group == selectedGroup },
+        unsynced = unsyncedFavorites.size,
+        failed = unsyncedFavorites.any { it.status is OutboxStatus.Failed },
+      )
+    }
+
   // Week view
   var viewMode by retain { mutableStateOf(GridViewMode.DAY) }
   val weekFlow =
@@ -219,11 +257,22 @@ fun PermitGridPresenter(
     viewMode = viewMode,
     week = week,
     isDebug = !BuildConfig.IS_RELEASE,
+    favorite = favorite,
   ) { event ->
     when (event) {
       PermitGridScreen.Event.Refresh -> {
         repository.refresh()
         weatherRepository.refresh()
+      }
+      PermitGridScreen.Event.ToggleFavorite -> {
+        favoritesRepository.setFavorite(selectedGroup, on = !favorite.on)
+      }
+      PermitGridScreen.Event.RetryFavorites -> {
+        for (change in unsyncedFavorites) {
+          if (change.status is OutboxStatus.Failed) {
+            favoritesRepository.retry(change.id)
+          }
+        }
       }
       PermitGridScreen.Event.UseBuiltInAreas -> repository.useBuiltInAreas()
       PermitGridScreen.Event.ToggleViewMode -> {
@@ -335,6 +384,28 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
               else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
           )
         }
+        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleFavorite) }) {
+          Icon(
+            if (state.favorite.on) {
+              Icons.Filled.Favorite
+            } else {
+              Icons.Outlined.FavoriteBorder
+            },
+            contentDescription =
+              if (state.favorite.on) {
+                "Remove ${state.selectedGroup} from favorites"
+              } else {
+                "Add ${state.selectedGroup} to favorites"
+              },
+            tint =
+              when {
+                // The server has not confirmed this group's change yet
+                state.favorite.pending -> MaterialTheme.colorScheme.tertiary
+                state.favorite.on -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+              },
+          )
+        }
         IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleDefaultGroup) }) {
           Icon(
             Icons.Filled.Star,
@@ -381,6 +452,33 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.padding(horizontal = 16.dp),
+        )
+      }
+      if (state.favorite.unsynced > 0) {
+        val noun =
+          if (state.favorite.unsynced == 1) {
+            "favorite change"
+          } else {
+            "favorite changes"
+          }
+        val failed = state.favorite.failed
+        Text(
+          if (failed) {
+            "${state.favorite.unsynced} $noun failed to sync. Tap to retry."
+          } else {
+            "Syncing ${state.favorite.unsynced} $noun"
+          },
+          style = MaterialTheme.typography.labelSmall,
+          color =
+            if (failed) {
+              MaterialTheme.colorScheme.error
+            } else {
+              MaterialTheme.colorScheme.tertiary
+            },
+          modifier =
+            Modifier.padding(horizontal = 16.dp).clickable(enabled = failed) {
+              state.eventSink(PermitGridScreen.Event.RetryFavorites)
+            },
         )
       }
 
