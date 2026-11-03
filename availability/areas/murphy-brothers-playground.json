@@ -500,19 +500,6 @@
       "areaName": "Murphy Brothers Playground",
       "groupName": "Murphy Brothers Playground",
       "fieldId": "Tim McGinn Fields-Soccer-01",
-      "start": 1793653200000,
-      "end": 1793656800000,
-      "title": "British International School of New York",
-      "org": "British International School of New York",
-      "status": "Permit #949838",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M059-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Murphy Brothers Playground",
-      "groupName": "Murphy Brothers Playground",
-      "fieldId": "Tim McGinn Fields-Soccer-01",
       "start": 1793739600000,
       "end": 1793741400000,
       "title": "Manhattan Youth Recreation and Resources",
@@ -679,6 +666,19 @@
       "kind": "NYC live",
       "sourceId": "nyc-parks-live:M059-SOCCER-1",
       "isOverlap": true,
+      "advisory": null
+    },
+    {
+      "areaName": "Murphy Brothers Playground",
+      "groupName": "Murphy Brothers Playground",
+      "fieldId": "Tim McGinn Fields-Soccer-01",
+      "start": 1794258000000,
+      "end": 1794261600000,
+      "title": "British International School of New York",
+      "org": "British International School of New York",
+      "status": "Permit #949838",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M059-SOCCER-1",
       "advisory": null
     },
     {
@@ -2635,20 +2635,6 @@
       "areaName": "Murphy Brothers Playground",
       "groupName": "Murphy Brothers Playground",
       "fieldId": "Tim McGinn Fields-Softball-01",
-      "start": 1793653200000,
-      "end": 1793656800000,
-      "title": "Overlapping field permit",
-      "org": "British International School of New York",
-      "status": "Permit #949838",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M059-BASEBALL-1",
-      "isOverlap": true,
-      "advisory": null
-    },
-    {
-      "areaName": "Murphy Brothers Playground",
-      "groupName": "Murphy Brothers Playground",
-      "fieldId": "Tim McGinn Fields-Softball-01",
       "start": 1793739600000,
       "end": 1793745000000,
       "title": "Overlapping field permit",
@@ -2816,6 +2802,20 @@
       "status": "Permit #950816",
       "kind": "NYC live",
       "sourceId": "nyc-parks-live:M059-BASEBALL-1",
+      "advisory": null
+    },
+    {
+      "areaName": "Murphy Brothers Playground",
+      "groupName": "Murphy Brothers Playground",
+      "fieldId": "Tim McGinn Fields-Softball-01",
+      "start": 1794258000000,
+      "end": 1794261600000,
+      "title": "Overlapping field permit",
+      "org": "British International School of New York",
+      "status": "Permit #949838",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M059-BASEBALL-1",
+      "isOverlap": true,
       "advisory": null
     },
     {
@@ -3901,20 +3901,6 @@
       "areaName": "Murphy Brothers Playground",
       "groupName": "Murphy Brothers Playground",
       "fieldId": "Tim McGinn Fields-Softball-02",
-      "start": 1793653200000,
-      "end": 1793656800000,
-      "title": "Overlapping field permit",
-      "org": "British International School of New York",
-      "status": "Permit #949838",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M059-BASEBALL-2",
-      "isOverlap": true,
-      "advisory": null
-    },
-    {
-      "areaName": "Murphy Brothers Playground",
-      "groupName": "Murphy Brothers Playground",
-      "fieldId": "Tim McGinn Fields-Softball-02",
       "start": 1793739600000,
       "end": 1793745000000,
       "title": "Overlapping field permit",
@@ -4082,6 +4068,20 @@
       "status": "Permit #950817",
       "kind": "NYC live",
       "sourceId": "nyc-parks-live:M059-BASEBALL-2",
+      "advisory": null
+    },
+    {
+      "areaName": "Murphy Brothers Playground",
+      "groupName": "Murphy Brothers Playground",
+      "fieldId": "Tim McGinn Fields-Softball-02",
+      "start": 1794258000000,
+      "end": 1794261600000,
+      "title": "Overlapping field permit",
+      "org": "British International School of New York",
+      "status": "Permit #949838",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M059-BASEBALL-2",
+      "isOverlap": true,
       "advisory": null
     },
     {

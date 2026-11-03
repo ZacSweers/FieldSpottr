@@ -8145,38 +8145,12 @@
       "groupName": "Columbus Park",
       "fieldId": "Soccer-01",
       "start": 1793653200000,
-      "end": 1793655000000,
-      "title": "Manhattan Youth Recreation and Resources",
-      "org": "Manhattan Youth Recreation and Resources",
-      "status": "Permit #937130",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1793653200000,
       "end": 1793660400000,
       "title": "Columbus Park : Soccer-01 Renewal Renewal",
       "org": "Manhattan Youth Recreation and Resources",
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1793655000000,
-      "end": 1793658600000,
-      "title": "Manhattan Youth Recreation and Resources",
-      "org": "Manhattan Youth Recreation and Resources",
-      "status": "Permit #937130",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
