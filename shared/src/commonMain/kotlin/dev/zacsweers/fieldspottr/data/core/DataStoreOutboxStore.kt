@@ -121,6 +121,25 @@ class DataStoreOutboxStores(
       }
     }
   }
+
+  /**
+   * Clears every outbox file under [directory]. A store this set has built in this process owns its
+   * file through a DataStore, and only that DataStore may write the file, so such a store is
+   * cleared through it. A file left behind by an earlier process, which no store here has opened,
+   * has no DataStore and is deleted directly. The deletes run on the caller's dispatcher.
+   */
+  override suspend fun clearAll() {
+    val built = opened.load().filterValues { it.isInitialized() }
+    val ownedFiles = built.keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
+    for (path in fileSystem.listOrNull(directory).orEmpty()) {
+      if (path.name.endsWith(".outbox") && path.name !in ownedFiles) {
+        fileSystem.delete(path, mustExist = false)
+      }
+    }
+    for (entry in built.values) {
+      (entry.value as DataStoreOutboxStore<*>).clear()
+    }
+  }
 }
 
 /**
@@ -217,6 +236,11 @@ class DataStoreOutboxStore<E>(
       .map { log -> log.rows.firstOrNull { it.id == id.value } }
       .map { row -> row?.takeUnless { it.isExpired() }?.toEntry() }
       .distinctUntilChanged()
+
+  /** Drops every row, settled ones included, so each handle reads its row as absent. */
+  suspend fun clear() {
+    dataStore.updateData { OutboxLog() }
+  }
 
   /** Settled more than keepSettledFor ago. It reads as absent until the next insert drops it. */
   private fun OutboxLog.Row.isExpired(): Boolean = settledAt != null && settledAt < cutoff()

@@ -102,4 +102,14 @@ interface OutboxStores {
    * type per name. A durable store encodes each payload with [serializer] in the set's format.
    */
   fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E>
+
+  /**
+   * Deletes every row of every outbox in this set, including rows of outboxes that this process
+   * never opened. This is the call for logout. An outbox that is still running sees its rows
+   * disappear, so it sends nothing more, and a handle that was following one of those rows settles
+   * as Cancelled because the row is gone. A send that is already in flight runs to the end, and its
+   * status write then finds no row to update. Call this after cancelling the scopes of the outboxes
+   * that should stop sending, and before clearing the query stores those outboxes change.
+   */
+  suspend fun clearAll()
 }

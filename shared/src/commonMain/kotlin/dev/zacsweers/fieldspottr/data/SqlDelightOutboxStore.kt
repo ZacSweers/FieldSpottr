@@ -49,6 +49,11 @@ class SqlDelightOutboxStores(
 ) : OutboxStores {
   override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> =
     SqlDelightOutboxStore(db, name, serializer.asCodec(payloadFormat), io)
+
+  // One table holds every outbox's rows, so one statement clears them all
+  override suspend fun clearAll() {
+    withContext(io) { db.await().outboxRowQueries.deleteAll() }
+  }
 }
 
 /**

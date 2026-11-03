@@ -1,13 +1,7 @@
 // Copyright (C) 2026 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
-package dev.zacsweers.fieldspottr.data.core.impl
+package dev.zacsweers.fieldspottr.data.core
 
-import dev.zacsweers.fieldspottr.data.core.EntryId
-import dev.zacsweers.fieldspottr.data.core.OutboxEntry
-import dev.zacsweers.fieldspottr.data.core.OutboxStatus
-import dev.zacsweers.fieldspottr.data.core.OutboxStore
-import dev.zacsweers.fieldspottr.data.core.OutboxStores
-import dev.zacsweers.fieldspottr.data.core.isSettled
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.time.Duration
@@ -36,13 +30,13 @@ internal fun <E> inMemoryOutboxStore(
 ): OutboxStore<E> = InMemoryOutboxStore(keepSettledFor, time)
 
 /**
- * Every outbox in memory, one store per name for as long as this set lives. The default, and what
- * tests and previews use. Rows keep each payload as the object itself, so these stores never use
- * the serializer.
+ * An [OutboxStores] that keeps every outbox in memory, with one store per name for as long as this
+ * set lives. It is the default store set, and the one tests and previews use. Rows hold each
+ * payload as the object itself, so these stores never use the serializer.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class InMemoryOutboxStores : OutboxStores {
-  // Compare-and-set only. Nothing observes it.
+  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val opened = AtomicReference(persistentHashMapOf<String, OutboxStore<*>>())
 
   override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
@@ -57,6 +51,13 @@ class InMemoryOutboxStores : OutboxStores {
       if (opened.compareAndSet(current, current.putting(name, created))) {
         return created
       }
+    }
+  }
+
+  // Every store this set hands out is an InMemoryOutboxStore, and nothing else holds rows
+  override suspend fun clearAll() {
+    for (store in opened.load().values) {
+      (store as InMemoryOutboxStore<*>).clear()
     }
   }
 }
@@ -111,6 +112,11 @@ private class InMemoryOutboxStore<E>(
 
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> =
     rows.map { current -> current[id]?.takeUnless { it.isExpired() }?.entry }.distinctUntilChanged()
+
+  /** Drops every row, settled ones included, so each handle reads its row as absent. */
+  fun clear() {
+    rows.value = persistentMapOf()
+  }
 
   private fun Map<EntryId, Row<E>>.pruned() = filterValues { !it.isExpired() }.toPersistentMap()
 

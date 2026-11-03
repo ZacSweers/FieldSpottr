@@ -617,6 +617,8 @@ class OutboxTest {
             }
           }
         }
+
+        override suspend fun clearAll() = rows.clearAll()
       }
     val data = DataScope.Factory(onFailure = {}, stores = stores).create(backgroundScope)
 

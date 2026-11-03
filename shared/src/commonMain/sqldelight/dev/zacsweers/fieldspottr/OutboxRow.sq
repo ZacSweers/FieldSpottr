@@ -54,3 +54,7 @@ SELECT changes();
 -- NULL never compares, so pending rows stay
 pruneSettled:
 DELETE FROM outboxRow WHERE outbox = ? AND settledAt < ?;
+
+-- Every outbox at once, for a logout
+deleteAll:
+DELETE FROM outboxRow;

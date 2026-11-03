@@ -4,8 +4,10 @@ package dev.zacsweers.fieldspottr.data
 
 import assertk.assertThat
 import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
@@ -123,5 +125,26 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
     val rows = store.entries().first()
     assertThat(rows).hasSize(1)
     assertThat(inserted?.getOrNull()).isEqualTo(rows.single().id)
+  }
+}
+
+/** [SqlDelightOutboxStores.clearAll], which one statement does for every outbox in the table. */
+class SqlDelightOutboxStoresClearAllTest {
+  @get:Rule val temporaryDatabase = TemporaryDatabase()
+
+  @Test
+  fun `clearing the set empties every outbox in the table`() = runTest {
+    val stores = SqlDelightOutboxStores(suspendLazy { temporaryDatabase.db() }, Dispatchers.IO)
+    val tags = stores.open("tags", String.serializer())
+    val notes = stores.open("notes", String.serializer())
+    val id = tags.insert("k", "a")
+    notes.insert("k", "b")
+
+    stores.clearAll()
+
+    assertThat(tags.entries().first()).isEmpty()
+    assertThat(notes.entries().first()).isEmpty()
+    // A handle that follows the row reads it as absent, and settles Cancelled through that
+    assertThat(tags.entry(id).first()).isNull()
   }
 }
