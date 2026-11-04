@@ -53,7 +53,8 @@ import kotlinx.coroutines.withContext
  * what the truth held once its commit landed, and when the send finished. A view shows the record
  * in place of its row while the row is still there, and applies the change again on top of any
  * truth fetched before the send, so the value never shows the change twice or loses it until a
- * fetch from after the send says what the server holds.
+ * fetch from after the send says what the server holds. A fetch that overlapped the send is written
+ * with the change folded in, so a restart, which has no records, keeps it too.
  *
  * Two cases stay outside what the records can tell. A fetch that overlapped the send may have read
  * the server after it took the change, and a process that dies between the truth write and the
@@ -316,8 +317,8 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * applying the change again could only rebuild the client's version of it.
    */
   private fun withSent(stored: Fetched<T>?, sent: List<Committed<K, T, M>>): Fetched<T>? {
-    // The newest record whose truth the store holds. Every record up to it is in the truth.
-    val held = sent.indexOfLast { it.truth?.value == stored?.value }
+    // The newest record whose change the store holds. Every record up to it is in the truth.
+    val held = sent.indexOfLast { it.isHeldBy(stored) }
     var result = stored
     sent.forEachIndexed { index, record ->
       val inTruth = index <= held || (stored != null && stored.fetchedAt > record.sentAt)
@@ -386,6 +387,10 @@ internal class RealMutableQueryStores<K : Any, T, M>(
      * it publishes carries them. On the key's lock, a value older than what a commit wrote
      * meanwhile is dropped, as the query would have dropped it had it seen the commit first. A
      * truth time ahead of the clock is a bad record, which the fetch replaces.
+     *
+     * A send that finished after the fetch started may be missing from the value, and only its
+     * in-memory record would show it. So the truth takes those changes too, as [withSent] puts them
+     * back, and a restart that has no records still shows them.
      */
     override suspend fun write(value: T, fetchedAt: Instant) {
       awaitStored(key)
@@ -393,7 +398,20 @@ internal class RealMutableQueryStores<K : Any, T, M>(
         val storedAt = truth.data.first()?.fetchedAt
         val newerStored = storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
         if (!newerStored) {
-          truth.write(value, fetchedAt)
+          val sentSince = committed.value.filter { it.key == key && it.sentAt >= fetchedAt }
+          val next = withSent(Fetched(value, fetchedAt), sentSince)
+          // Before the write, so views count every change on record as in the folded truth both
+          // before and after it lands, and never apply one twice
+          sentSince.lastOrNull()?.let { newest ->
+            committed.update { all ->
+              all.map { if (it === newest) it.alsoHeldBy(next) else it }.toPersistentList()
+            }
+          }
+          if (next == null) {
+            truth.clear()
+          } else {
+            truth.write(next.value, next.fetchedAt)
+          }
         }
       }
       prune(key, fetchedAt)
@@ -429,7 +447,8 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * A sent change: its row, what the truth held once its commit landed, and when the send finished.
    * A truth fetched after [sentAt] holds the change. One fetched before may not, so a view puts the
    * change back on top of it: [truth] itself when the server answered with that value, and
-   * [replaced] says so, else the change applied again.
+   * [replaced] says so, else the change applied again. [foldedInto] holds the values a fetch that
+   * overlapped the send was written as, with this change and the ones before it folded in.
    */
   private class Committed<K, T, M>(
     val id: EntryId,
@@ -438,7 +457,16 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     val sentAt: Instant,
     val truth: Fetched<T>?,
     val replaced: Boolean,
-  )
+    val foldedInto: List<T?> = emptyList(),
+  ) {
+    /** Whether [stored] already holds this change: its commit wrote it, or a fetch folded it in. */
+    fun isHeldBy(stored: Fetched<T>?): Boolean =
+      truth?.value == stored?.value || stored?.value in foldedInto
+
+    /** This record, also held by [folded], a fetch's value with this change folded in. */
+    fun alsoHeldBy(folded: Fetched<T>?): Committed<K, T, M> =
+      Committed(id, key, mutation, sentAt, truth, replaced, foldedInto + folded?.value)
+  }
 
   /** A key's base store and the lock its two writers, fetch and commit, take turns on. */
   private class Base<T>(val store: QueryStore<T>) {

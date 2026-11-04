@@ -149,9 +149,10 @@ class MutableQueryStoreTest {
 
       fetch.release()
       refresh.awaitSucceeded()
-      // The truth is the server as it was before the send, so the change rides on top
+      // The fetch may lack the change, so the truth takes it too, and a restart that has no record
+      // of the send still shows it
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "z", "b"))
-      assertThat(truth.data.value?.value).isEqualTo(listOf("a", "z"))
+      assertThat(truth.data.value?.value).isEqualTo(listOf("a", "z", "b"))
 
       // A fetch from after the send says what the server holds, and here it dropped the change
       advanceTimeBy(1.seconds)
