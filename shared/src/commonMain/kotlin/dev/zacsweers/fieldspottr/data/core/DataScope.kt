@@ -142,7 +142,10 @@ interface DataScope {
     retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   ): MutableQueryStores<K, T, M>
 
-  /** Builds data scopes that share their failure handlers, clock, store set and network state. */
+  /**
+   * Builds data scopes that share their failure handlers, clock, outbox store set, network state
+   * and outbox scheduler.
+   */
   @SubclassOptInRequired(DelicateDataLayerApi::class)
   interface Factory {
     /** A data scope whose work runs in [scope] and stops when it is cancelled. */

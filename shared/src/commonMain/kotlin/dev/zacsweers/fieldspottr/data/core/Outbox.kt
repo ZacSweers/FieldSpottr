@@ -89,17 +89,17 @@ interface Outbox<E> {
 
 /**
  * The handle [Outbox.enqueue] and [MutableQueryStore.mutate] return. As an [Operation] it follows
- * the row's send, as [Outbox] describes: Succeeded once sent, Failed once rejected for good,
- * Cancelled once discarded. [stored] settles earlier, once the row is in the store.
+ * the row's send, as [Outbox] describes: Succeeded once sent, Failed once rejected for good or out
+ * of attempts, Cancelled once discarded. [stored] settles earlier, once the row is in the store.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OutboxOperation : Operation {
   /**
    * Whether the change reached the store. Succeeded once its row is written, so it sends when it
    * can and, in a durable [OutboxStore], outlives a restart. Failed when the store rejected it, so
-   * nothing sends, and Cancelled when the owner stopped before the row was written. For a caller
-   * that waits for the local commit alone, like a message send whose screen then follows the
-   * delivery through the data it already shows.
+   * nothing sends, and Cancelled when the owner stopped before the row was written. Await it when
+   * keeping the change is enough, like a composer that closes once the message is saved and shows
+   * its delivery in the list.
    */
   val stored: Operation
 }
