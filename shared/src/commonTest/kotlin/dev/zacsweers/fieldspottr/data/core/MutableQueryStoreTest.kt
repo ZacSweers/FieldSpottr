@@ -29,9 +29,11 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -640,6 +642,44 @@ class MutableQueryStoreTest {
     assertThat(after.data.first()).isNull()
     assertThat(send.attempts).containsExactly(Add("b"))
     scopes.assertNoFailures()
+  }
+
+  @Test
+  fun `an invalidate during a commit still leaves the truth stale`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val state = MutableStateFlow<Fetched<List<String>>?>(Fetched(listOf("a"), START))
+    val commitWriting = CompletableDeferred<Unit>()
+    val finishCommit = CompletableDeferred<Unit>()
+    val base =
+      QueryStore.of(
+        state,
+        clear = { state.value = null },
+        invalidate = { state.update { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
+      ) { value, fetchedAt ->
+        // Pauses the commit's write, which comes after its read of the truth
+        if (commitWriting.complete(Unit)) {
+          finishCommit.await()
+        }
+        state.value = Fetched(value, fetchedAt)
+      }
+    val store =
+      data.mutableStore<List<String>, Add>(
+        name = "tags",
+        base = base,
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+
+    val handle = store.mutate(Add("b"))
+    commitWriting.await()
+    val invalidated = async { store.invalidate() }
+    runCurrent()
+    finishCommit.complete(Unit)
+    invalidated.await()
+    handle.awaitSucceeded()
+
+    assertThat(state.value).isEqualTo(Fetched(listOf("a", "b"), QueryStore.INVALIDATED))
+    data.assertNoFailures()
   }
 }
 

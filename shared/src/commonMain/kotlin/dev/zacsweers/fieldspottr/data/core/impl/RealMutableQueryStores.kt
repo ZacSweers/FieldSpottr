@@ -396,7 +396,10 @@ internal class RealMutableQueryStores<K : Any, T, M>(
       }
     }
 
-    override suspend fun invalidate() = truth.invalidate()
+    // On the key's lock, so a commit that read the truth before this cannot write it back fresh
+    override suspend fun invalidate() {
+      base.lock.withLock { truth.invalidate() }
+    }
 
     override fun mutate(mutation: M): OutboxOperation =
       this@RealMutableQueryStores.mutate(key, mutation)
