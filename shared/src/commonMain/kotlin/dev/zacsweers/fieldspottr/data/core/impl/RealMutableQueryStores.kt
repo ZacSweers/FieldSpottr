@@ -19,6 +19,7 @@ import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.isSettled
+import dev.zacsweers.fieldspottr.data.core.runCatchingCancellable
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -154,13 +155,18 @@ internal class RealMutableQueryStores<K : Any, T, M>(
 
   /**
    * The outbox's send: the remote call through [deliver], with the row's id as the request's
-   * idempotency key, then the change's move into the truth.
+   * idempotency key, then the change's move into the truth. A commit that fails, like a base store
+   * whose disk is full, is reported to [onFailure] and the send still succeeds, since the server
+   * has the change and another attempt would only send it again. The change's record keeps it in
+   * the view until a fetch from after the send replaces the truth.
    */
   private suspend fun send(payload: KeyedMutation<K, M>, id: EntryId) {
     val result = deliver(payload.key, payload.mutation, id)
     val sentAt = clock.now()
     // The server has the change, so the truth takes it even if this owner stops now
-    withContext(NonCancellable) { commit(id, payload, result, sentAt) }
+    withContext(NonCancellable) {
+      runCatchingCancellable { commit(id, payload, result, sentAt) }.onFailure(onFailure)
+    }
   }
 
   /**

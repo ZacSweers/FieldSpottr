@@ -10,6 +10,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
+import assertk.assertions.isSameInstanceAs
 import assertk.assertions.messageContains
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
@@ -735,6 +736,29 @@ class MutableQueryStoreTest {
     handle.assertCancelled()
     assertThat(store.pending.first()).isEmpty()
     failures.assertNone()
+  }
+
+  @Test
+  fun `a commit that fails locally is reported and never sent again`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val backing = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val diskFull = IllegalStateException("Disk full")
+    val failingWrites =
+      QueryStore.of(backing.data, clear = backing::clear) { _, _ -> throw diskFull }
+    val store =
+      data.mutableStore<List<String>, Add>(
+        name = "tags",
+        base = failingWrites,
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+
+    // The server took the change, so its handle succeeds and its retries are not spent
+    store.mutate(Add("b")).awaitSucceeded()
+
+    assertThat(send.sent).containsExactly(Add("b"))
+    assertThat(data.actionFailures.assertSingle<IllegalStateException>()).isSameInstanceAs(diskFull)
+    data.fetchFailures.assertNone()
   }
 }
 

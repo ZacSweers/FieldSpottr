@@ -34,7 +34,8 @@ import kotlinx.serialization.builtins.serializer
  * scope's dispatcher, again on every change to the truth or the rows, so it must be cheap and pure.
  * It must also be idempotent, as [mutableStore] explains. The store checks this on every commit,
  * and the first change found not to be idempotent is reported once to the factory's
- * `onActionFailure` handler.
+ * `onActionFailure` handler. A commit that fails in the base store, like on a full disk, is
+ * reported there too, and the change still counts as sent, since the server has it.
  *
  * Built by [mutableStore], or per key by [mutableStores].
  */
