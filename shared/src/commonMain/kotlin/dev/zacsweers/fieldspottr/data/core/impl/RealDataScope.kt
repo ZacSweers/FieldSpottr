@@ -247,7 +247,7 @@ private class RealDataScope(
       online = factory.online,
       clock = factory.clock,
       onFailure = factory.onActionFailure,
-      onBacklog = factory.track(scope),
+      trackBacklog = { factory.track(scope) },
     )
 
   override fun <K : Any, T, M> mutableStores(

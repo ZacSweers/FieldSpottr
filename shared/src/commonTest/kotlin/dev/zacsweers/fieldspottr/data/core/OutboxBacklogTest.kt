@@ -18,18 +18,21 @@ import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The backlog flow is a state, so it can skip a value that another replaces at once. These tests
@@ -185,6 +188,31 @@ class OutboxBacklogTest {
     outbox.enqueue("b")
     runCurrent()
     assertThat(factory.awaitDrained()).isEqualTo(BackingOff(START + 5.minutes))
+  }
+
+  @Test
+  fun `an outbox that fails to build leaves the backlog reporting`() = runTest {
+    val factory = factory()
+    val data = factory.create(backgroundScope)
+    val rows = factory.outboxStore<String>("test")
+    var failToOpen = true
+    val flaky =
+      object : OutboxStore<String> by rows {
+        override fun entries(): Flow<List<OutboxEntry<String>>> {
+          if (failToOpen) {
+            failToOpen = false
+            throw IllegalStateException("Rows did not open")
+          }
+          return rows.entries()
+        }
+      }
+
+    assertFailsWith<IllegalStateException> { data.outbox(flaky, send = send) }
+    data.outbox(flaky, send = send)
+    runCurrent()
+
+    // Only the outbox that was built counts, so the backlog still reports
+    assertThat(withTimeoutOrNull(1.minutes) { factory.backlog.first() }).isEqualTo(Empty)
   }
 }
 

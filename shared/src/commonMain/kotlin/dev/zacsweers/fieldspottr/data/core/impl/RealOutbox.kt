@@ -74,8 +74,11 @@ internal class RealOutbox<E>(
   private val clock: Clock,
   /** Hears a store's failures to report its rows, which no command's handle would carry. */
   private val onFailure: (Throwable) -> Unit,
-  /** Hears what the rows still have to send, on every read of them and every network change. */
-  private val onBacklog: (OutboxBacklog) -> Unit,
+  /**
+   * Counts this outbox into the factory's backlog and returns where it reports what the rows still
+   * have to send, on every read of them and every network change.
+   */
+  trackBacklog: () -> (OutboxBacklog) -> Unit,
 ) : Outbox<E> {
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
@@ -89,6 +92,9 @@ internal class RealOutbox<E>(
   private val failing = AtomicReference(persistentMapOf<String, Duration>())
 
   override val entries: Flow<List<OutboxEntry<E>>> = store.entries()
+  // Counted once nothing above can throw, so an outbox that fails to build leaves no backlog that
+  // the factory waits to hear from
+  private val onBacklog = trackBacklog()
 
   init {
     scope.launch { watch() }
