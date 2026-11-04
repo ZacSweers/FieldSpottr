@@ -389,10 +389,13 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     return result
   }
 
-  /** [stored] with [mutation] applied, keeping its fetch time. Null when the change removes it. */
+  /**
+   * [stored] with [mutation] applied, keeping its fetch time, or [QueryStore.UNFETCHED] over
+   * nothing stored. Null when the change removes the value.
+   */
   private fun applied(stored: Fetched<T>?, mutation: M): Fetched<T>? {
     val value = apply(stored?.value, mutation) ?: return null
-    return Fetched(value, stored?.fetchedAt ?: QueryStore.INVALIDATED)
+    return Fetched(value, stored?.fetchedAt ?: QueryStore.UNFETCHED)
   }
 
   private fun OutboxEntry<KeyedMutation<K, M>>.toPending() =

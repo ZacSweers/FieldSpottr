@@ -59,7 +59,8 @@ internal class RealDataQuery<T>(
    * The store's values. Each observer checks the stored time when it subscribes, joining a check
    * already queued, since the data can go stale between observers. The check is a command of its
    * own, so an observer that takes the first value and leaves, like `first()`, still started it.
-   * The first observer also starts the watcher, which checks again whenever a value goes away.
+   * The first observer also starts the watcher, which checks again whenever the fetched data goes
+   * away.
    */
   override val data: Flow<Fetched<T>?> = flow {
     startWatching()
@@ -120,19 +121,31 @@ internal class RealDataQuery<T>(
 
   /**
    * One ordered view of the store for every observer, so each change starts one check however many
-   * observers see it, and however late. A value that goes away is checked again once the work
-   * already queued is done, so a value cleared while a fetch is still writing gets a check after
-   * that write. The first value needs no check here, since the observer that started the watcher
-   * made one.
+   * observers see it, and however late. A value that goes away, or keeps only local changes with
+   * [QueryStore.UNFETCHED], is checked again once the work already queued is done, so a value
+   * cleared while a fetch is still writing gets a check after that write. An invalidated value
+   * keeps its data and waits for the next collect, as [invalidate] promises. The first value needs
+   * no check here, since the observer that started the watcher made one.
    */
   private suspend fun watch() {
     var previous: Fetched<T>? = null
     store.data.collect { current ->
-      if (current == null && previous != null) {
+      if (lostFetch(previous, current)) {
         holds.holdUntilSettled(recheck())
       }
       previous = current
     }
+  }
+
+  /** Whether [current] has lost the fetched data that [previous] showed. */
+  private fun lostFetch(previous: Fetched<T>?, current: Fetched<T>?): Boolean {
+    if (previous == null) {
+      return false
+    }
+    if (current == null) {
+      return true
+    }
+    return current.fetchedAt == QueryStore.UNFETCHED && previous.fetchedAt != QueryStore.UNFETCHED
   }
 
   override val status: StateFlow<FetchStatus>

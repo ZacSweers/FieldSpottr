@@ -60,6 +60,14 @@ interface QueryStore<T> {
     val INVALIDATED: Instant = Instant.fromEpochSeconds(0)
 
     /**
+     * The fetch time of a value built from local changes alone, with nothing fetched under it, like
+     * a mutable store's waiting changes over a truth that a capped store evicted. It is stale like
+     * [INVALIDATED]. A query whose data on screen drops to it fetches again at once, as it does
+     * when the data goes away.
+     */
+    internal val UNFETCHED: Instant = Instant.fromEpochSeconds(-1)
+
+    /**
      * One value held in memory, lost with the process. [initial] seeds it, like a cached value
      * stored with [INVALIDATED] so it shows at once and still fetches on the first collect.
      */

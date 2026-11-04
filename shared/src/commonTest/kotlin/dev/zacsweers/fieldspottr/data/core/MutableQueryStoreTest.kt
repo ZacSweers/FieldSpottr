@@ -17,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.impl.committedValues
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
+import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
@@ -416,6 +417,38 @@ class MutableQueryStoreTest {
     assertThat(stores.committedRecords).isEqualTo(1)
     // The truth holds the change, so x still shows it
     assertThat(stores("x").data.first()?.value).isEqualTo(listOf("x", "b"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a key the base evicts while a change waits fetches again on screen`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val stores =
+      data.mutableStores<String, List<String>, Add>(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey(maxEntries = 1),
+        apply = ::addOnce,
+        send = { _, add, id -> send(add, id) },
+      )
+    val fetch = TestKeyedFetch<String, List<String>> { key -> listOf(key) }
+    val queries =
+      data.keyed(store = stores, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+    queries.requestFetch("x", force = false).awaitSucceeded()
+    send.hold(Add("b"))
+
+    queries.data("x").test {
+      assertThat(awaitItem()?.value).isEqualTo(listOf("x"))
+      stores.mutate("x", Add("b"))
+      assertThat(awaitItem()?.value).isEqualTo(listOf("x", "b"))
+
+      // Fetching y evicts x's truth, which leaves only the waiting change
+      queries.requestFetch("y", force = false).awaitSucceeded()
+      assertThat(awaitItem()?.value).isEqualTo(listOf("b"))
+      // x is on screen, so it fetches again, as it would had its value gone away
+      assertThat(awaitItem()?.value).isEqualTo(listOf("x", "b"))
+      cancelAndIgnoreRemainingEvents()
+    }
+    assertThat(fetch.callCount("x")).isEqualTo(2)
     data.assertNoFailures()
   }
 
