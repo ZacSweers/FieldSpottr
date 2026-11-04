@@ -95,11 +95,11 @@ interface Outbox<E> {
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OutboxOperation : Operation {
   /**
-   * Whether the change reached the store. Succeeded once its row is written, so from then on it
-   * survives a restart and sends when it can. Failed when the store rejected it, so nothing sends,
-   * and Cancelled when the owner stopped before the row was written. For a caller that waits for
-   * the local commit alone, like a message send whose screen then follows the delivery through the
-   * data it already shows.
+   * Whether the change reached the store. Succeeded once its row is written, so it sends when it
+   * can and, in a durable [OutboxStore], outlives a restart. Failed when the store rejected it, so
+   * nothing sends, and Cancelled when the owner stopped before the row was written. For a caller
+   * that waits for the local commit alone, like a message send whose screen then follows the
+   * delivery through the data it already shows.
    */
   val stored: Operation
 }
