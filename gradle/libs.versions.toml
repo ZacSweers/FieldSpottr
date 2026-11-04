@@ -46,6 +46,7 @@ androidx-compose-integration-activity = { module = "androidx.activity:activity-c
 androidx-datastore-core-okio = { module = "androidx.datastore:datastore-core-okio", version.ref = "androidx-datastore" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences-core", version.ref = "androidx-datastore" }
 androidx-splash = "androidx.core:core-splashscreen:1.2.0"
+androidx-startup = "androidx.startup:startup-runtime:1.2.0"
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidx-work" }
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "androidx-work" }
 # Utilities for local storage dirs on Desktop

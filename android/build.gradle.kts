@@ -76,6 +76,9 @@ bugsnag {
 
 dependencies {
   implementation(project(":shared"))
+  // The manifest names androidx.startup's InitializationProvider to turn off WorkManager's default
+  // initializer, so lint needs that library on this module's own classpath
+  implementation(libs.androidx.startup)
   coreLibraryDesugaring(libs.desugarJdkLibs)
   lintChecks(libs.lints.compose)
 }
