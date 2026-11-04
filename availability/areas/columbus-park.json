@@ -8157,32 +8157,6 @@
       "areaName": "Columbus Park",
       "groupName": "Columbus Park",
       "fieldId": "Soccer-01",
-      "start": 1793734200000,
-      "end": 1793739600000,
-      "title": "06 United Inc",
-      "org": "06 United Inc",
-      "status": "Permit #983704",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1793739600000,
-      "end": 1793741400000,
-      "title": "Manhattan Youth Recreation and Resources",
-      "org": "Manhattan Youth Recreation and Resources",
-      "status": "Permit #937130",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
       "start": 1793739600000,
       "end": 1793746800000,
       "title": "Columbus Park : Soccer-01 Renewal Renewal",
@@ -8190,19 +8164,6 @@
       "status": "Approved",
       "kind": "Soccer - Non Regulation",
       "sourceId": "nyc-parks-csv:Columbus Park",
-      "advisory": null
-    },
-    {
-      "areaName": "Columbus Park",
-      "groupName": "Columbus Park",
-      "fieldId": "Soccer-01",
-      "start": 1793741400000,
-      "end": 1793745000000,
-      "title": "Manhattan Youth Recreation and Resources",
-      "org": "Manhattan Youth Recreation and Resources",
-      "status": "Permit #937130",
-      "kind": "NYC live",
-      "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
     },
     {
@@ -8435,6 +8396,19 @@
       "title": "VOLO",
       "org": "VOLO",
       "status": "Permit #956515",
+      "kind": "NYC live",
+      "sourceId": "nyc-parks-live:M015-SOCCER-1",
+      "advisory": null
+    },
+    {
+      "areaName": "Columbus Park",
+      "groupName": "Columbus Park",
+      "fieldId": "Soccer-01",
+      "start": 1794340800000,
+      "end": 1794346200000,
+      "title": "PS 130 - Hernando De Soto",
+      "org": "PS 130 - Hernando De Soto",
+      "status": "Permit #975550",
       "kind": "NYC live",
       "sourceId": "nyc-parks-live:M015-SOCCER-1",
       "advisory": null
