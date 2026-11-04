@@ -16,6 +16,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -680,6 +681,60 @@ class MutableQueryStoreTest {
 
     assertThat(state.value).isEqualTo(Fetched(listOf("a", "b"), QueryStore.INVALIDATED))
     data.assertNoFailures()
+  }
+
+  @Test
+  fun `clear drops a change the drainer claims while clear runs`() = runTest {
+    val online = MutableStateFlow(false)
+    val failures = TestFailures()
+    val rows = InMemoryOutboxStores()
+    // Lets the drainer claim the row between clear's read of it and clear's write
+    val claimedDuringClear =
+      object : OutboxStores {
+        override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+          val opened = rows.open(name, serializer)
+          return object : OutboxStore<E> by opened {
+            override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
+              if (entry.status == OutboxStatus.Discarded && expected == OutboxStatus.Queued) {
+                online.value = true
+                opened.entry(entry.id).first { it?.status == OutboxStatus.Sending }
+              }
+              return opened.update(entry, expected)
+            }
+          }
+        }
+
+        override suspend fun clearAll() = rows.clearAll()
+      }
+    val scope =
+      DataScope.Factory(
+          onFailure = failures,
+          online = online,
+          stores = claimedDuringClear,
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store =
+      scope.mutableStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+    send.hold(Add("b"))
+    val handle = store.mutate(Add("b"))
+    handle.stored.awaitSucceeded()
+
+    store.clear()
+    send.release(Add("b"))
+    runCurrent()
+
+    // The send was already out, but its result lands nowhere
+    assertThat(truth.data.value).isNull()
+    handle.assertCancelled()
+    assertThat(store.pending.first()).isEmpty()
+    failures.assertNone()
   }
 }
 

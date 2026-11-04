@@ -18,6 +18,7 @@ import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.isSettled
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -277,17 +278,24 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * cancelled for a logout. Handles that follow them settle Cancelled through the row, and the
    * outbox's watcher moves the key on. A row left sending by an owner that stopped would send again
    * under the next owner, so it goes too. A drain still sending it finds the row gone when it
-   * reports the result, and [commit] drops the change.
+   * reports the result, and [commit] drops the change. The drainer can move a row meanwhile, by
+   * claiming it, backing it off or requeueing it for a retry, so each compare-and-set goes round
+   * until it wins or the row is settled. A row cannot become Sent meanwhile, since that waits for
+   * [commit], which waits for the key's lock that the caller holds.
    */
   private suspend fun discardPending(key: K) {
     for (row in rows.entries().first()) {
       if (row.payload.key != key) {
         continue
       }
-      rows.update(
-        row.copy(status = OutboxStatus.Discarded, reverted = true),
-        expected = row.status,
-      )
+      var current: OutboxEntry<KeyedMutation<K, M>>? = row
+      while (current != null && !current.status.isSettled) {
+        val discarded = current.copy(status = OutboxStatus.Discarded, reverted = true)
+        if (rows.update(discarded, expected = current.status)) {
+          break
+        }
+        current = rows.entry(row.id).first()
+      }
     }
   }
 
