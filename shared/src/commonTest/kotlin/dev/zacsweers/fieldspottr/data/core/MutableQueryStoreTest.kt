@@ -46,6 +46,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 
 class MutableQueryStoreTest {
   /** Adds one tag. */
@@ -387,6 +388,93 @@ class MutableQueryStoreTest {
     fetch.release()
     refresh.awaitSucceeded()
     assertThat(stores("x").data.first()?.value).isEqualTo(listOf("a", "z", "b", "c", "d"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a key keeps one server answer on record however many exchanges it sends`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    // The server stores tags in upper case, so its answer differs from what apply builds
+    val server = mutableListOf("a", "z")
+    val stores =
+      data.mutableStores<String, List<String>, Add>(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+        exchange = { _, add, _ ->
+          server += add.tag.uppercase()
+          server.toList()
+        },
+      )
+    val queries =
+      data.keyed(
+        store = stores,
+        fetch = { _ -> fetch() },
+        freshness = Freshness.staleAfter(1.hours),
+      )
+    queries.requestFetch("x", force = false).awaitSucceeded()
+    // A refresh that reads the server before the changes reach it, and lands after them. It starts
+    // at the same instant as the sends, so its write lands and the records put the answers back.
+    fetch.respond = { listOf("a", "z") }
+    fetch.hold()
+    val refresh = queries.requestFetch("x", force = true)
+    runCurrent()
+
+    for (tag in listOf("b", "c", "d")) {
+      stores.mutate("x", Add(tag)).awaitSucceeded()
+    }
+    // The newest answer holds every change before it, so only it keeps a copy
+    assertThat(stores.committedRecords).isEqualTo(3)
+    assertThat(stores.committedValues).isEqualTo(1)
+
+    fetch.release()
+    refresh.awaitSucceeded()
+    assertThat(stores("x").data.first()?.value).isEqualTo(listOf("a", "z", "B", "C", "D"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a send after an exchange keeps the server answer on record`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val stores =
+      data.mutableStores(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey<String, List<String>>(),
+        keySerializer = String.serializer(),
+        serializer = Add.serializer(),
+        apply = ::addOnce,
+        // The server answers only the first change, with its tag in upper case
+        deliver = { _, add, _ ->
+          if (add.tag == "b") {
+            Delivery.Replaced(listOf("a", "z", "B"))
+          } else {
+            Delivery.Acknowledged
+          }
+        },
+      )
+    val queries =
+      data.keyed(
+        store = stores,
+        fetch = { _ -> fetch() },
+        freshness = Freshness.staleAfter(1.hours),
+      )
+    queries.requestFetch("x", force = false).awaitSucceeded()
+    fetch.respond = { listOf("a", "z") }
+    fetch.hold()
+    val refresh = queries.requestFetch("x", force = true)
+    runCurrent()
+
+    for (tag in listOf("b", "c", "d")) {
+      stores.mutate("x", Add(tag)).awaitSucceeded()
+    }
+    // A refresh that lacks the answer gets it back with c and d applied on top, so the answer
+    // keeps its copy beside the newest record's
+    assertThat(stores.committedRecords).isEqualTo(3)
+    assertThat(stores.committedValues).isEqualTo(2)
+
+    fetch.release()
+    refresh.awaitSucceeded()
+    assertThat(stores("x").data.first()?.value).isEqualTo(listOf("a", "z", "B", "c", "d"))
     data.assertNoFailures()
   }
 

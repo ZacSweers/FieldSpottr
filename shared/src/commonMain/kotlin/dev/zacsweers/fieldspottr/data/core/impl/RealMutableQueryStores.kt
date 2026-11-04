@@ -57,11 +57,14 @@ import kotlinx.coroutines.withContext
  * fetch from after the send says what the server holds. A fetch that overlapped the send is written
  * with the change folded in, so a restart, which has no records, keeps it too.
  *
- * Only a key's newest record keeps a copy of the value, which is enough to tell that the truth
- * holds it and every change before it. The older ones keep just the change and its send time, which
- * is all a slow fetch needs. A record goes once a fetch from after its send lands, or once it is
- * old enough that no fetch from before its send should still be running, so a key that is never
- * fetched again does not keep it for good.
+ * At most two of a key's records keep a copy of the value. The newest keeps its own, which is
+ * enough to tell that the truth holds that change and every change before it. The newest one the
+ * server answered with a value keeps that answer, since a slow fetch gets the answer back with the
+ * later changes applied on top. The others keep just the change and its send time, which is all a
+ * slow fetch needs. Once its row has left, a record goes when a fetch from after its send lands, or
+ * once it is old enough that no fetch from before its send should still be running, so a key that
+ * is never fetched again does not keep it for good. Only a commit or a fetch write looks for old
+ * records, on every key, so a set that sits idle keeps them until its next one.
  *
  * Two cases stay outside what the records can tell. A fetch that overlapped the send may have read
  * the server after it took the change, and a process that dies between the truth write and the
@@ -242,7 +245,7 @@ internal class RealMutableQueryStores<K : Any, T, M>(
         all
           .map {
             if (it.key == key && it.id != id) {
-              it.withoutValue()
+              it.withoutValue(newerAnswer = replaced)
             } else {
               it
             }
@@ -349,23 +352,26 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * Every other sent change is missing, because [stored] came from a fetch that read the server too
    * early or from a commit whose write has not landed in the store yet. A missing change the server
    * answered with a value is put back as that value, which holds everything sent before it, since
-   * applying the change again could only rebuild the client's version of it.
+   * applying the change again could only rebuild the client's version of it. So the newest such
+   * answer replaces [stored], and only the changes after it are applied again.
    */
   private fun withSent(stored: Fetched<T>?, sent: List<Committed<K, T, M>>): Fetched<T>? {
     // The newest record whose change the store holds. Every record up to it is in the truth.
     val held = sent.indexOfLast { it.isHeldBy(stored) }
-    var result = stored
-    sent.forEachIndexed { index, record ->
-      val inTruth = index <= held || (stored != null && stored.fetchedAt > record.sentAt)
-      if (inTruth) {
-        return@forEachIndexed
+    val missing = sent.filterIndexed { index, record ->
+      index > held && (stored == null || stored.fetchedAt <= record.sentAt)
+    }
+    val answer = missing.indexOfLast { it.replaced && it.hasValue }
+    var result =
+      if (answer >= 0) {
+        missing[answer].truth
+      } else {
+        stored
       }
-      result =
-        if (record.replaced) {
-          record.truth
-        } else {
-          applied(result, record.mutation)
-        }
+    // An answer after this one gave up its value to a newer answer that has since gone, which
+    // leaves its change to apply again like a send's
+    for (record in missing.drop(answer + 1)) {
+      result = applied(result, record.mutation)
     }
     return result
   }
@@ -511,10 +517,12 @@ internal class RealMutableQueryStores<K : Any, T, M>(
 
     /**
      * This record without its copies of the value, once a newer commit on its key is in the store.
-     * A replaced record keeps its value, since that is the change a view puts back.
+     * A replaced record keeps its value, since that is the change a view puts back, until
+     * [newerAnswer] says the newer commit is a server answer too. A fetch that lacks the older
+     * answer lacks the newer one as well, and a view puts the newer one back in its place.
      */
-    fun withoutValue(): Committed<K, T, M> =
-      if (replaced || !hasValue) {
+    fun withoutValue(newerAnswer: Boolean): Committed<K, T, M> =
+      if (!hasValue || (replaced && !newerAnswer)) {
         this
       } else {
         Committed(id, key, mutation, sentAt, truth = null, replaced, hasValue = false)
