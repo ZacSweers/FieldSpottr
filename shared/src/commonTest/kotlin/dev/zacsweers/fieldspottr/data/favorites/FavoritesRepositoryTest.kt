@@ -45,7 +45,7 @@ class FavoritesRepositoryTest {
   }
 
   @Test
-  fun `favorites set offline show, wait, and send in order on reconnect`() = runTest {
+  fun `favorites set offline show at once and send in order on reconnect`() = runTest {
     val repository = repository(online = false)
     repository.setFavorite("Prospect Park", on = true)
     val last = repository.setFavorite("McCarren Park", on = true)
@@ -66,23 +66,22 @@ class FavoritesRepositoryTest {
   }
 
   @Test
-  fun `a favorite the server rejects drops out, shows as failed, and comes back on retry`() =
-    runTest {
-      api.send.failPermanently()
-      val repository = repository()
+  fun `a favorite the server rejects drops out and shows as failed until a retry`() = runTest {
+    api.send.failPermanently()
+    val repository = repository()
 
-      repository.setFavorite("Prospect Park", on = true).awaitFailed<PermanentFailure>()
+    repository.setFavorite("Prospect Park", on = true).awaitFailed<PermanentFailure>()
 
-      assertThat(repository.favorites.first()).isEmpty()
-      val failed = repository.unsynced.first().single()
-      assertThat(failed.status).isInstanceOf<OutboxStatus.Failed>()
+    assertThat(repository.favorites.first()).isEmpty()
+    val failed = repository.unsynced.first().single()
+    assertThat(failed.status).isInstanceOf<OutboxStatus.Failed>()
 
-      api.send.succeed()
-      repository.retry(failed.id).awaitSucceeded()
+    api.send.succeed()
+    repository.retry(failed.id).awaitSucceeded()
 
-      assertThat(repository.favorites.first()).containsOnly("Prospect Park")
-      assertThat(api.server).containsOnly("Prospect Park")
-    }
+    assertThat(repository.favorites.first()).containsOnly("Prospect Park")
+    assertThat(api.server).containsOnly("Prospect Park")
+  }
 
   @Test
   fun `a favorite turned off again sends both changes and ends off`() = runTest {

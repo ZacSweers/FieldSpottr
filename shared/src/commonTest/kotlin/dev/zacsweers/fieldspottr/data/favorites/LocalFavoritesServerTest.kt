@@ -25,7 +25,7 @@ class LocalFavoritesServerTest {
     }
 
   @Test
-  fun `what one server instance stores, the next one reads, as across a restart`() = runTest {
+  fun `what one server instance stores the next one reads as across a restart`() = runTest {
     val io = StandardTestDispatcher(testScheduler)
     val before = LocalFavoritesServer(dirs, io, Json)
     assertThat(before.favorites()).isEmpty()

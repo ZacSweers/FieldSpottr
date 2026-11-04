@@ -44,7 +44,7 @@ class OutboxBacklogTest {
     testDataScopeFactory(clock = testClock(START), online = online, scheduler = scheduler)
 
   @Test
-  fun `a row that waits is reported, and the backlog clears once it sends`() = runTest {
+  fun `a row that waits is reported and the backlog clears once it sends`() = runTest {
     val factory = factory(online = false)
     val data = factory.create(backgroundScope)
     val outbox = data.outbox<String>("test", send)
@@ -65,7 +65,7 @@ class OutboxBacklogTest {
   }
 
   @Test
-  fun `a failed send reports when its backoff ends, and the end reports ready again`() = runTest {
+  fun `a failed send reports when its backoff ends and then reports ready again`() = runTest {
     send.failTransiently()
     val factory = factory()
     val outbox =
@@ -92,7 +92,7 @@ class OutboxBacklogTest {
   }
 
   @Test
-  fun `the backlog is ready if any outbox is, else the earliest backoff`() = runTest {
+  fun `the backlog is ready if any outbox is and otherwise the earliest backoff`() = runTest {
     send.failTransiently()
     val factory = factory()
     val data = factory.create(backgroundScope)
@@ -119,7 +119,7 @@ class OutboxBacklogTest {
   }
 
   @Test
-  fun `an outbox whose scope ends leaves the backlog, and its rows keep the work`() = runTest {
+  fun `an outbox whose scope ends leaves the backlog while its rows keep the work`() = runTest {
     val factory = factory(online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
