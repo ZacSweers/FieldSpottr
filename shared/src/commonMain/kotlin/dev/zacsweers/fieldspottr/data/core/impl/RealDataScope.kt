@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.KSerializer
@@ -69,7 +70,10 @@ internal class RealDataScopeFactory(
   private val publishing = AtomicBoolean(false)
   private val dirty = AtomicBoolean(false)
 
-  override val backlog: Flow<OutboxBacklog> = combined.filterNotNull().distinctUntilChanged()
+  // A backoff whose deadline the wall clock has passed reads as Ready, since the outbox's timer
+  // follows a clock that can stop while the device sleeps, so a waiter waits for the send instead
+  override val backlog: Flow<OutboxBacklog> =
+    combined.filterNotNull().map { it.asOf(clock.now()) }.distinctUntilChanged()
 
   override fun create(scope: CoroutineScope): DataScope = RealDataScope(scope, this)
 
@@ -179,6 +183,14 @@ internal class RealDataScopeFactory(
     }
   }
 }
+
+/** This backlog as it stands at [now]: a backoff whose deadline has passed can send now. */
+private fun OutboxBacklog.asOf(now: Instant): OutboxBacklog =
+  if (this is OutboxBacklog.BackingOff && until <= now) {
+    OutboxBacklog.Ready
+  } else {
+    this
+  }
 
 /**
  * [DataScope] over one coroutine scope. Every runner, query and outbox gets a runner of its own in

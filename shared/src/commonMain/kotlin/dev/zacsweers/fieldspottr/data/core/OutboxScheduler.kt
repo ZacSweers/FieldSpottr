@@ -66,8 +66,9 @@ interface OutboxScheduler {
  * returns [OutboxBacklog.Empty] once every row has been sent, or an [OutboxBacklog.BackingOff]
  * whose deadline is when the remaining rows may be retried, so a worker can schedule itself again
  * for that time. Only running outboxes count, so a worker should build the repositories that own
- * them before calling this. While the network is down, queued rows still count as ready and this
- * keeps waiting, so give the worker a network constraint and a timeout.
+ * them before calling this. A row whose backoff deadline has passed counts as ready, so a worker
+ * that the deadline started waits for its send. While the network is down, queued rows still count
+ * as ready and this keeps waiting, so give the worker a network constraint and a timeout.
  */
 suspend fun DataScope.Factory.awaitDrained(): OutboxBacklog = backlog.first {
   it !is OutboxBacklog.Ready

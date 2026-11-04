@@ -8,6 +8,7 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog.BackingOff
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog.Empty
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog.Ready
@@ -213,6 +214,32 @@ class OutboxBacklogTest {
 
     // Only the outbox that was built counts, so the backlog still reports
     assertThat(withTimeoutOrNull(1.minutes) { factory.backlog.first() }).isEqualTo(Empty)
+  }
+
+  @Test
+  fun `a backoff whose deadline passed on the wall clock waits for the send`() = runTest {
+    val factory = factory()
+    val outbox =
+      factory
+        .create(backgroundScope)
+        .outbox<String>("test", send, retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    send.failTransiently()
+    val handle = outbox.enqueue("a")
+    runCurrent()
+    assertThat(factory.backlog.first()).isEqualTo(BackingOff(START + 5.minutes))
+
+    // Wall time passes the deadline while the timer's own delay runs, like in deep sleep
+    factory.clock.shift(6.minutes)
+    val drained = async { factory.awaitDrained() }
+    runCurrent()
+    assertThat(drained.isCompleted).isFalse()
+    advanceTimeBy(1.minutes)
+    runCurrent()
+
+    // The timer reads the wall clock within a minute of waking, so the row sends then
+    assertThat(drained.isCompleted).isTrue()
+    assertThat(drained.await()).isEqualTo(Empty)
+    handle.awaitSucceeded()
   }
 }
 

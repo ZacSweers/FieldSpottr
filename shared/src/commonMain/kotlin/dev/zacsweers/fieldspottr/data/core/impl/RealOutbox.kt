@@ -352,8 +352,8 @@ internal class RealOutbox<E>(
 
   /** Wakes [key]'s drain at [deadline], when the backoff of its head row [id] ends. */
   private fun backOff(key: String, id: EntryId, deadline: Instant) {
-    val wait = deadline - clock.now()
-    val timer = Timer(id, deadline, scope.launch(start = CoroutineStart.LAZY) { delay(wait) })
+    val timer =
+      Timer(id, deadline, scope.launch(start = CoroutineStart.LAZY) { awaitClock(deadline) })
     waking.update { it.putting(key, timer) }
     timer.job.invokeOnCompletion { cause ->
       waking.update { current ->
@@ -370,6 +370,21 @@ internal class RealOutbox<E>(
       }
     }
     timer.job.start()
+  }
+
+  /**
+   * Waits until [clock] reaches [deadline]. `delay` follows a monotonic clock, which stops while an
+   * Android device sleeps, so this waits in steps of at most [TIMER_STEP] and reads the clock after
+   * each. A deadline that passed during sleep then fires within one step of waking.
+   */
+  private suspend fun awaitClock(deadline: Instant) {
+    while (true) {
+      val left = deadline - clock.now()
+      if (left <= Duration.ZERO) {
+        return
+      }
+      delay(minOf(left, TIMER_STEP))
+    }
   }
 
   /** Cancels [key]'s timer if it waits for row [id]. A timer for another row keeps waiting. */
@@ -515,6 +530,9 @@ private const val WHOLE_QUEUE = ""
 // doubling up to the cap
 private val STORE_RETRY_FIRST = 1.seconds
 private val STORE_RETRY_MAX = 1.minutes
+
+// The longest a backoff timer waits before it reads the wall clock again
+private val TIMER_STEP = 1.minutes
 
 private val OutboxStatus.isSendable: Boolean
   get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending
