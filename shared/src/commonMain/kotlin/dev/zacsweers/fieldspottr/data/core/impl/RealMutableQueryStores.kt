@@ -26,6 +26,7 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.update
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.collections.immutable.persistentListOf
@@ -55,6 +56,12 @@ import kotlinx.coroutines.withContext
  * truth fetched before the send, so the value never shows the change twice or loses it until a
  * fetch from after the send says what the server holds. A fetch that overlapped the send is written
  * with the change folded in, so a restart, which has no records, keeps it too.
+ *
+ * Only a key's newest record keeps a copy of the value, which is enough to tell that the truth
+ * holds it and every change before it. The older ones keep just the change and its send time, which
+ * is all a slow fetch needs. A record goes once a fetch from after its send lands, or once it is
+ * old enough that no fetch from before its send should still be running, so a key that is never
+ * fetched again does not keep it for good.
  *
  * Two cases stay outside what the records can tell. A fetch that overlapped the send may have read
  * the server after it took the change, and a process that dies between the truth write and the
@@ -88,7 +95,8 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    */
   private val context: CoroutineContext,
 ) : MutableQueryStores<K, T, M> {
-  // Sent changes in commit order, kept until a fetch from after the send confirms each one
+  // Sent changes in commit order, kept until a fetch from after the send confirms each one or it
+  // expires
   private val committed = MutableStateFlow(persistentListOf<Committed<K, T, M>>())
   // Whether an apply that is not idempotent has been reported. Once is enough to fix it.
   private val reportedApply = AtomicBoolean(false)
@@ -105,6 +113,10 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   /** How many sent changes are still on record. For tests, which cannot see pruning otherwise. */
   internal val committedRecords: Int
     get() = committed.value.size
+
+  /** How many records still keep a copy of the value. For tests, which cannot see it otherwise. */
+  internal val committedValues: Int
+    get() = committed.value.count { it.hasValue }
 
   override fun invoke(key: K): MutableQueryStore<T, M> = KeyStore(key, baseFor(key))
 
@@ -159,7 +171,7 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * idempotency key, then the change's move into the truth. A commit that fails, like a base store
    * whose disk is full, is reported to [onFailure] and the send still succeeds, since the server
    * has the change and another attempt would only send it again. The change's record keeps it in
-   * the view until a fetch from after the send replaces the truth.
+   * the view until a fetch from after the send replaces the truth, or until the record expires.
    */
   private suspend fun send(payload: KeyedMutation<K, M>, id: EntryId) {
     val result = deliver(payload.key, payload.mutation, id)
@@ -208,21 +220,34 @@ internal class RealMutableQueryStores<K : Any, T, M>(
           }
         }
       // Views show this in place of the row from here, so the writes below never show as a gap.
-      // This key's records that the truth already confirms can go.
+      // This key's records that the truth already confirms can go, and so can expired ones.
       val live = rows.entries().first().mapTo(HashSet()) { it.id }
+      val now = clock.now()
       committed.update { all ->
         all
-          .filter { keeps(it, key, live, current?.fetchedAt) }
+          .filter { keeps(it, key, live, current?.fetchedAt, now) }
           .toPersistentList()
           .adding(Committed(id, key, payload.mutation, sentAt, next, replaced))
       }
-      if (alreadyFetched) {
-        return
+      if (!alreadyFetched) {
+        if (next == null) {
+          base.store.clear()
+        } else {
+          base.store.write(next.value, next.fetchedAt)
+        }
       }
-      if (next == null) {
-        base.store.clear()
-      } else {
-        base.store.write(next.value, next.fetchedAt)
+      // The store holds this record's value now, which tells views that it holds every change
+      // before it too. So the key's older records need only what a slow fetch folds back in.
+      committed.update { all ->
+        all
+          .map {
+            if (it.key == key && it.id != id) {
+              it.withoutValue()
+            } else {
+              it
+            }
+          }
+          .toPersistentList()
       }
     }
   }
@@ -255,28 +280,38 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Whether [record] still matters given a truth for [key] fetched at [fetchedAt]: it is another
-   * key's, its row is still among [live], or the truth, if any, was fetched before its send.
+   * Whether [record] still matters at [now] given a truth for [key] fetched at [fetchedAt]: its row
+   * is still among [live], or it has not expired and is another key's or newer than the truth.
    */
   private fun keeps(
     record: Committed<K, T, M>,
     key: K,
     live: Set<EntryId>,
     fetchedAt: Instant?,
-  ): Boolean =
-    record.key != key || record.id in live || fetchedAt == null || fetchedAt <= record.sentAt
+    now: Instant,
+  ): Boolean {
+    if (record.id in live) {
+      return true
+    }
+    if (record.isExpired(now)) {
+      return false
+    }
+    return record.key != key || fetchedAt == null || fetchedAt <= record.sentAt
+  }
 
   /**
-   * Drops [key]'s records that a truth fetched at [fetchedAt] confirms, once their rows have left.
-   * Called after a fetch writes through a view, so a key that never changes again does not keep its
-   * records for good.
+   * Drops [key]'s records that a truth fetched at [fetchedAt] confirms, once their rows have left,
+   * and every key's expired records. Called after a fetch writes through a view.
    */
   private suspend fun prune(key: K, fetchedAt: Instant) {
-    if (committed.value.none { it.key == key && it.sentAt < fetchedAt }) {
+    val now = clock.now()
+    if (committed.value.none { (it.key == key && it.sentAt < fetchedAt) || it.isExpired(now) }) {
       return
     }
     val live = rows.entries().first().mapTo(HashSet()) { it.id }
-    committed.update { all -> all.filter { keeps(it, key, live, fetchedAt) }.toPersistentList() }
+    committed.update { all ->
+      all.filter { keeps(it, key, live, fetchedAt, now) }.toPersistentList()
+    }
   }
 
   /**
@@ -458,14 +493,32 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     val truth: Fetched<T>?,
     val replaced: Boolean,
     val foldedInto: List<T?> = emptyList(),
+    val hasValue: Boolean = true,
   ) {
-    /** Whether [stored] already holds this change: its commit wrote it, or a fetch folded it in. */
+    /**
+     * Whether [stored] already holds this change: its commit wrote it, or a fetch folded it in. A
+     * record without its value cannot tell, and a newer record answers in its place.
+     */
     fun isHeldBy(stored: Fetched<T>?): Boolean =
-      truth?.value == stored?.value || stored?.value in foldedInto
+      hasValue && (truth?.value == stored?.value || stored?.value in foldedInto)
 
     /** This record, also held by [folded], a fetch's value with this change folded in. */
     fun alsoHeldBy(folded: Fetched<T>?): Committed<K, T, M> =
-      Committed(id, key, mutation, sentAt, truth, replaced, foldedInto + folded?.value)
+      Committed(id, key, mutation, sentAt, truth, replaced, foldedInto + folded?.value, hasValue)
+
+    /**
+     * This record without its copies of the value, once a newer commit on its key is in the store.
+     * A replaced record keeps its value, since that is the change a view puts back.
+     */
+    fun withoutValue(): Committed<K, T, M> =
+      if (replaced || !hasValue) {
+        this
+      } else {
+        Committed(id, key, mutation, sentAt, truth = null, replaced, hasValue = false)
+      }
+
+    /** Whether the send is old enough at [now] that no fetch from before it still runs. */
+    fun isExpired(now: Instant): Boolean = now - sentAt >= RECORD_LIFETIME
   }
 
   /** A key's base store and the lock its two writers, fetch and commit, take turns on. */
@@ -477,6 +530,13 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   private class Storing<K>(val key: K, val stored: Operation)
 }
 
+/**
+ * How long a sent change stays on record when no fetch confirms it, like on a key that is never
+ * fetched again. The record exists for a fetch that started before the send and lands after it, and
+ * a fetch running this long is far past any network timeout.
+ */
+private val RECORD_LIFETIME = 10.minutes
+
 /** Queued or Sending: the row's change still shows, and it has not been rejected. */
 private val OutboxStatus.isInFlight: Boolean
   get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending
@@ -486,3 +546,9 @@ private val OutboxStatus.isInFlight: Boolean
  */
 internal val MutableQueryStores<*, *, *>.committedRecords: Int
   get() = (this as RealMutableQueryStores<*, *, *>).committedRecords
+
+/**
+ * How many of a set's records keep a copy of the value. For tests, which cannot see it otherwise.
+ */
+internal val MutableQueryStores<*, *, *>.committedValues: Int
+  get() = (this as RealMutableQueryStores<*, *, *>).committedValues

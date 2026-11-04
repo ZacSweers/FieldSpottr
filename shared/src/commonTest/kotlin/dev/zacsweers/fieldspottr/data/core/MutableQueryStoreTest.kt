@@ -13,6 +13,7 @@ import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.messageContains
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
+import dev.zacsweers.fieldspottr.data.core.impl.committedValues
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
@@ -350,6 +351,72 @@ class MutableQueryStoreTest {
     data.clock.shift(1.minutes)
     queries.requestFetch("x", force = true).awaitSucceeded()
     assertThat(stores.committedRecords).isEqualTo(0)
+  }
+
+  @Test
+  fun `a key keeps one value on record however many changes it sends`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val stores =
+      data.mutableStores<String, List<String>, Add>(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+        send = { _, add, id -> send(add, id) },
+      )
+    val queries =
+      data.keyed(
+        store = stores,
+        fetch = { _ -> fetch() },
+        freshness = Freshness.staleAfter(1.hours),
+      )
+    queries.requestFetch("x", force = false).awaitSucceeded()
+    // A refresh that reads the server before the changes reach it, and lands after them
+    fetch.respond = { listOf("a", "z") }
+    fetch.hold()
+    val refresh = queries.requestFetch("x", force = true)
+    advanceTimeBy(1.seconds)
+
+    for (tag in listOf("b", "c", "d")) {
+      stores.mutate("x", Add(tag)).awaitSucceeded()
+    }
+    // Each send stays on record for the refresh, but only the newest keeps a copy of the value
+    assertThat(stores.committedRecords).isEqualTo(3)
+    assertThat(stores.committedValues).isEqualTo(1)
+
+    fetch.release()
+    refresh.awaitSucceeded()
+    assertThat(stores("x").data.first()?.value).isEqualTo(listOf("a", "z", "b", "c", "d"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a record that no fetch confirms is dropped minutes after its send`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val stores =
+      data.mutableStores<String, List<String>, Add>(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+        send = { _, add, id -> send(add, id) },
+      )
+    val queries =
+      data.keyed(
+        store = stores,
+        fetch = { key -> listOf(key) },
+        freshness = Freshness.staleAfter(1.hours),
+      )
+    queries.requestFetch("x", force = false).awaitSucceeded()
+    queries.requestFetch("y", force = false).awaitSucceeded()
+    stores.mutate("x", Add("b")).awaitSucceeded()
+
+    // x is never fetched again, so only time can tell that no fetch still needs its record
+    data.clock.shift(10.minutes)
+    stores.mutate("y", Add("c")).awaitSucceeded()
+
+    assertThat(stores.committedRecords).isEqualTo(1)
+    // The truth holds the change, so x still shows it
+    assertThat(stores("x").data.first()?.value).isEqualTo(listOf("x", "b"))
+    data.assertNoFailures()
   }
 
   @Test
