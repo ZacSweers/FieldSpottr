@@ -9,6 +9,8 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotNull
+import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
@@ -426,6 +428,87 @@ class OutboxTest {
 
     retried.assertSucceeded()
     original.assertFailed<PermanentFailure>()
+  }
+
+  @Test
+  fun `a retry started while the failed status is written reports its own result`() = runTest {
+    send.failPermanently()
+    val rows = inMemoryOutboxStore<String>()
+    val failedShown = CompletableDeferred<Unit>()
+    val finishFailed = CompletableDeferred<Unit>()
+    // Publishes the failed status, then pauses before the update returns
+    val slowFailure =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          val updated = rows.update(entry, expected)
+          if (entry.status is OutboxStatus.Failed && failedShown.complete(Unit)) {
+            finishFailed.await()
+          }
+          return updated
+        }
+      }
+    val outbox = testDataScope().outbox(slowFailure, send = send, revert = send::revert)
+    val original = outbox.enqueue("a")
+    failedShown.await()
+
+    send.succeed()
+    val retried = outbox.retry(rows.entries().first().single().id)
+    testScheduler.runCurrent()
+    finishFailed.complete(Unit)
+    testScheduler.runCurrent()
+
+    original.assertFailed<PermanentFailure>()
+    retried.assertSucceeded()
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
+  fun `a retry whose requeue throws fails with that exception`() = runTest {
+    send.failTransiently()
+    val rows = inMemoryOutboxStore<String>()
+    val diskFull = IllegalStateException("Disk full")
+    var failUpdates = false
+    val failingRequeue =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          if (failUpdates) {
+            throw diskFull
+          }
+          return rows.update(entry, expected)
+        }
+      }
+    data = testDataScope(clock = testClock(START))
+    val outbox = data.outbox(failingRequeue, send = send, revert = send::revert)
+    outbox.enqueue("a")
+    testScheduler.runCurrent()
+    // Backing off after the failed attempt, and offline, so nothing else touches the row
+    data.online.value = false
+    assertThat(rows.entries().first().single().retryAt).isNotNull()
+
+    failUpdates = true
+    val retried = outbox.retry(rows.entries().first().single().id)
+    testScheduler.runCurrent()
+
+    assertThat(retried.awaitFailed<IllegalStateException>()).isSameInstanceAs(diskFull)
+    assertThat(data.actionFailures.take()).containsExactly(diskFull)
+  }
+
+  @Test
+  fun `a send that cannot be retried fails once and the next row sends`() = runTest {
+    val rejected = IllegalArgumentException("400 Bad Request")
+    send.failure = { payload, _ -> rejected.takeIf { payload == "a" } }
+    data =
+      testDataScope(clock = testClock(START), canRetrySend = { it !is IllegalArgumentException })
+    val outbox = data.outbox<String>("test", send, send::revert)
+
+    val first = outbox.enqueue("a", key = "k")
+    val second = outbox.enqueue("b", key = "k")
+
+    assertThat(first.awaitFailed<PermanentFailure>().message).isEqualTo(rejected.toString())
+    second.awaitSucceeded()
+    assertThat(send.attempts("a")).isEqualTo(1)
+    assertThat(send.reverted).containsExactly("a")
+    assertThat(send.sent).containsExactly("b")
   }
 
   @Test

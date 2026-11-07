@@ -32,7 +32,7 @@ package dev.zacsweers.fieldspottr.data.core
  * command moves itself with `withContext`, as [QueryStore] describes.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
-interface DataActions {
+interface ActionRunner {
   /** Runs [block] as one command with [ordering]. The handle follows that command. */
   fun run(ordering: Ordering = Ordering.Serial, block: suspend () -> Unit): Operation
 

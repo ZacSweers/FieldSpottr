@@ -54,6 +54,23 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
     recorded.update { it.adding(Write(value, fetchedAt)) }
   }
 
+  /**
+   * Recorded as a [Write] only when the delegate stored [value], so a kept value shows no write.
+   */
+  override suspend fun writeFetched(
+    value: T,
+    fetchedAt: Instant,
+    keepsStored: (storedAt: Instant) -> Boolean,
+  ) {
+    var kept = false
+    delegate.writeFetched(value, fetchedAt) { storedAt ->
+      keepsStored(storedAt).also { kept = it }
+    }
+    if (!kept) {
+      recorded.update { it.adding(Write(value, fetchedAt)) }
+    }
+  }
+
   override suspend fun invalidate() {
     delegate.invalidate()
     recorded.update { it.adding(Invalidate) }

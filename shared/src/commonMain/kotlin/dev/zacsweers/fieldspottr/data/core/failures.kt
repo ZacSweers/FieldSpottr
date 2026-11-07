@@ -13,7 +13,11 @@ import kotlinx.coroutines.withContext
  */
 suspend fun <T> rollbackOnFailure(rollback: suspend () -> Unit, block: suspend () -> T): T {
   try {
-    return block()
+    val result = block()
+    // A block that ran NonCancellable can return normally after the scope was cancelled. The
+    // command does not complete then either, so the change is undone.
+    currentCoroutineContext().ensureActive()
+    return result
   } catch (t: Throwable) {
     try {
       // The rollback must run even while the scope is being cancelled, or the change would stay

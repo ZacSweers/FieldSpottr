@@ -88,9 +88,10 @@ interface Outbox<E> {
 }
 
 /**
- * The handle [Outbox.enqueue] and [MutableQueryStore.mutate] return. As an [Operation] it follows
- * the row's send, as [Outbox] describes: Succeeded once sent, Failed once rejected for good or out
- * of attempts, Cancelled once discarded. [stored] settles earlier, once the row is in the store.
+ * The handle [Outbox.enqueue] and [OptimisticQueryStore.mutate] return. As an [Operation] it
+ * follows the row's send, as [Outbox] describes: Succeeded once sent, Failed once rejected for good
+ * or out of attempts, Cancelled once discarded. [stored] settles earlier, once the row is in the
+ * store.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OutboxOperation : Operation {

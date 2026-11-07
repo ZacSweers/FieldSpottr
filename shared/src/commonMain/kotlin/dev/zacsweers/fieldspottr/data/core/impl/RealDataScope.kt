@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
-import dev.zacsweers.fieldspottr.data.core.DataActions
+import dev.zacsweers.fieldspottr.data.core.ActionRunner
 import dev.zacsweers.fieldspottr.data.core.DataQuery
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
@@ -11,7 +11,7 @@ import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.KeyedDataQueries
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
-import dev.zacsweers.fieldspottr.data.core.MutableQueryStores
+import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStores
 import dev.zacsweers.fieldspottr.data.core.Outbox
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
@@ -55,6 +55,7 @@ internal class RealDataScopeFactory(
   val stores: OutboxStores,
   private val scheduler: OutboxScheduler,
   val clock: Clock,
+  val canRetrySend: (Throwable) -> Boolean,
 ) : DataScope.Factory {
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val runningOutboxes = AtomicReference(persistentHashSetOf<String>())
@@ -201,8 +202,8 @@ private class RealDataScope(
   override val scope: CoroutineScope,
   private val factory: RealDataScopeFactory,
 ) : DataScope {
-  override fun newActions(onFailure: ((Throwable) -> Unit)?): DataActions =
-    RealDataActions(scope, onFailure ?: factory.onActionFailure)
+  override fun newActionRunner(onFailure: ((Throwable) -> Unit)?): ActionRunner =
+    RealActionRunner(scope, onFailure ?: factory.onActionFailure)
 
   override fun <T> query(
     store: QueryStore<T>,
@@ -251,18 +252,19 @@ private class RealDataScope(
   ): Outbox<E> =
     RealOutbox(
       scope = scope,
-      actions = RealDataActions(scope, factory.onActionFailure),
+      actions = RealActionRunner(scope, factory.onActionFailure),
       send = send,
       revert = revert,
       store = store,
       policy = retry,
+      canRetrySend = factory.canRetrySend,
       online = factory.online,
       clock = factory.clock,
       onFailure = factory.onActionFailure,
       trackBacklog = { factory.track(scope) },
     )
 
-  override fun <K : Any, T, M> mutableStores(
+  override fun <K : Any, T, M> optimisticStores(
     name: String,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
@@ -270,9 +272,9 @@ private class RealDataScope(
     apply: (current: T?, mutation: M) -> T?,
     deliver: suspend (key: K, mutation: M, id: EntryId) -> Delivery<T>,
     retry: RetryPolicy,
-  ): MutableQueryStores<K, T, M> =
+  ): OptimisticQueryStores<K, T, M> =
     claimed(name, KeyedMutation.serializer(keySerializer, serializer)) { rows ->
-      RealMutableQueryStores(
+      RealOptimisticQueryStores(
         rows = rows,
         // The set drops changes by writing their rows, so it needs the store beside the outbox
         outbox = { send -> outbox(rows, send = send, revert = {}, retry = retry) },

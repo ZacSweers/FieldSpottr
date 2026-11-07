@@ -9,6 +9,7 @@ import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import kotlin.concurrent.atomics.AtomicReference
@@ -48,7 +49,7 @@ internal class RealDataQuery<T>(
   private val onActionFailure: (Throwable) -> Unit,
   private val holds: QueryHolds = QueryHolds.None,
 ) : DataQuery<T> {
-  private val actions = RealDataActions(scope, ::report)
+  private val actions = RealActionRunner(scope, ::report)
   // Private, so only this query's commands chain on it
   private val key = Any()
   // How many observers collect data, and the watcher that runs while any do. Updated by
@@ -60,11 +61,12 @@ internal class RealDataQuery<T>(
    * already queued, since the data can go stale between observers. The check is a command of its
    * own, so an observer that takes the first value and leaves, like `first()`, still started it.
    * The first observer also starts the watcher, which checks again whenever the fetched data goes
-   * away.
+   * away. The check starts first, so the watcher can wait for it, as [watch] describes.
    */
   override val data: Flow<Fetched<T>?> = flow {
-    startWatching()
-    holds.holdUntilSettled(fetchIfStale())
+    val check = fetchIfStale()
+    startWatching(check)
+    holds.holdUntilSettled(check)
     try {
       emitAll(store.data)
     } finally {
@@ -74,8 +76,8 @@ internal class RealDataQuery<T>(
 
   override val stored: Flow<Fetched<T>?> = store.data
 
-  /** Counts an observer in, and starts the watcher for the first one. */
-  private fun startWatching() {
+  /** Counts an observer in, and starts the watcher for the first one, whose check is [check]. */
+  private fun startWatching(check: Operation) {
     while (true) {
       val current = watching.load()
       if (current.observers > 0) {
@@ -84,7 +86,7 @@ internal class RealDataQuery<T>(
         }
         continue
       }
-      val watcher = scope.launch(start = CoroutineStart.LAZY) { watch() }
+      val watcher = scope.launch(start = CoroutineStart.LAZY) { watch(check) }
       if (watching.compareAndSet(current, Watching(observers = 1, watcher))) {
         // The watcher takes a hold on the owner, which also covers the requests the watcher makes
         if (holds.tryAcquire()) {
@@ -124,13 +126,26 @@ internal class RealDataQuery<T>(
    * observers see it, and however late. A value that goes away, or keeps only local changes with
    * [QueryStore.UNFETCHED], is checked again once the work already queued is done, so a value
    * cleared while a fetch is still writing gets a check after that write. An invalidated value
-   * keeps its data and waits for the next collect, as [invalidate] promises. The first value needs
-   * no check here, since the observer that started the watcher made one.
+   * keeps its data and waits for the next collect, as [invalidate] promises.
+   *
+   * The first value needs no check of its own, since the observer that started the watcher made
+   * [check], unless that value is nothing stored. [check] may be one this observer joined, which
+   * read a value before a clear, so it never fetched. So the watcher waits for it, and when it
+   * succeeded and the store is still empty, checks once more. A check that failed, like a fetch
+   * while offline, already made its attempt, so the watcher leaves it to the next request.
    */
-  private suspend fun watch() {
+  private suspend fun watch(check: Operation) {
     var previous: Fetched<T>? = null
+    var first = true
     store.data.collect { current ->
-      if (lostFetch(previous, current)) {
+      if (first) {
+        first = false
+        val emptyAfterCheck =
+          current == null && check.await() == OperationState.Succeeded && store.data.first() == null
+        if (emptyAfterCheck) {
+          holds.holdUntilSettled(recheck())
+        }
+      } else if (lostFetch(previous, current)) {
         holds.holdUntilSettled(recheck())
       }
       previous = current
@@ -225,13 +240,12 @@ internal class RealDataQuery<T>(
       // A fetch superseded while it ran never writes, even one whose fetch ignored cancellation
       currentCoroutineContext().ensureActive()
       // A fetch also never overwrites data that another writer put in the store meanwhile with a
-      // newer fetch time, like a pushed update or a sent change the server already holds. A fetch
-      // time ahead of the clock is a bad record, which isStale treats as stale, so the fetch does
-      // replace that.
-      val storedAt = store.data.first()?.fetchedAt
-      val newerStored = storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
-      if (!newerStored) {
-        store.write(value, fetchedAt)
+      // newer fetch time, like a second query's fetch or a sent change the server already holds.
+      // The store checks and writes in one update, so such a write cannot land between the two. An
+      // equal time is this fetch's own or as new, so it is replaced. A fetch time ahead of the
+      // clock is a bad record, which isStale treats as stale, so the fetch replaces that too.
+      store.writeFetched(value, fetchedAt) { storedAt ->
+        storedAt > fetchedAt && storedAt <= clock.now()
       }
       status.value = FetchStatus.Idle
     } catch (t: Throwable) {

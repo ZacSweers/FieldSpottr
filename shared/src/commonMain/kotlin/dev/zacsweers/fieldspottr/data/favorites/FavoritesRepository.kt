@@ -11,7 +11,7 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.inFile
-import dev.zacsweers.fieldspottr.data.core.mutableStore
+import dev.zacsweers.fieldspottr.data.core.optimisticStore
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.fieldspottr.di.IoDispatcher
 import dev.zacsweers.metro.AppScope
@@ -37,8 +37,8 @@ import kotlinx.serialization.json.Json
  * row beside it until the server takes it. [favorites] shows the truth with the waiting changes on
  * top, so a tap shows at once, offline too, and a restart shows the same.
  *
- * This repository is the app's first use of [mutableStore], and it exercises the whole path: outbox
- * rows in the database, drains that wait for the network monitor, and a WorkManager drain on
+ * This repository is the app's first use of [optimisticStore], and it exercises the whole path:
+ * outbox rows in the database, drains that wait for the network monitor, and a WorkManager drain on
  * Android.
  */
 @SingleIn(AppScope::class)
@@ -70,7 +70,7 @@ internal constructor(
   )
 
   private val store =
-    data.mutableStore<Set<String>, FavoriteChange>(
+    data.optimisticStore<Set<String>, FavoriteChange>(
       name = "favorites",
       base = base,
       // Idempotent: a group set on twice is on once, so a resend or an overlapping fetch is safe

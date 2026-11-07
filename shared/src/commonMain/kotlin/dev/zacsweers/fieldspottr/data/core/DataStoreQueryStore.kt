@@ -29,8 +29,14 @@ fun <T> DataStore<Fetched<T>?>.asQueryStore(): QueryStore<T> =
     data,
     clear = { updateData { null } },
     invalidate = { updateData { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
-  ) { value, fetchedAt ->
-    updateData { Fetched(value, fetchedAt) }
+  ) { value, fetchedAt, keepsStored ->
+    updateData { current ->
+      if (current != null && keepsStored(current.fetchedAt)) {
+        current
+      } else {
+        Fetched(value, fetchedAt)
+      }
+    }
   }
 
 /**

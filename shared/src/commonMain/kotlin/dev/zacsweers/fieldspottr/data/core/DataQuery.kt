@@ -81,7 +81,7 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
  * requestFetch(force = false) -+    fetch time against freshness and the clock
  *                                   | stale
  *                                   v
- * requestFetch(force = true) --> fetch() --> store.write(value, fetchedAt) --> data
+ * requestFetch(force = true) --> fetch() --> store.writeFetched(value, ...) --> data
  *   joins a running forced          |
  *   fetch                           +--> status: Fetching, then Idle or Failed
  * ```

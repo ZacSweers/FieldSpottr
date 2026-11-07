@@ -66,7 +66,7 @@ class TestFixturesTest {
 
   @Test
   fun `by default a data scope's work waits for runCurrent`() = runTest {
-    val actions = testDataScope().newActions()
+    val actions = testDataScope().newActionRunner()
     val handle = actions.run {}
 
     handle.assertPending()
@@ -102,7 +102,7 @@ class TestFixturesTest {
       )
 
     query.requestFetch(force = true).assertFailed<IllegalStateException>()
-    data.newActions().run { throw IllegalArgumentException("command failed") }
+    data.newActionRunner().run { throw IllegalArgumentException("command failed") }
 
     assertThat(data.fetchFailures.assertSingle<IllegalStateException>().message)
       .isEqualTo("fetch failed")
@@ -115,7 +115,7 @@ class TestFixturesTest {
     val data = testDataScope(eager = true)
     val own = TestFailures()
 
-    data.newActions(own).run { error("boom") }
+    data.newActionRunner(own).run { error("boom") }
 
     data.actionFailures.assertNone()
     own.assertSingle<IllegalStateException>()
@@ -320,7 +320,7 @@ class TestFixturesTest {
     val screen = factory.create(owner)
     val app = factory.create(backgroundScope)
 
-    screen.newActions().run { error("boom") }
+    screen.newActionRunner().run { error("boom") }
     assertThat(app.actionFailures.take()).hasSize(1)
 
     val send = TestSend<String>()
@@ -338,7 +338,7 @@ class TestFixturesTest {
   @Test
   fun `suspending assertions wait for work that is not eager`() = runTest {
     val data = testDataScope()
-    val actions = data.newActions()
+    val actions = data.newActionRunner()
 
     actions.run {}.awaitSucceeded()
     assertThat(actions.run { error("boom") }.awaitFailed<IllegalStateException>().message)
@@ -355,8 +355,11 @@ class TestFixturesTest {
     handle.succeed()
     handle.assertSucceeded()
 
+    // Each rejected call leaves the handle as it settled
     assertFailsWith<IllegalStateException> { handle.fail(IllegalStateException("late")) }
+    handle.assertSucceeded()
     assertFailsWith<IllegalStateException> { handle.start() }
+    handle.assertSucceeded()
   }
 
   @Test

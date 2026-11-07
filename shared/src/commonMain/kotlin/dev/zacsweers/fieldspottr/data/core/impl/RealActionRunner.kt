@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
-import dev.zacsweers.fieldspottr.data.core.DataActions
+import dev.zacsweers.fieldspottr.data.core.ActionRunner
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
@@ -30,14 +30,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * [DataActions] over a map from each key to its newest entry. Each entry links to the one ahead of
+ * [ActionRunner] over a map from each key to its newest entry. Each entry links to the one ahead of
  * it, so a new command finds its turn by walking back along its key.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
-internal class RealDataActions(
+internal class RealActionRunner(
   private val scope: CoroutineScope,
   private val onFailure: (Throwable) -> Unit,
-) : DataActions {
+) : ActionRunner {
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val tails = AtomicReference(persistentHashMapOf<ChainKey, Entry>())
 
@@ -139,10 +139,15 @@ internal class RealDataActions(
         entry.predecessor = null
         entry.state.value = OperationState.Running
         try {
-          runScoped(block)
+          val finished = runScoped(block)
           // Cancelled while it ran: settles Cancelled even when the block returned normally
           ensureActive()
-          entry.state.value = OperationState.Succeeded
+          entry.state.value =
+            if (finished) {
+              OperationState.Succeeded
+            } else {
+              OperationState.Cancelled
+            }
         } catch (t: Throwable) {
           // Our own cancellation rethrows here
           ensureActive()
@@ -284,25 +289,50 @@ internal class RealDataActions(
 
 /**
  * Runs [block] in a scope of its own, so coroutines it starts in its context finish before the
- * command settles, and one that fails fails the command instead of the runner's scope. When the
- * block itself throws, the same exception instance is rethrown: `coroutineScope` would rethrow a
- * copy of it when stack trace recovery is on, and the handle should settle with exactly what the
- * block threw.
+ * command settles, and one that fails fails the command instead of the runner's scope. Returns
+ * false when the block cancelled that scope itself, which settles the command Cancelled without a
+ * report. A cancellation thrown by something the block called while its scope was still active,
+ * like a timeout, is a failure like any other.
+ *
+ * When the block itself throws, the same exception instance is rethrown: `coroutineScope` would
+ * rethrow a copy of it when stack trace recovery is on, and the handle should settle with exactly
+ * what the block threw. Its children are cancelled first and waited for, and one whose cleanup
+ * throws something else has that attached to the block's exception as suppressed, so the cause that
+ * ended the command is the one reported.
  */
-private suspend fun runScoped(block: suspend () -> Unit) {
+private suspend fun runScoped(block: suspend () -> Unit): Boolean {
   var thrown: Throwable? = null
-  coroutineScope {
-    try {
-      block()
-    } catch (t: Throwable) {
-      // A child that failed cancelled this scope, and coroutineScope throws the child's failure
-      ensureActive()
-      thrown = t
-      // As coroutineScope does when its block throws
-      coroutineContext.cancelChildren()
+  try {
+    coroutineScope {
+      try {
+        block()
+      } catch (t: Throwable) {
+        // A child that failed, or the block itself, cancelled this scope. coroutineScope then
+        // throws the child's failure, or a cancellation.
+        ensureActive()
+        thrown = t
+        // As coroutineScope does when its block throws. It waits for them below.
+        coroutineContext.cancelChildren()
+      }
+    }
+  } catch (t: Throwable) {
+    // The command's own cancellation, which its caller settles
+    currentCoroutineContext().ensureActive()
+    val failure = thrown
+    when {
+      failure != null -> {
+        if (t !== failure && t !is CancellationException) {
+          failure.addSuppressed(t)
+        }
+        throw failure
+      }
+      t is CancellationException -> return false
+      // A child that failed
+      else -> throw t
     }
   }
   thrown?.let { throw it }
+  return true
 }
 
 /**
@@ -314,7 +344,7 @@ private suspend fun runScoped(block: suspend () -> Unit) {
 internal class Entry(
   val mode: OnPrevious,
   val tag: Any?,
-  val runner: RealDataActions,
+  val runner: RealActionRunner,
   chainKey: ChainKey?,
 ) {
   // Cleared once the job completes
@@ -352,7 +382,7 @@ internal class Entry(
 }
 
 /**
- * A handle from [DataActions]. Until its command settles it knows the command, so it can tell when
+ * A handle from [ActionRunner]. Until its command settles it knows the command, so it can tell when
  * waiting on it from inside another command would never end.
  */
 @OptIn(DelicateDataLayerApi::class)
@@ -413,12 +443,12 @@ internal fun Operation.Companion.of(source: StateFlow<OperationState>): Operatio
 
 /**
  * Runs [handler] once this handle's command has finished, also when it was cancelled before it
- * started. [handler] must be quick and must not throw. Only handles from [DataActions] know when
+ * started. [handler] must be quick and must not throw. Only handles from [ActionRunner] know when
  * their command finishes, so any other handle fails here.
  */
 internal fun Operation.invokeOnSettled(handler: () -> Unit) {
   val settled = (this as? RunnerOperation)?.settled
-  requireNotNull(settled) { "$this does not come from DataActions" }
+  requireNotNull(settled) { "$this does not come from ActionRunner" }
   settled.invokeOnCompletion { handler() }
 }
 

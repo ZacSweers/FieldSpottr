@@ -38,7 +38,7 @@ sealed interface OperationState {
 }
 
 /**
- * A handle on one unit of work, such as a command submitted to [DataActions] or a fetch a query
+ * A handle on one unit of work, such as a command submitted to [ActionRunner] or a fetch a query
  * started. [state] reports where the work stands and [await] suspends until it settles. The handle
  * is only a window onto the work: observing it changes nothing, and dropping it never cancels the
  * work.

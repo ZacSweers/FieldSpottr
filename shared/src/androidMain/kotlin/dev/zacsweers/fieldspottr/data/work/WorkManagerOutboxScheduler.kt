@@ -18,12 +18,15 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Keeps a drain request queued while rows wait, so the process comes back once the network is there
- * even when the app was killed meanwhile, and stays until the rows are gone. While rows can send
- * now, one request stays queued under [DRAIN_NOW]. It is enqueued with KEEP, so every report after
- * the first finds the request already there and costs nothing. A backoff queues a request under
- * [DRAIN_AT_DEADLINE], delayed until the deadline. It is enqueued with REPLACE, so each report
- * moves it to the newest reported deadline, which is always the earliest among the waiting rows.
- * Both requests run [OutboxDrainWorker].
+ * even when the app was killed meanwhile, and stays until the rows are gone. Rows that can send now
+ * queue a request under [DRAIN_NOW], with APPEND_OR_REPLACE. A drain that already saw the backlog
+ * empty may still be running when a new row is reported, and KEEP would drop that report, so the
+ * new request runs after it instead. One that failed or was cancelled is replaced. The factory
+ * tells each change once, so consecutive Ready reports reach this as one, and a new request follows
+ * only a change, like a row enqueued after the backlog emptied. A backoff queues a request under
+ * [DRAIN_AT_DEADLINE], delayed until the deadline, apart from the immediate one. It is enqueued
+ * with REPLACE, so each report moves it to the newest reported deadline, which is always the
+ * earliest among the waiting rows. Both requests run [OutboxDrainWorker].
  *
  * [workManager] is read on the first report, not at construction, so the app can finish the graph
  * that the worker factory needs before WorkManager initializes. This depends on the core API and
@@ -39,7 +42,7 @@ class WorkManagerOutboxScheduler(
       OutboxBacklog.Ready ->
         workManager.value.enqueueUniqueWork(
           DRAIN_NOW,
-          ExistingWorkPolicy.KEEP,
+          ExistingWorkPolicy.APPEND_OR_REPLACE,
           drain(Duration.ZERO),
         )
       is OutboxBacklog.BackingOff -> {

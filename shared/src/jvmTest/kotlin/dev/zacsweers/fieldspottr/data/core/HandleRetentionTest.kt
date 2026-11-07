@@ -6,7 +6,7 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
-import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
+import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
@@ -14,6 +14,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import java.lang.reflect.Modifier
 import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicReference
@@ -33,7 +34,7 @@ class HandleRetentionTest {
   @Test
   fun `a settled handle does not keep its command's inputs`() = runTest {
     val input = ByteArray(1 shl 20)
-    val handle = testDataScope().newActions().run { check(input.isNotEmpty()) }
+    val handle = testDataScope().newActionRunner().run { check(input.isNotEmpty()) }
     testScheduler.runCurrent()
 
     handle.assertSucceeded()
@@ -69,7 +70,7 @@ class HandleRetentionTest {
   fun `a settled handle does not keep its runner's failure handler`() = runTest {
     val reports = ByteArray(1 shl 20)
     val owner = CoroutineScope(backgroundScope.coroutineContext + Job())
-    val handle = RealDataActions(owner, onFailure = { reports[0] = 1 }).run {}
+    val handle = RealActionRunner(owner, onFailure = { reports[0] = 1 }).run {}
     testScheduler.runCurrent()
     owner.cancel()
     testScheduler.runCurrent()
@@ -80,7 +81,7 @@ class HandleRetentionTest {
 
   @Test
   fun `a superseded handle does not keep the failure of the command before it`() = runTest {
-    val actions = RealDataActions(backgroundScope, onFailure = {})
+    val actions = RealActionRunner(backgroundScope, onFailure = {})
     val response = ByteArray(1 shl 20)
     val release = CompletableDeferred<Unit>()
     val failed =
@@ -108,8 +109,8 @@ class HandleRetentionTest {
   fun `a query does not keep a failed automatic check after a later refresh`() = runTest {
     val state = MutableStateFlow<Fetched<String>?>(Fetched("old", TestClock.DEFAULT_START))
     val store =
-      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
-        state.value = Fetched(value, fetchedAt)
+      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+        state.writeFetched(value, fetchedAt, keepsStored)
       }
     var thrown: ResponseException? = null
     val fetch =
@@ -140,7 +141,7 @@ class HandleRetentionTest {
   @Test
   fun `a settled handle does not keep its key`() = runTest {
     val key = ByteArray(1 shl 20)
-    val handle = testDataScope().newActions().run(Ordering.Keyed(key)) {}
+    val handle = testDataScope().newActionRunner().run(Ordering.Keyed(key)) {}
     testScheduler.runCurrent()
 
     handle.assertSucceeded()

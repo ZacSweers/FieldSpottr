@@ -7,6 +7,7 @@ import androidx.datastore.core.okio.OkioSerializer
 import androidx.datastore.core.okio.OkioStorage
 import dev.zacsweers.fieldspottr.data.core.testing.QueryStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore
+import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
@@ -30,8 +31,8 @@ class ComposedQueryStoreContractTest : QueryStoreContract() {
   // No invalidate, so this covers the default that rewrites the value with a stale time
   override fun TestScope.newStore(): QueryStore<String> {
     val state = MutableStateFlow<Fetched<String>?>(null)
-    return QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
-      state.value = Fetched(value, fetchedAt)
+    return QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+      state.writeFetched(value, fetchedAt, keepsStored)
     }
   }
 }

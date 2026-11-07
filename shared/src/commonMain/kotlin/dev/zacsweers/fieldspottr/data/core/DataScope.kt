@@ -14,14 +14,14 @@ import kotlinx.serialization.serializer
 
 /**
  * The entry point for a repository's data work. It builds the repository's reads ([query] and
- * [keyed]), its command runner ([newActions]) and its writes that must reach the server ([outbox],
- * [mutableStore] and [mutableStores]). Everything built here runs in [scope] and stops when that
- * scope is cancelled, so choosing the data scope chooses how long the work lives.
+ * [keyed]), its command runner ([newActionRunner]) and its writes that must reach the server
+ * ([outbox], [optimisticStore] and [optimisticStores]). Everything built here runs in [scope] and
+ * stops when that scope is cancelled, so choosing the data scope chooses how long the work lives.
  *
  * A repository takes one from the graph, like an app-scoped binding, or builds one over its own
  * scope with [Factory.create]. The failure handlers, clock, outbox stores and network state come
  * from the factory. Three words recur in these docs: an action is a repository function like
- * `star(id)`, a command is the block that action submits to [DataActions.run], and an [Operation]
+ * `star(id)`, a command is the block that action submits to [ActionRunner.run], and an [Operation]
  * is the handle the caller gets back.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
@@ -40,7 +40,7 @@ interface DataScope {
    * name. When [onFailure] is null they go to the `onActionFailure` handler the factory was built
    * with, which covers every failure other than a fetch.
    */
-  fun newActions(onFailure: ((Throwable) -> Unit)? = null): DataActions
+  fun newActionRunner(onFailure: ((Throwable) -> Unit)? = null): ActionRunner
 
   /**
    * A query over [store] that fills it with [fetch]. Its checks, fetches and store calls run on
@@ -114,25 +114,25 @@ interface DataScope {
   ): Outbox<E>
 
   /**
-   * The store under [mutableStore] and [mutableStores], which choose a [deliver] for a server that
-   * answers each change with nothing or with its value. Call one of those, and this only for a
+   * The store under [optimisticStore] and [optimisticStores], which choose a [deliver] for a server
+   * that answers each change with nothing or with its value. Call one of those, and this only for a
    * server that does both. It is a store for each key over the store [base] gives for it, whose
-   * values callers change before the server confirms them, as [MutableQueryStore] describes, with
-   * every waiting change kept as a row in the outbox called [name], opened from the factory's store
-   * set. Only one outbox per name may run at a time, so build the set once, in the one owner that
-   * changes this data, just as with [outbox]. [base] is called once per key, and the store it
+   * values callers change before the server confirms them, as [OptimisticQueryStore] describes,
+   * with every waiting change kept as a row in the outbox called [name], opened from the factory's
+   * store set. Only one outbox per name may run at a time, so build the set once, in the one owner
+   * that changes this data, just as with [outbox]. [base] is called once per key, and the store it
    * returns serves that key's views and its commits for as long as this set lives. Keys need a
    * stable `toString`, which orders the rows, and [keySerializer], which stores them.
    *
-   * @param apply the change [mutation] makes to the current value, with the contract [mutableStore]
-   *   describes: cheap, pure and idempotent.
+   * @param apply the change [mutation] makes to the current value, with the contract
+   *   [optimisticStore] describes: cheap, pure and idempotent.
    * @param deliver sends one change, with the row's id as the request's idempotency key, and
    *   returns what the truth takes: [Delivery.Acknowledged] applies the change to it with [apply],
    *   and [Delivery.Replaced] writes the server's value to it as fresh data. It runs on this
    *   scope's dispatcher, as [outbox]'s send does, and throws [PermanentFailure] for a rejection
    *   that retrying cannot fix.
    */
-  fun <K : Any, T, M> mutableStores(
+  fun <K : Any, T, M> optimisticStores(
     name: String,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
@@ -140,7 +140,7 @@ interface DataScope {
     apply: (current: T?, mutation: M) -> T?,
     deliver: suspend (key: K, mutation: M, id: EntryId) -> Delivery<T>,
     retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
-  ): MutableQueryStores<K, T, M>
+  ): OptimisticQueryStores<K, T, M>
 
   /**
    * Builds data scopes that share their failure handlers, clock, outbox store set, network state
@@ -174,7 +174,12 @@ interface DataScope {
  * runners, outbox drains, and query commands that fail without a fetch, like an invalidate() whose
  * store throws. Outboxes open their rows on [stores], drain while [online] is true, and tell
  * [scheduler] when rows wait, as [OutboxScheduler] describes. Pass scopes on `Dispatchers.Default`,
- * not on Main, as [DataActions] explains.
+ * not on Main, as [ActionRunner] explains.
+ *
+ * [canRetrySend] tells whether a send that threw may succeed on a later attempt, like a timeout
+ * against a 4xx response. False fails the row at once: it is marked failed, its undo runs, and the
+ * next row on its delivery key sends. A [PermanentFailure] and the retry policy's attempt limit
+ * stop retries too. A throw from [canRetrySend] is reported, and the send counts as retryable.
  */
 operator fun DataScope.Factory.Companion.invoke(
   onFailure: (Throwable) -> Unit,
@@ -183,8 +188,9 @@ operator fun DataScope.Factory.Companion.invoke(
   stores: OutboxStores = InMemoryOutboxStores(),
   scheduler: OutboxScheduler = OutboxScheduler.None,
   clock: Clock = Clock.System,
+  canRetrySend: (Throwable) -> Boolean = { true },
 ): DataScope.Factory =
-  RealDataScopeFactory(onFailure, onActionFailure, online, stores, scheduler, clock)
+  RealDataScopeFactory(onFailure, onActionFailure, online, stores, scheduler, clock, canRetrySend)
 
 /** [DataScope.outbox] with the serializer for a `@Serializable` payload. */
 inline fun <reified E> DataScope.outbox(

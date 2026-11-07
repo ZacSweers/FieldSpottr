@@ -57,6 +57,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.transformLatest
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
@@ -120,7 +122,7 @@ interface PermitRepository {
  * prewarm() / refresh()
  *   |
  *   v
- * sync (DataActions, one at a time) ----> its handle ----> loadingMessage
+ * sync (ActionRunner, one at a time) ----> its handle ----> loadingMessage
  *   |
  *   |  each query downloads from REPO_DATA_BASE_URL and writes its own store
  *   |
@@ -172,7 +174,10 @@ internal constructor(
   private val manifestJson by lazy { appDirs.userData / "availability" / "manifest.json" }
 
   // Each fetch reports its own failure, so a failed sync only summarizes them
-  private val actions = data.newActions { logger.w(it) { "Permit data sync failed" } }
+  private val actions = data.newActionRunner { logger.w(it) { "Permit data sync failed" } }
+  // One area feed write at a time. Each reads its feed row before it writes, and two SQLite
+  // transactions that both read first can fail to upgrade to a write instead of waiting their turn.
+  private val feedWrites = Mutex()
 
   private val areasStore =
     StampedFileStore(
@@ -505,9 +510,9 @@ internal constructor(
           .map { row -> row?.takeIf { it.hash == area.hash }?.toFetched() },
       clear = { withContext(io) { db.await().clearAreaFeed(name) } },
       invalidate = { withContext(io) { db.await().invalidateAreaFeed(name) } },
-    ) { feed, fetchedAt ->
+    ) { feed, fetchedAt, keepsStored ->
       withContext(io) {
-        db.await().replaceAreaFeed(area, feed, fetchedAt.toEpochMilliseconds())
+        db.await().replaceAreaFeed(area, feed, fetchedAt.toEpochMilliseconds(), keepsStored)
       }
     }
   }
@@ -534,61 +539,74 @@ internal constructor(
     }
   }
 
-  /** Replaces [area]'s permits and its feed row in one transaction. */
+  /**
+   * Replaces [area]'s permits and its feed row in one transaction, unless [keepsStored] says the
+   * feed stored now for this manifest should stay. A row for another hash counts as nothing stored,
+   * as the feed store reads it.
+   */
   private suspend fun FSDatabase.replaceAreaFeed(
     area: AvailabilityManifestArea,
     feed: AreaFeed,
     fetchedAt: Long,
+    keepsStored: (storedAt: Instant) -> Boolean = { false },
   ) {
     val rows = checkNotNull(feed.rows) { "Only a downloaded feed has rows" }
     val areaName = area.resolvedAreaName
-    transaction {
-      fsdbQueries.deleteAreaPermits(areaName)
-      rows.forEach { row ->
-        if (row.end <= row.start) {
-          return@forEach
+    feedWrites.withLock {
+      transaction {
+        val stored = fsdbQueries.getAreaFeed(areaName).executeAsOneOrNull()
+        if (
+          stored != null && stored.hash == area.hash && keepsStored(stored.toFetched().fetchedAt)
+        ) {
+          return@transaction
         }
-        fsdbQueries.addPermit(
-          DbPermit(
-            recordId =
-              hashOf(
-                  row.sourceId ?: area.hash,
-                  row.areaName ?: areaName,
-                  row.groupName,
-                  row.fieldId,
-                  row.start,
-                  row.end,
-                )
-                .toLong(),
-            area = row.areaName ?: areaName,
-            groupName = row.groupName,
-            start = row.start,
-            end = row.end,
-            fieldId = row.fieldId,
-            type = row.kind,
-            name = row.title,
-            org = row.org,
-            status = row.status,
-            isOverlap =
-              if (row.isOverlap) {
-                1L
-              } else {
-                0L
-              },
-            advisory = row.advisoryText,
+        fsdbQueries.deleteAreaPermits(areaName)
+        rows.forEach { row ->
+          if (row.end <= row.start) {
+            return@forEach
+          }
+          fsdbQueries.addPermit(
+            DbPermit(
+              recordId =
+                hashOf(
+                    row.sourceId ?: area.hash,
+                    row.areaName ?: areaName,
+                    row.groupName,
+                    row.fieldId,
+                    row.start,
+                    row.end,
+                  )
+                  .toLong(),
+              area = row.areaName ?: areaName,
+              groupName = row.groupName,
+              start = row.start,
+              end = row.end,
+              fieldId = row.fieldId,
+              type = row.kind,
+              name = row.title,
+              org = row.org,
+              status = row.status,
+              isOverlap =
+                if (row.isOverlap) {
+                  1L
+                } else {
+                  0L
+                },
+              advisory = row.advisoryText,
+            )
+          )
+        }
+        fsdbQueries.updateAreaOp(DbArea(areaName, fetchedAt))
+        fsdbQueries.upsertAreaFeed(
+          DbAreaFeed(
+            name = areaName,
+            areaName = areaName,
+            feedGeneratedAt = feed.generatedAt ?: area.generatedAt,
+            feedFetchedAt = fetchedAt,
+            hash = area.hash,
           )
         )
       }
-      fsdbQueries.updateAreaOp(DbArea(areaName, fetchedAt))
-      fsdbQueries.upsertAreaFeed(
-        DbAreaFeed(
-          name = areaName,
-          areaName = areaName,
-          feedGeneratedAt = feed.generatedAt ?: area.generatedAt,
-          feedFetchedAt = fetchedAt,
-          hash = area.hash,
-        )
-      )
     }
   }
 

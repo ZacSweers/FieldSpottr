@@ -69,6 +69,28 @@ class OutboxBacklogTest {
   }
 
   @Test
+  fun `consecutive ready reports reach the scheduler once and a row after empty again`() = runTest {
+    val factory = factory(online = false)
+    val data = factory.create(backgroundScope)
+    val outbox = data.outbox<String>("test", send)
+    runCurrent()
+
+    // Each enqueue reports the backlog, and it stays Ready, so the scheduler hears it once
+    outbox.enqueue("a", key = "a")
+    outbox.enqueue("b", key = "b")
+    runCurrent()
+    assertThat(scheduler.calls).containsExactly(Ready)
+
+    data.online.value = true
+    factory.backlog.first { it == Empty }
+    data.online.value = false
+    // After the backlog emptied, a drain may already be finishing, so a new row is told again
+    outbox.enqueue("c")
+    factory.backlog.first { it == Ready }
+    assertThat(scheduler.calls).containsExactly(Ready, Ready)
+  }
+
+  @Test
   fun `a failed send reports when its backoff ends and then reports ready again`() = runTest {
     send.failTransiently()
     val factory = factory()

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path
@@ -40,6 +42,8 @@ internal class StampedFileStore<T : Any>(
 ) : QueryStore<T> {
   // Null until the first read loads the file
   private val loaded = MutableStateFlow<Loaded<T>?>(null)
+  // Takes turns between the calls that change the file, so a check and its write are one step
+  private val writes = Mutex()
 
   override val data: Flow<Fetched<T>?> = flow {
     if (loaded.value == null) {
@@ -51,23 +55,46 @@ internal class StampedFileStore<T : Any>(
   }
 
   override suspend fun write(value: T, fetchedAt: Instant) {
+    writes.withLock { store(value, fetchedAt) }
+  }
+
+  // The lock makes the check and the write one update, since this instance owns the file
+  override suspend fun writeFetched(
+    value: T,
+    fetchedAt: Instant,
+    keepsStored: (storedAt: Instant) -> Boolean,
+  ) {
+    writes.withLock {
+      val stored = data.first()
+      if (stored == null || !keepsStored(stored.fetchedAt)) {
+        store(value, fetchedAt)
+      }
+    }
+  }
+
+  override suspend fun clear() {
+    writes.withLock {
+      withContext(io) { fs.delete(path) }
+      loaded.value = Loaded(null)
+    }
+  }
+
+  // Only the fetch time changes, so the file stays as it is
+  override suspend fun invalidate() {
+    writes.withLock {
+      val current = data.first() ?: return
+      withContext(io) { stamp(QueryStore.INVALIDATED) }
+      loaded.value = Loaded(current.copy(fetchedAt = QueryStore.INVALIDATED))
+    }
+  }
+
+  /** Writes [value] and its stamp, then shows it. Callers hold [writes]. */
+  private suspend fun store(value: T, fetchedAt: Instant) {
     withContext(io) {
       writeAtomically(encode(value))
       stamp(fetchedAt)
     }
     loaded.value = Loaded(Fetched(value, fetchedAt))
-  }
-
-  override suspend fun clear() {
-    withContext(io) { fs.delete(path) }
-    loaded.value = Loaded(null)
-  }
-
-  // Only the fetch time changes, so the file stays as it is
-  override suspend fun invalidate() {
-    val current = data.first() ?: return
-    withContext(io) { stamp(QueryStore.INVALIDATED) }
-    loaded.value = Loaded(current.copy(fetchedAt = QueryStore.INVALIDATED))
   }
 
   private suspend fun stamp(fetchedAt: Instant) {

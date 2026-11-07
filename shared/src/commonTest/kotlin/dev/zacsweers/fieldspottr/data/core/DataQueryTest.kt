@@ -16,6 +16,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
+import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
@@ -45,8 +46,8 @@ class DataQueryTest {
   private val stored = MutableStateFlow<Fetched<Int>?>(null)
   // No invalidate, so these tests cover the default that rewrites the value with a stale time
   private val store =
-    QueryStore.of(stored, clear = { stored.value = null }) { value, fetchedAt ->
-      stored.value = Fetched(value, fetchedAt)
+    QueryStore.of(stored, clear = { stored.value = null }) { value, fetchedAt, keepsStored ->
+      stored.writeFetched(value, fetchedAt, keepsStored)
     }
   // One more than what is stored, so each fetch stores a value of its own
   private val fetch = TestFetch { (stored.value?.value ?: 0) + 1 }
@@ -250,6 +251,66 @@ class DataQueryTest {
   }
 
   @Test
+  fun `an older fetch paused in the store's write keeps what a newer fetch stored`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val row = MutableStateFlow<Fetched<Int>?>(null)
+    val writingOld = CompletableDeferred<Unit>()
+    val releaseOld = CompletableDeferred<Unit>()
+    // Pauses the older fetch inside the write, after the query has handed over its rule
+    val shared =
+      QueryStore.of(row, clear = { row.value = null }) { value, fetchedAt, keepsStored ->
+        if (value == 1) {
+          writingOld.complete(Unit)
+          releaseOld.await()
+        }
+        row.writeFetched(value, fetchedAt, keepsStored)
+      }
+    val freshness = Freshness.staleAfter(1.hours)
+    val older = data.query(shared, freshness = freshness, fetch = { 1 })
+    val newer = data.query(shared, freshness = freshness, fetch = { 2 })
+
+    val first = older.requestFetch(force = true)
+    writingOld.await()
+    data.clock.shift(1.minutes)
+    newer.requestFetch(force = true).awaitSucceeded()
+    assertThat(row.value?.value).isEqualTo(2)
+
+    releaseOld.complete(Unit)
+    first.awaitSucceeded()
+    assertThat(row.value).isEqualTo(Fetched(2, START + 1.minutes))
+  }
+
+  @Test
+  fun `a fetch replaces data stored with its own fetch time`() = runTest {
+    fetch.hold()
+    val query = dataQuery()
+
+    val request = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    // No newer than the fetch, so the fetch's value wins
+    store.write(100, START)
+    fetch.release()
+
+    request.awaitSucceeded()
+    assertThat(stored.value).isEqualTo(Fetched(101, START))
+  }
+
+  @Test
+  fun `a fetch replaces data stored with a fetch time ahead of the clock`() = runTest {
+    fetch.hold()
+    val query = dataQuery()
+
+    val request = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+    // A bad record, like one written before the clock was set back
+    store.write(100, START + 1.hours)
+    fetch.release()
+
+    request.awaitSucceeded()
+    assertThat(stored.value).isEqualTo(Fetched(101, START))
+  }
+
+  @Test
   fun `stored shows the store without fetching`() = runTest {
     stored.value = Fetched(1, START - 2.hours)
     val query = dataQuery()
@@ -282,9 +343,9 @@ class DataQueryTest {
     val state = MutableStateFlow<Fetched<Int>?>(null)
     val writes = mutableListOf<Int>()
     val store =
-      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
+      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
         writes += value
-        state.value = Fetched(value, fetchedAt)
+        state.writeFetched(value, fetchedAt, keepsStored)
       }
     val firstStarted = CompletableDeferred<Unit>()
     val release = CompletableDeferred<Unit>()
@@ -355,8 +416,8 @@ class DataQueryTest {
       emitAll(state)
     }
     val store =
-      QueryStore.of(slowReads, clear = { state.value = null }) { value, fetchedAt ->
-        state.value = Fetched(value, fetchedAt)
+      QueryStore.of(slowReads, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+        state.writeFetched(value, fetchedAt, keepsStored)
       }
     val query =
       testDataScope(clock = testClock(START))
@@ -376,12 +437,71 @@ class DataQueryTest {
   }
 
   @Test
+  fun `a collector that joins a check from before a clear fetches once`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(Fetched(1, START))
+    val checkRead = CompletableDeferred<Unit>()
+    val releaseCheck = CompletableDeferred<Unit>()
+    var reads = 0
+    // The first read, the check's, takes the fresh value and then pauses before it returns
+    val pausedFirstRead = flow {
+      if (reads++ == 0) {
+        val read = state.value
+        checkRead.complete(Unit)
+        releaseCheck.await()
+        emit(read)
+      } else {
+        emitAll(state)
+      }
+    }
+    val store =
+      QueryStore.of(pausedFirstRead, clear = { state.value = null }) { value, fetchedAt, keepsStored
+        ->
+        state.writeFetched(value, fetchedAt, keepsStored)
+      }
+    val fetchTwo = TestFetch { 2 }
+    val query =
+      testDataScope(clock = testClock(START))
+        .query(store, fetch = fetchTwo, freshness = Freshness.staleAfter(1.hours))
+    val check = query.requestFetch(force = false)
+    checkRead.await()
+
+    state.value = null
+    val seen = mutableListOf<Fetched<Int>?>()
+    backgroundScope.launch { query.data.collect { seen += it } }
+    testScheduler.runCurrent()
+    // The collector joined the check, which finds the value it read fresh and never fetches
+    releaseCheck.complete(Unit)
+    testScheduler.runCurrent()
+
+    check.assertSucceeded()
+    assertThat(fetchTwo.callCount).isEqualTo(1)
+    assertThat(seen.last()).isEqualTo(Fetched(2, START))
+  }
+
+  @Test
+  fun `an offline collector whose first fetch failed tries once`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    fetch.respond = { error("offline") }
+    val query = data.query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
+  }
+
+  @Test
   fun `an observer behind on older values does not recheck a clear again`() = runTest {
     val values = MutableSharedFlow<Fetched<Int>?>(replay = 1, extraBufferCapacity = 16)
     values.emit(Fetched(1, START))
     val store =
-      QueryStore.of(values, clear = { values.emit(null) }) { value, fetchedAt ->
-        values.emit(Fetched(value, fetchedAt))
+      QueryStore.of(values, clear = { values.emit(null) }) { value, fetchedAt, keepsStored ->
+        // Only this test's collector emits too, and it never writes, so the check needs no lock
+        val current = values.replayCache.lastOrNull()
+        if (current == null || !keepsStored(current.fetchedAt)) {
+          values.emit(Fetched(value, fetchedAt))
+        }
       }
     fetch.respond = { error("offline") }
     val query =
@@ -527,9 +647,9 @@ class DataQueryTest {
     val published = CompletableDeferred<Unit>()
     val finishWrite = CompletableDeferred<Unit>()
     val store =
-      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt ->
+      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
         // Visible before the write returns, like a database that notifies inside its transaction
-        state.value = Fetched(value, fetchedAt)
+        state.writeFetched(value, fetchedAt, keepsStored)
         published.complete(Unit)
         finishWrite.await()
       }
@@ -579,8 +699,9 @@ class DataQueryTest {
     val failingInvalidate =
       QueryStore.of(backing.data, clear = backing::clear, invalidate = { throw notMarked }) {
         value,
-        fetchedAt ->
-        backing.write(value, fetchedAt)
+        fetchedAt,
+        keepsStored ->
+        backing.writeFetched(value, fetchedAt, keepsStored)
       }
     val query = data.query(failingInvalidate, fetch, Freshness.staleAfter(1.hours))
 

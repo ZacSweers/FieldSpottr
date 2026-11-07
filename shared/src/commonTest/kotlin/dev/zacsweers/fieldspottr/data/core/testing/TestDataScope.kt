@@ -38,8 +38,9 @@ internal constructor(
   /** What fetches threw. */
   val fetchFailures: TestFailures,
   /**
-   * What commands threw, on runners from `newActions()`, inside outboxes, and in a query's commands
-   * that failed without a fetch. A runner built with its own handler reports there instead.
+   * What commands threw, on runners from `newActionRunner()`, inside outboxes, and in a query's
+   * commands that failed without a fetch. A runner built with its own handler reports there
+   * instead.
    */
   val actionFailures: TestFailures,
   /** The outbox rows, by outbox name. Tests read them through [outboxStore]. */
@@ -95,8 +96,8 @@ internal constructor(private val delegate: DataScope, val factory: TestDataScope
     get() = factory.fetchFailures
 
   /**
-   * What commands threw, on runners from [newActions] and inside outboxes. A runner built with its
-   * own handler reports there instead.
+   * What commands threw, on runners from [newActionRunner] and inside outboxes. A runner built with
+   * its own handler reports there instead.
    */
   val actionFailures: TestFailures
     get() = factory.actionFailures
@@ -132,6 +133,8 @@ fun TestScope.testDataScopeFactory(
   online: Boolean = true,
   /** Hears when rows wait, like a [RecordingOutboxScheduler]. */
   scheduler: OutboxScheduler = OutboxScheduler.None,
+  /** Whether a send that threw may succeed on a later attempt, as [DataScope.Factory] describes. */
+  canRetrySend: (Throwable) -> Boolean = { true },
 ): TestDataScopeFactory {
   val onlineState = MutableStateFlow(online)
   val fetchFailures = TestFailures()
@@ -145,6 +148,7 @@ fun TestScope.testDataScopeFactory(
       stores = stores,
       scheduler = scheduler,
       clock = clock,
+      canRetrySend = canRetrySend,
     )
   return TestDataScopeFactory(
     delegate,
@@ -171,4 +175,6 @@ fun TestScope.testDataScope(
   clock: TestClock = testClock(),
   online: Boolean = true,
   scheduler: OutboxScheduler = OutboxScheduler.None,
-): TestDataScope = testDataScopeFactory(eager, clock, online, scheduler).create(backgroundScope)
+  canRetrySend: (Throwable) -> Boolean = { true },
+): TestDataScope =
+  testDataScopeFactory(eager, clock, online, scheduler, canRetrySend).create(backgroundScope)

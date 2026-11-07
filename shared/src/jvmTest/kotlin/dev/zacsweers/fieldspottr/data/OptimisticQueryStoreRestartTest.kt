@@ -9,11 +9,11 @@ import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.InMemoryQueryStore
-import dev.zacsweers.fieldspottr.data.core.MutableQueryStore
+import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.invoke
-import dev.zacsweers.fieldspottr.data.core.mutableStore
+import dev.zacsweers.fieldspottr.data.core.optimisticStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -34,11 +34,11 @@ import kotlinx.serialization.Serializable
 import org.junit.Rule
 
 /**
- * A mutable store whose rows live in the app's SQLite database, across two owners in turn, the way
- * a process restart leaves them. The truth is one in-memory store both owners share, standing in
- * for a durable one, since the rows are what these tests check.
+ * An optimistic store whose rows live in the app's SQLite database, across two owners in turn, the
+ * way a process restart leaves them. The truth is one in-memory store both owners share, standing
+ * in for a durable one, since the rows are what these tests check.
  */
-class MutableQueryStoreRestartTest {
+class OptimisticQueryStoreRestartTest {
   @get:Rule val temporaryDatabase = TemporaryDatabase()
 
   @Serializable data class Add(val tag: String)
@@ -66,8 +66,8 @@ class MutableQueryStoreRestartTest {
   private fun TestScope.owner(): CoroutineScope =
     CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
 
-  private fun DataScope.tags(): MutableQueryStore<List<String>, Add> =
-    mutableStore<List<String>, Add>(
+  private fun DataScope.tags(): OptimisticQueryStore<List<String>, Add> =
+    optimisticStore<List<String>, Add>(
       name = "tags",
       base = truth,
       apply = { current, add -> current.orEmpty() + add.tag },

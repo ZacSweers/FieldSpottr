@@ -7,10 +7,10 @@ import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
-import dev.zacsweers.fieldspottr.data.core.MutableQueryStore
-import dev.zacsweers.fieldspottr.data.core.MutableQueryStores
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
+import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStores
 import dev.zacsweers.fieldspottr.data.core.Outbox
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
@@ -45,8 +45,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * [MutableQueryStores] over one outbox, whose rows live in [rows]. Each key's store is a view: the
- * key's base store, its truth, with that key's rows in flight applied on top.
+ * [OptimisticQueryStores] over one outbox, whose rows live in [rows]. Each key's store is a view:
+ * the key's base store, its truth, with that key's rows in flight applied on top.
  *
  * A sent change reaches the truth in two writes, the base store's and the row's status, which no
  * store makes atomic, and a fetch that started before the send finished can land after both with a
@@ -70,18 +70,19 @@ import kotlinx.coroutines.withContext
  * the server after it took the change, and a process that dies between the truth write and the
  * row's status relaunches with the row still sending and the change already in the truth. In both,
  * [apply] gets a value that already holds the change, so [apply] must be idempotent, as
- * [dev.zacsweers.fieldspottr.data.core.mutableStore] requires. Each commit checks this on the value
- * it folded, and the first change found not to be idempotent is reported to [onFailure], once.
+ * [dev.zacsweers.fieldspottr.data.core.optimisticStore] requires. Each commit checks this on the
+ * value it folded, and the first change found not to be idempotent is reported to [onFailure],
+ * once.
  *
  * Each key's truth has two writers, the query's fetch and the outbox's commit, and they take turns
  * on the key's lock. A fetch write is dropped when the truth's fetch time has moved past the fetch
- * meanwhile, the rule the query itself applies before it writes, applied here where the writers
- * meet, so a commit from a later time is never written over. A write or clear also waits for the
- * rows requested before it to be in the store, so the value it publishes never lacks a change
- * already made.
+ * meanwhile, by the rule the query passes to [QueryStore.writeFetched], applied here where the
+ * writers meet, so a commit from a later time is never written over. A write or clear also waits
+ * for the rows requested before it to be in the store, so the value it publishes never lacks a
+ * change already made.
  */
 @OptIn(DelicateDataLayerApi::class, ExperimentalAtomicApi::class)
-internal class RealMutableQueryStores<K : Any, T, M>(
+internal class RealOptimisticQueryStores<K : Any, T, M>(
   private val rows: OutboxStore<KeyedMutation<K, M>>,
   /** Builds the outbox over [rows] that drains with the send it is given. */
   outbox: (send: suspend (KeyedMutation<K, M>, EntryId) -> Unit) -> Outbox<KeyedMutation<K, M>>,
@@ -97,7 +98,7 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * attached, so [apply] never runs on a collector's thread, such as the main thread.
    */
   private val context: CoroutineContext,
-) : MutableQueryStores<K, T, M> {
+) : OptimisticQueryStores<K, T, M> {
   // Sent changes in commit order, kept until a fetch from after the send confirms each one or it
   // expires
   private val committed = MutableStateFlow(persistentListOf<Committed<K, T, M>>())
@@ -105,7 +106,7 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   private val reportedApply = AtomicBoolean(false)
   // One base store per key, shared by the key's views and its commits, so a store that keeps state
   // of its own, like one that caches what it loaded, sees every write. Kept for as long as this set
-  // lives, as mutableStores promises. Updated by compare-and-set only.
+  // lives, as optimisticStores promises. Updated by compare-and-set only.
   private val bases = AtomicReference(persistentHashMapOf<K, Base<T>>())
   // Changes whose rows are still being written, by key, so a write or clear can wait for the ones
   // requested before it. Settled entries are dropped as new ones come in. Updated by
@@ -121,7 +122,7 @@ internal class RealMutableQueryStores<K : Any, T, M>(
   internal val committedValues: Int
     get() = committed.value.count { it.hasValue }
 
-  override fun invoke(key: K): MutableQueryStore<T, M> = KeyStore(key, baseFor(key))
+  override fun invoke(key: K): OptimisticQueryStore<T, M> = KeyStore(key, baseFor(key))
 
   /** [key]'s base store, built on first use. The copy that loses a race was never written to. */
   private fun baseFor(key: K): Base<T> {
@@ -412,7 +413,7 @@ internal class RealMutableQueryStores<K : Any, T, M>(
    * [context], and only a value that differs from the last crosses to the collector.
    */
   private inner class KeyStore(private val key: K, private val base: Base<T>) :
-    MutableQueryStore<T, M> {
+    OptimisticQueryStore<T, M> {
     private val truth = base.store
 
     override val data: Flow<Fetched<T>?> =
@@ -428,37 +429,54 @@ internal class RealMutableQueryStores<K : Any, T, M>(
 
     /**
      * The query's fetch write, once the changes requested before it are in the store, so the value
-     * it publishes carries them. On the key's lock, a value older than what a commit wrote
-     * meanwhile is dropped, as the query would have dropped it had it seen the commit first. A
-     * truth time ahead of the clock is a bad record, which the fetch replaces.
+     * it publishes carries them. On the key's lock, a value is dropped when [keepsStored] says the
+     * truth should stay, like one older than what a commit wrote meanwhile, as the query would have
+     * dropped it had it seen the commit first. The truth's own [QueryStore.writeFetched] checks
+     * again, for a writer that shares the base store without this lock.
      *
      * A send that finished after the fetch started may be missing from the value, and only its
      * in-memory record would show it. So the truth takes those changes too, as [withSent] puts them
      * back, and a restart that has no records still shows them.
      */
-    override suspend fun write(value: T, fetchedAt: Instant) {
+    override suspend fun writeFetched(
+      value: T,
+      fetchedAt: Instant,
+      keepsStored: (storedAt: Instant) -> Boolean,
+    ) {
       awaitStored(key)
       base.lock.withLock {
         val storedAt = truth.data.first()?.fetchedAt
-        val newerStored = storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
-        if (!newerStored) {
+        if (storedAt == null || !keepsStored(storedAt)) {
           val sentSince = committed.value.filter { it.key == key && it.sentAt >= fetchedAt }
           val next = withSent(Fetched(value, fetchedAt), sentSince)
           // Before the write, so views count every change on record as in the folded truth both
           // before and after it lands, and never apply one twice
           sentSince.lastOrNull()?.let { newest ->
             committed.update { all ->
-              all.map { if (it === newest) it.alsoHeldBy(next) else it }.toPersistentList()
+              all
+                .map {
+                  if (it === newest) {
+                    it.alsoHeldBy(next)
+                  } else {
+                    it
+                  }
+                }
+                .toPersistentList()
             }
           }
           if (next == null) {
             truth.clear()
           } else {
-            truth.write(next.value, next.fetchedAt)
+            truth.writeFetched(next.value, next.fetchedAt, keepsStored)
           }
         }
       }
       prune(key, fetchedAt)
+    }
+
+    /** [writeFetched] over whatever the truth holds, with the sent changes it lacks folded in. */
+    override suspend fun write(value: T, fetchedAt: Instant) {
+      writeFetched(value, fetchedAt) { false }
     }
 
     override suspend fun clear() {
@@ -478,13 +496,14 @@ internal class RealMutableQueryStores<K : Any, T, M>(
     }
 
     override fun mutate(mutation: M): OutboxOperation =
-      this@RealMutableQueryStores.mutate(key, mutation)
+      this@RealOptimisticQueryStores.mutate(key, mutation)
 
-    override val pending: Flow<List<PendingMutation<M>>> = this@RealMutableQueryStores.pending(key)
+    override val pending: Flow<List<PendingMutation<M>>> =
+      this@RealOptimisticQueryStores.pending(key)
 
-    override fun retry(id: EntryId): Operation = this@RealMutableQueryStores.retry(id)
+    override fun retry(id: EntryId): Operation = this@RealOptimisticQueryStores.retry(id)
 
-    override fun discard(id: EntryId): Operation = this@RealMutableQueryStores.discard(id)
+    override fun discard(id: EntryId): Operation = this@RealOptimisticQueryStores.discard(id)
   }
 
   /**
@@ -555,11 +574,11 @@ private val OutboxStatus.isInFlight: Boolean
 /**
  * How many sent changes a set still has on record. For tests, which cannot see pruning otherwise.
  */
-internal val MutableQueryStores<*, *, *>.committedRecords: Int
-  get() = (this as RealMutableQueryStores<*, *, *>).committedRecords
+internal val OptimisticQueryStores<*, *, *>.committedRecords: Int
+  get() = (this as RealOptimisticQueryStores<*, *, *>).committedRecords
 
 /**
  * How many of a set's records keep a copy of the value. For tests, which cannot see it otherwise.
  */
-internal val MutableQueryStores<*, *, *>.committedValues: Int
-  get() = (this as RealMutableQueryStores<*, *, *>).committedValues
+internal val OptimisticQueryStores<*, *, *>.committedValues: Int
+  get() = (this as RealOptimisticQueryStores<*, *, *>).committedValues

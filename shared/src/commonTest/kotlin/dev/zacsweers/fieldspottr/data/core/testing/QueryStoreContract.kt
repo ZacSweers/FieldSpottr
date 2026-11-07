@@ -4,11 +4,15 @@ package dev.zacsweers.fieldspottr.data.core.testing
 
 import app.cash.turbine.test
 import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -86,6 +90,64 @@ abstract class QueryStoreContract {
       store.clear()
       assertNull(awaitItem())
     }
+  }
+
+  @Test
+  fun `a fetch write fills an empty store without asking`() = runTest {
+    val store = newStore()
+
+    store.writeFetched("a", FETCHED) { error("Nothing is stored to keep") }
+    assertEquals(Fetched("a", FETCHED), store.data.first())
+  }
+
+  @Test
+  fun `a fetch write keeps what is stored when asked to`() = runTest {
+    val store = newStore()
+    val asked = mutableListOf<Instant>()
+
+    store.write("a", LATER)
+    store.writeFetched("b", FETCHED) { storedAt -> true.also { asked += storedAt } }
+    assertEquals(Fetched("a", LATER), store.data.first())
+    assertEquals(LATER, asked.distinct().single())
+  }
+
+  @Test
+  fun `a fetch write replaces what is stored when not asked to keep it`() = runTest {
+    val store = newStore()
+
+    store.write("a", FETCHED)
+    store.writeFetched("b", LATER) { false }
+    assertEquals(Fetched("b", LATER), store.data.first())
+  }
+
+  @Test
+  fun `an older fetch never replaces what a newer fetch stored meanwhile`() = runTest {
+    val data = testDataScope(clock = testClock(FETCHED))
+    val store = newStore()
+    val olderRead = CompletableDeferred<Unit>()
+    val releaseOlder = CompletableDeferred<Unit>()
+    val freshness = Freshness.staleAfter(1.hours)
+    val older =
+      data.query(
+        store,
+        freshness = freshness,
+        fetch = {
+          olderRead.complete(Unit)
+          releaseOlder.await()
+          "older"
+        },
+      )
+    val newer = data.query(store, freshness = freshness, fetch = { "newer" })
+
+    // The older fetch reads the server first, and the newer one stores its value meanwhile
+    val first = older.requestFetch(force = true)
+    olderRead.await()
+    data.clock.shift(1.minutes)
+    newer.requestFetch(force = true).awaitSucceeded()
+    releaseOlder.complete(Unit)
+    first.awaitSucceeded()
+
+    assertEquals(Fetched("newer", FETCHED + 1.minutes), store.data.first())
   }
 
   private companion object {

@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
 
-/** Where a mutable store's overlay runs, which takes a named real thread to tell. */
-class MutableQueryStoreDispatcherTest {
+/** Where an optimistic store's overlay runs, which takes a named real thread to tell. */
+class OptimisticQueryStoreDispatcherTest {
   @Serializable data class Add(val tag: String)
 
   @Test
@@ -30,7 +30,7 @@ class MutableQueryStoreDispatcherTest {
       val data = testDataScopeFactory(online = false).create(scope)
       val threads = CopyOnWriteArraySet<String>()
       val store =
-        data.mutableStore<List<String>, Add>(
+        data.optimisticStore<List<String>, Add>(
           name = "tags",
           base = QueryStore.inMemory(Fetched(listOf("a"), START)),
           apply = { current, add ->

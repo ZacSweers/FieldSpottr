@@ -4,10 +4,12 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
-import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
+import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
@@ -15,14 +17,20 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -31,21 +39,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 
 /**
  * How the runner settles handles and reports failures, and the guard that fails a wait which can
  * never end.
  */
-class DataActionsTest {
+class ActionRunnerTest {
 
   private lateinit var data: TestDataScope
 
-  private fun TestScope.actions(): DataActions {
+  private fun TestScope.actions(): ActionRunner {
     if (!::data.isInitialized) {
       data = testDataScope()
     }
-    return data.newActions()
+    return data.newActionRunner()
   }
 
   @Test
@@ -77,7 +86,7 @@ class DataActionsTest {
       val scope =
         CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
       val data = testDataScopeFactory().create(scope)
-      val actions = data.newActions()
+      val actions = data.newActionRunner()
       val started = CompletableDeferred<Unit>()
       val release = CompletableDeferred<Unit>()
 
@@ -134,7 +143,7 @@ class DataActionsTest {
   fun `a runner whose scope ended keeps none of the keys given to it`() = runTest {
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val actions = RealDataActions(owner, onFailure = {})
+    val actions = RealActionRunner(owner, onFailure = {})
     owner.cancel()
     var ran = 0
 
@@ -256,8 +265,8 @@ class DataActionsTest {
     val own = TestFailures()
     val boom = IllegalStateException("boom")
 
-    data.newActions(own).run(Ordering.Serial) { throw boom }.await()
-    data.newActions().run(Ordering.Serial) { throw boom }.await()
+    data.newActionRunner(own).run(Ordering.Serial) { throw boom }.await()
+    data.newActionRunner().run(Ordering.Serial) { throw boom }.await()
 
     assertThat(own.all).containsExactly(boom)
     assertThat(data.actionFailures.all).containsExactly(boom)
@@ -268,7 +277,7 @@ class DataActionsTest {
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
     val data = testDataScopeFactory().create(owner)
-    val actions = data.newActions()
+    val actions = data.newActionRunner()
     val finish = CompletableDeferred<Unit>()
 
     val command = actions.run {
@@ -303,5 +312,82 @@ class DataActionsTest {
 
     assertThat(handle.awaitFailed<IllegalStateException>()).isSameInstanceAs(cause)
     assertThat(data.actionFailures.assertSingle<IllegalStateException>()).isSameInstanceAs(cause)
+  }
+
+  @Test
+  fun `a command keeps its own error when a child's cleanup also fails`() = runTest {
+    val commandError = IllegalStateException("Rejected")
+    val cleanupError = IllegalArgumentException("Cleanup failed")
+    val childWaiting = CompletableDeferred<Unit>()
+
+    val handle =
+      actions().run {
+        CoroutineScope(currentCoroutineContext()).launch(start = CoroutineStart.UNDISPATCHED) {
+          try {
+            childWaiting.complete(Unit)
+            awaitCancellation()
+          } finally {
+            throw cleanupError
+          }
+        }
+        childWaiting.await()
+        throw commandError
+      }
+
+    val cause = handle.awaitFailed<IllegalStateException>()
+    assertThat(cause).isSameInstanceAs(commandError)
+    assertThat(data.actionFailures.assertSingle<IllegalStateException>()).isSameInstanceAs(cause)
+    // The child's failure crosses a coroutine boundary, so stack trace recovery may copy it
+    val suppressed = cause.suppressedExceptions.single()
+    assertThat(suppressed).isInstanceOf<IllegalArgumentException>()
+    assertThat(suppressed.message).isEqualTo(cleanupError.message)
+  }
+
+  @Test
+  fun `a command that cancels its own scope settles cancelled without a report`() = runTest {
+    val handle =
+      actions().run {
+        currentCoroutineContext().cancel()
+        yield()
+      }
+
+    handle.awaitCancelled()
+    data.actionFailures.assertNone()
+  }
+
+  @Test
+  fun `a cancellation from a call the command makes fails it`() = runTest {
+    val timedOut = actions().run { withTimeout(1.seconds) { awaitCancellation() } }
+    val thrown = actions().run { throw CancellationException("A dependency stopped") }
+
+    timedOut.awaitFailed<TimeoutCancellationException>()
+    thrown.awaitFailed<CancellationException>()
+    assertThat(data.actionFailures.all).hasSize(2)
+  }
+
+  @Test
+  fun `a rollback runs when the scope stops during a write that cannot be cancelled`() = runTest {
+    var rolledBack = false
+    val writing = CompletableDeferred<Unit>()
+    val finishWrite = CompletableDeferred<Unit>()
+
+    val actions = actions()
+    val handle =
+      actions.run(Ordering.Keyed("k", OnPrevious.Cancel)) {
+        rollbackOnFailure({ rolledBack = true }) {
+          withContext(NonCancellable) {
+            writing.complete(Unit)
+            finishWrite.await()
+          }
+        }
+      }
+    writing.await()
+    // A newer command on the key cancels this one while its write runs
+    actions.run(Ordering.Keyed("k", OnPrevious.Cancel)) {}
+    testScheduler.runCurrent()
+    finishWrite.complete(Unit)
+
+    handle.awaitCancelled()
+    assertThat(rolledBack).isTrue()
   }
 }

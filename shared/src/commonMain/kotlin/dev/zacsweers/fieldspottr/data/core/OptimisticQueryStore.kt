@@ -32,15 +32,15 @@ import kotlinx.serialization.builtins.serializer
  * when a fetch lands or a send succeeds, which means it always holds something the server said, and
  * a restart shows the truth plus the rows still waiting. The `apply` function runs on the data
  * scope's dispatcher, again on every change to the truth or the rows, so it must be cheap and pure.
- * It must also be idempotent, as [mutableStore] explains. The store checks this on every commit,
+ * It must also be idempotent, as [optimisticStore] explains. The store checks this on every commit,
  * and the first change found not to be idempotent is reported once to the factory's
  * `onActionFailure` handler. A commit that fails in the base store, like on a full disk, is
  * reported there too, and the change still counts as sent, since the server has it.
  *
- * Built by [mutableStore], or per key by [mutableStores].
+ * Built by [optimisticStore], or per key by [optimisticStores].
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
-interface MutableQueryStore<T, M> : QueryStore<T> {
+interface OptimisticQueryStore<T, M> : QueryStore<T> {
   /**
    * Shows [mutation] in [data] now, stores it as a row and sends it after the rows before it. The
    * handle follows the row: Succeeded once sent, Failed once rejected for good or out of attempts,
@@ -85,13 +85,14 @@ data class PendingMutation<M>(
 )
 
 /**
- * One [MutableQueryStore] per key, over the stores [mutableStores] was given, sharing one set of
- * rows. It is the store function a [DataScope.keyed] query takes, so build the queries with it and
- * call [mutate] with the key. Rows for one key send in order, and keys do not wait on each other.
+ * One [OptimisticQueryStore] per key, over the stores [optimisticStores] was given, sharing one set
+ * of rows. It is the store function a [DataScope.keyed] query takes, so build the queries with it
+ * and call [mutate] with the key. Rows for one key send in order, and keys do not wait on each
+ * other.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
-interface MutableQueryStores<K : Any, T, M> : (K) -> MutableQueryStore<T, M> {
-  /** [MutableQueryStore.mutate] on [key]'s store. */
+interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, M> {
+  /** [OptimisticQueryStore.mutate] on [key]'s store. */
   fun mutate(key: K, mutation: M): OutboxOperation
 
   /** [key]'s changes the server has not confirmed, oldest first. */
@@ -100,24 +101,24 @@ interface MutableQueryStores<K : Any, T, M> : (K) -> MutableQueryStore<T, M> {
   /** How many changes across every key the server has not confirmed, for a sync badge. */
   val pendingCount: Flow<Int>
 
-  /** [MutableQueryStore.retry] for a row from any key. */
+  /** [OptimisticQueryStore.retry] for a row from any key. */
   fun retry(id: EntryId): Operation
 
-  /** [MutableQueryStore.discard] for a row from any key. */
+  /** [OptimisticQueryStore.discard] for a row from any key. */
   fun discard(id: EntryId): Operation
 }
 
 /**
- * One row of a mutable store's outbox: the key it changes and the change. The factory's store set
- * keeps the rows under the store's name with this payload, so a test reads them back as
+ * One row of an optimistic store's outbox: the key it changes and the change. The factory's store
+ * set keeps the rows under the store's name with this payload, so a test reads them back as
  * `outboxStore<KeyedMutation<K, M>>(name)`. A single store's key is `Unit`.
  */
 @Serializable data class KeyedMutation<K, M>(val key: K, val mutation: M)
 
 /**
  * What the server answered one change with, from the `deliver` function of
- * [DataScope.mutableStores]. The `send` and `exchange` forms of [mutableStore] and [mutableStores]
- * build it, so only a store that mixes the two needs it.
+ * [DataScope.optimisticStores]. The `send` and `exchange` forms of [optimisticStore] and
+ * [optimisticStores] build it, so only a store that mixes the two needs it.
  */
 sealed interface Delivery<out T> {
   /** Nothing. The change is applied to the truth with `apply`. */
@@ -129,12 +130,12 @@ sealed interface Delivery<out T> {
 
 /**
  * A store over [base] whose value callers change before the server confirms it, as
- * [MutableQueryStore] describes, for a server that answers each change with nothing. [base] holds
- * the truth: the last fetched value, plus each change once it has been sent. Every waiting change
- * is kept as a row in the outbox called [name], opened from the factory's store set. Only one
- * outbox per name may run at a time, so build this store once, in the one owner that changes this
- * data, just as with [DataScope.outbox]. Calling `clear()` on the returned store clears the truth
- * in [base] and drops the waiting changes with it.
+ * [OptimisticQueryStore] describes, for a server that answers each change with nothing. [base]
+ * holds the truth: the last fetched value, plus each change once it has been sent. Every waiting
+ * change is kept as a row in the outbox called [name], opened from the factory's store set. Only
+ * one outbox per name may run at a time, so build this store once, in the one owner that changes
+ * this data, just as with [DataScope.outbox]. Calling `clear()` on the returned store clears the
+ * truth in [base] and drops the waiting changes with it.
  *
  * @param apply the change [mutation] makes to the current value. Null in means nothing is stored
  *   yet, and null out means the change removes the value. It runs on the data scope's dispatcher,
@@ -151,15 +152,15 @@ sealed interface Delivery<out T> {
  *   [PermanentFailure] for a rejection that retrying cannot fix.
  * @param serializer stores each change as a row. The default serves a `@Serializable` mutation.
  */
-inline fun <T, reified M> DataScope.mutableStore(
+inline fun <T, reified M> DataScope.optimisticStore(
   name: String,
   base: QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
   noinline send: suspend (mutation: M, id: EntryId) -> Unit,
   retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   serializer: KSerializer<M> = kotlinx.serialization.serializer<M>(),
-): MutableQueryStore<T, M> =
-  mutableStores(
+): OptimisticQueryStore<T, M> =
+  optimisticStores(
       name = name,
       base = { base },
       keySerializer = Unit.serializer(),
@@ -174,21 +175,21 @@ inline fun <T, reified M> DataScope.mutableStore(
     .invoke(Unit)
 
 /**
- * [mutableStore] for a server that answers each change with the value it holds now. [exchange]
+ * [optimisticStore] for a server that answers each change with the value it holds now. [exchange]
  * delivers one change as `send` does there and returns that value, which replaces the truth in
  * [base] as fresh data in place of applying the change locally. For a change that cannot be made
  * idempotent, like a counter, or a server whose answer carries fields the client cannot compute.
  */
-@JvmName("mutableStoreExchanging")
-inline fun <T, reified M> DataScope.mutableStore(
+@JvmName("optimisticStoreExchanging")
+inline fun <T, reified M> DataScope.optimisticStore(
   name: String,
   base: QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
   noinline exchange: suspend (mutation: M, id: EntryId) -> T,
   retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   serializer: KSerializer<M> = kotlinx.serialization.serializer<M>(),
-): MutableQueryStore<T, M> =
-  mutableStores(
+): OptimisticQueryStore<T, M> =
+  optimisticStores(
       name = name,
       base = { base },
       keySerializer = Unit.serializer(),
@@ -200,17 +201,17 @@ inline fun <T, reified M> DataScope.mutableStore(
     .invoke(Unit)
 
 /**
- * [mutableStore] per key, for a [DataScope.keyed] query: a store for each key over the store [base]
- * gives for it, all sharing the outbox called [name]. [base] is called once per key, and the store
- * it returns serves that key's views and its commits for as long as this set lives. So the set
- * keeps one base store object per key it has seen, and nothing frees a key while the set lives.
+ * [optimisticStore] per key, for a [DataScope.keyed] query: a store for each key over the store
+ * [base] gives for it, all sharing the outbox called [name]. [base] is called once per key, and the
+ * store it returns serves that key's views and its commits for as long as this set lives. So the
+ * set keeps one base store object per key it has seen, and nothing frees a key while the set lives.
  * What each one holds is up to [base]: for keys without bound, like thread ids, give it views over
  * one capped map, as [QueryStore.inMemoryByKey] returns, or over the database, so the object kept
  * per key is small and the values have a bound of their own. Keys need a stable `toString`, which
  * orders the rows, and [keySerializer], which stores them. [send] gets the key beside the change
  * and its id.
  */
-inline fun <reified K : Any, T, reified M> DataScope.mutableStores(
+inline fun <reified K : Any, T, reified M> DataScope.optimisticStores(
   name: String,
   noinline base: (key: K) -> QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
@@ -218,8 +219,8 @@ inline fun <reified K : Any, T, reified M> DataScope.mutableStores(
   retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   keySerializer: KSerializer<K> = kotlinx.serialization.serializer<K>(),
   serializer: KSerializer<M> = kotlinx.serialization.serializer<M>(),
-): MutableQueryStores<K, T, M> =
-  mutableStores(
+): OptimisticQueryStores<K, T, M> =
+  optimisticStores(
     name = name,
     base = base,
     keySerializer = keySerializer,
@@ -232,9 +233,9 @@ inline fun <reified K : Any, T, reified M> DataScope.mutableStores(
     retry = retry,
   )
 
-/** [mutableStores] for a server that answers each change with the value it holds now. */
-@JvmName("mutableStoresExchanging")
-inline fun <reified K : Any, T, reified M> DataScope.mutableStores(
+/** [optimisticStores] for a server that answers each change with the value it holds now. */
+@JvmName("optimisticStoresExchanging")
+inline fun <reified K : Any, T, reified M> DataScope.optimisticStores(
   name: String,
   noinline base: (key: K) -> QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
@@ -242,8 +243,8 @@ inline fun <reified K : Any, T, reified M> DataScope.mutableStores(
   retry: RetryPolicy = RetryPolicy.exponential(max = 5.minutes),
   keySerializer: KSerializer<K> = kotlinx.serialization.serializer<K>(),
   serializer: KSerializer<M> = kotlinx.serialization.serializer<M>(),
-): MutableQueryStores<K, T, M> =
-  mutableStores(
+): OptimisticQueryStores<K, T, M> =
+  optimisticStores(
     name = name,
     base = base,
     keySerializer = keySerializer,

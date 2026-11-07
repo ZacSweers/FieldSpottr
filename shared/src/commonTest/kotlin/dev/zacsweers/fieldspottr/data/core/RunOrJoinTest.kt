@@ -5,7 +5,7 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isSameInstanceAs
-import dev.zacsweers.fieldspottr.data.core.impl.RealDataActions
+import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
@@ -20,7 +20,7 @@ class RunOrJoinTest {
 
   @Test
   fun `a request that loses its key to a newer fetch joins that fetch`() = runTest {
-    val actions = RealDataActions(backgroundScope, onFailure = {})
+    val actions = RealActionRunner(backgroundScope, onFailure = {})
     val ran = mutableListOf<String>()
     // The newest command on the key, which no request joins, like a query's invalidation
     actions.run(CHECK) { ran += "invalidate" }
