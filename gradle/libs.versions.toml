@@ -5,6 +5,7 @@ androidx-appcompat = "1.8.0"
 androidx-compose-runtime = "1.12.1"
 agp = "9.4.1"
 androidx-datastore = "1.2.1"
+androidx-work = "2.12.0"
 assertk = "0.28.1"
 calf = "0.14.0"
 circuit = "0.39.0"
@@ -20,6 +21,7 @@ ktor = "3.6.0"
 mapsCompose = "8.6.0"
 metro = "1.4.5"
 okio = "3.18.2"
+robolectric = "4.17"
 sqldelight = "2.4.1"
 
 [plugins]
@@ -41,8 +43,12 @@ aboutLicenses = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref
 agp-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 androidx-appCompat = { module = "androidx.appcompat:appcompat", version.ref = "androidx-appcompat" }
 androidx-compose-integration-activity = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-datastore-core-okio = { module = "androidx.datastore:datastore-core-okio", version.ref = "androidx-datastore" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences-core", version.ref = "androidx-datastore" }
 androidx-splash = "androidx.core:core-splashscreen:1.2.0"
+androidx-startup = "androidx.startup:startup-runtime:1.2.0"
+androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidx-work" }
+androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "androidx-work" }
 # Utilities for local storage dirs on Desktop
 # https://github.com/harawata/appdirs
 appDirs = "net.harawata:appdirs:1.5.0"
@@ -89,6 +95,8 @@ lints-compose = "com.slack.lint.compose:compose-lint-checks:1.6.1"
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 okio-fakefilesystem = { module = "com.squareup.okio:okio-fakefilesystem", version.ref = "okio" }
 
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+
 slf4jNop = "org.slf4j:slf4j-nop:2.0.20"
 
 sqldelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
@@ -96,3 +104,5 @@ sqldelight-driver-jdbc = { module = "app.cash.sqldelight:sqlite-driver", version
 sqldelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqldelight" }
 sqldelight-async = { module = "app.cash.sqldelight:async-extensions", version.ref = "sqldelight" }
 sqldelight-coroutines = { module = "app.cash.sqldelight:coroutines-extensions", version.ref = "sqldelight" }
+
+turbine = "app.cash.turbine:turbine:1.2.1"

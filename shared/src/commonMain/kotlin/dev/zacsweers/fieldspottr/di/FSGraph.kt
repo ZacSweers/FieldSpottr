@@ -15,13 +15,26 @@ import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.SqlDriverFactory
-import dev.zacsweers.fieldspottr.data.createFSDatabase
+import dev.zacsweers.fieldspottr.createFSDatabase
+import dev.zacsweers.fieldspottr.data.NetworkMonitor
+import dev.zacsweers.fieldspottr.data.OutboxOwner
+import dev.zacsweers.fieldspottr.data.SqlDelightOutboxStores
+import dev.zacsweers.fieldspottr.data.core.DataScope
+import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
+import dev.zacsweers.fieldspottr.data.core.OutboxStores
+import dev.zacsweers.fieldspottr.data.core.invoke
 import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
+import dev.zacsweers.metro.SuspendLazy
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okio.FileSystem
@@ -29,6 +42,17 @@ import okio.SYSTEM
 
 interface FSGraph {
   val fsApp: FieldSpottrApp
+
+  /**
+   * The factory behind every data scope here, for a background drain that waits on its outboxes.
+   */
+  val dataScopeFactory: DataScope.Factory
+
+  /**
+   * Every repository that owns an outbox. Reading it constructs the ones not built yet, so their
+   * outboxes read their rows and send. A background drain reads it before it waits.
+   */
+  val outboxOwners: Set<OutboxOwner>
 
   @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM
 
@@ -41,11 +65,64 @@ interface FSGraph {
 
   @Provides @SingleIn(AppScope::class) fun provideHttpClient(): HttpClient = HttpClient()
 
+  @Provides @IoDispatcher fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
   @Provides
-  suspend fun provideDatabase(sqlDriverFactory: SqlDriverFactory): FSDatabase =
-    withContext(Dispatchers.IO) {
+  suspend fun provideDatabase(
+    sqlDriverFactory: SqlDriverFactory,
+    @IoDispatcher io: CoroutineDispatcher,
+  ): FSDatabase =
+    withContext(io) {
       sqlDriverFactory.create(FSDatabase.Schema, "fs.db").createFSDatabase()
     }
+
+  @Provides
+  @SingleIn(AppScope::class)
+  @ForScope(AppScope::class)
+  fun provideAppCoroutineScope(logger: Logger): CoroutineScope {
+    val log = logger.withTag("AppScope")
+    return CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, t -> log.e(t) { "Uncaught error" } }
+    )
+  }
+
+  /** Outbox rows live in the app's database, so they survive a restart. */
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideOutboxStores(
+    db: SuspendLazy<FSDatabase>,
+    @IoDispatcher io: CoroutineDispatcher,
+  ): OutboxStores = SqlDelightOutboxStores({ db.await().outboxRowQueries }, io)
+
+  @Provides
+  @SingleIn(AppScope::class)
+  fun provideDataScopeFactory(
+    logger: Logger,
+    network: NetworkMonitor,
+    stores: OutboxStores,
+    scheduler: OutboxScheduler,
+  ): DataScope.Factory {
+    val log = logger.withTag("Data")
+    return DataScope.Factory(
+      onFailure = { log.e(it) { "Fetch failed" } },
+      // Each fetch reports its own failure, so an action that fails with one only summarizes it
+      onActionFailure = { log.w(it) { "Action failed" } },
+      online = network.online,
+      stores = stores,
+      scheduler = scheduler,
+    )
+  }
+
+  /** Data work that lives as long as the app, for the repositories in this graph. */
+  @Provides
+  @SingleIn(AppScope::class)
+  @ForScope(AppScope::class)
+  fun provideAppDataScope(
+    factory: DataScope.Factory,
+    @ForScope(AppScope::class) scope: CoroutineScope,
+  ): DataScope = factory.create(scope)
 
   @Provides
   @SingleIn(AppScope::class)

@@ -143,8 +143,7 @@ fun AreaPresenter(
         .date
     )
   }
-  val areasFlow = retain { repository.areasFlow() }
-  val areas by areasFlow.collectAsRetainedState()
+  val areas by repository.areas.collectAsRetainedState(Areas.default)
   val scope = rememberCoroutineScope()
   val defaultGroup by preferencesStore.defaultGroup.collectAsRetainedState(null)
   var selectedGroup by retain {
@@ -200,8 +199,7 @@ fun AreaPresenter(
   val permitDateRange by dateRangeFlow.collectAsRetainedState(null)
 
   // Weather
-  val weather by weatherRepository.forecast.collectAsRetainedState()
-  LaunchedEffect(Unit) { weatherRepository.refresh() }
+  val weather by weatherRepository.forecast.collectAsRetainedState(null)
 
   val uriHandler = LocalUriHandler.current
   return AreaScreen.State(
@@ -221,8 +219,8 @@ fun AreaPresenter(
   ) { event ->
     when (event) {
       is AreaScreen.Event.Refresh -> {
-        scope.launch { repository.populateDb(forceRefresh = true) }
-        scope.launch { weatherRepository.refresh(forceRefresh = true) }
+        repository.refresh()
+        weatherRepository.refresh()
       }
       AreaScreen.Event.UseBuiltInAreas -> {
         repository.useBuiltInAreas()
