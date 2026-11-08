@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+import dev.zacsweers.metro.gradle.MetroPluginExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 
@@ -25,6 +26,11 @@ pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") {
 
     pluginManager.withPlugin("dev.zacsweers.metro") {
       compilerOptions { optIn.add("dev.zacsweers.metro.ExperimentalMetroCoroutinesApi") }
+      afterEvaluate {
+        configure<MetroPluginExtension> {
+          enableTopLevelFunctionInjection.set(true)
+        }
+      }
     }
   }
 }
