@@ -13,14 +13,14 @@
       "areaName": "Brooklyn Bridge Park",
       "areaId": "brooklyn-bridge-park",
       "path": "availability/areas/brooklyn-bridge-park.json",
-      "hash": "43db221ce0968fee30fdde3c4f94e7ebcb7e900d1168f80d9f181facd034bea1",
+      "hash": "a81d75b3b0c5297b5d0e84ef4709a8b3fb7eb55c57a3fe6a65ad3c42f1219193",
       "generatedAt": null
     },
     {
       "areaName": "Bushwick Inlet Park",
       "areaId": "bushwick-inlet-park",
       "path": "availability/areas/bushwick-inlet-park.json",
-      "hash": "c56351a5c3759d191fb69e1d0b1e570a21f0f17974f30af9a1c303ee63fdd413",
+      "hash": "e6fcc445aab469fd76db31c09532d2525e1c8477fc3f706adaced397950ae482",
       "generatedAt": null
     },
     {
