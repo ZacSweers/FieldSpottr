@@ -83,6 +83,7 @@ ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 metro-runtime = { module = "dev.zacsweers.metro:runtime", version.ref = "metro" }
+metro-gradlePlugin = { module = "dev.zacsweers.metro:gradle-plugin", version.ref = "metro" }
 
 lints-compose = "com.slack.lint.compose:compose-lint-checks:1.6.1"
 
