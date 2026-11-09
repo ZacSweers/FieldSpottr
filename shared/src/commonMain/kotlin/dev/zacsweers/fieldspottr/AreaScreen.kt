@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
@@ -344,7 +347,9 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     Scaffold(
       modifier = contentModifier,
       containerColor = Color.Transparent,
-      contentWindowInsets = WindowInsets(0, 0, 0, 0),
+      // The top bar handles the top inset. The sides keep the grid clear of side cutouts, such as
+      // the vertical status bar on the iPhone Duo or a phone's notch in landscape.
+      contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
       topBar = {
         TopAppBar(
           navigationIcon = {
