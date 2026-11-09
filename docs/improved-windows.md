@@ -152,9 +152,10 @@ value: [{"id":"...","name":"After work","startMinutes":1020,"endMinutes":1200}]
 8. Add tests for selection fallback after deletion, persisted windows loading, and availability for
    custom ranges.
 
-## Open Questions
+## Decisions
 
-- Should custom windows support half-hour increments in the first version?
-- Should there be a hard cap, such as three custom windows?
-- Should custom windows be ordered manually, by creation time, or by start time?
-- Should deleting a selected custom window fall back to Afternoon or full day?
+- Custom windows use whole hours. The model stores minutes so half hours can come later.
+- Users can save up to three custom windows.
+- Custom windows keep creation order.
+- Deleting the selected custom window selects the built-in window for the current hour.
+- Custom windows persist as JSON in `FSPreferencesStore`.

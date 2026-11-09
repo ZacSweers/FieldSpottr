@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
@@ -50,6 +51,34 @@ class FindFieldScreenTest {
     // No window holds 11pm, so the rest of the day is searched
     assertThat(searchHours(TimeWindow.EVENING, isToday = true, currentHour = 23))
       .isEqualTo(SearchHours(null, 23, 24))
+  }
+
+  @Test
+  fun `custom windows are searched like built-ins`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    assertThat(searchHours(afterWork, isToday = false, currentHour = 9))
+      .isEqualTo(SearchHours(afterWork, 17, 20))
+    assertThat(searchHours(afterWork, isToday = true, currentHour = 18))
+      .isEqualTo(SearchHours(afterWork, 18, 20))
+    assertThat(searchHours(afterWork, isToday = true, currentHour = 20))
+      .isEqualTo(SearchHours(TimeWindow.EVENING, 20, 23))
+  }
+
+  @Test
+  fun `a deleted selected window falls back to the current window`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    val windows = TimeWindow.builtIns + afterWork
+    assertThat(resolveSelectedWindow("custom-1", windows, currentHour = 9)).isEqualTo(afterWork)
+    assertThat(resolveSelectedWindow("custom-1", TimeWindow.builtIns, currentHour = 9))
+      .isEqualTo(TimeWindow.MORNING)
+    assertThat(resolveSelectedWindow(null, windows, currentHour = 9)).isEqualTo(null)
+  }
+
+  @Test
+  fun `windows must use whole hours in order`() {
+    assertFailure { TimeWindow("x", "Half", 17 * 60 + 30, 19 * 60) }
+    assertFailure { TimeWindow.custom("x", "Backwards", 20, 17) }
+    assertFailure { TimeWindow.custom("x", "Too late", 20, 25) }
   }
 
   @Test

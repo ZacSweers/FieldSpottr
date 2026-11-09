@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -38,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,6 +63,7 @@ import dev.zacsweers.fieldspottr.PermitState.Companion.isBlocked
 import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.BbpAvailability
+import dev.zacsweers.fieldspottr.data.FSPreferencesStore
 import dev.zacsweers.fieldspottr.data.FieldGroup
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.TimeWindow
@@ -85,6 +88,7 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
@@ -118,14 +122,32 @@ data object FindFieldScreen : Screen {
     val isToday: Boolean,
     /** The current New York hour. On today, search hours and window chips start here. */
     val currentHour: Int,
+    /** Built-in windows followed by saved custom windows. */
+    val windows: ImmutableList<TimeWindow>,
+    val isManagingWindows: Boolean,
     val lastUpdated: String?,
     val availability: AvailabilityBuckets?,
     val weather: WeatherForecast?,
     val eventSink: (Event) -> Unit = {},
-  ) : CircuitUiState
+  ) : CircuitUiState {
+    val customWindows: List<TimeWindow>
+      get() = windows.filterNot { it.builtIn }
+
+    val canAddWindow: Boolean
+      get() = customWindows.size < TimeWindow.MAX_CUSTOM_WINDOWS
+  }
 
   sealed interface Event {
-    data class SelectWindow(val window: TimeWindow?) : Event
+    /** Selects the window with [windowId], or the whole day when null. */
+    data class SelectWindow(val windowId: String?) : Event
+
+    data class ShowWindowManager(val show: Boolean) : Event
+
+    /** Saves a custom window. A null [id] creates a new window and selects it. */
+    data class SaveWindow(val id: String?, val name: String, val startHour: Int, val endHour: Int) :
+      Event
+
+    data class DeleteWindow(val id: String) : Event
 
     data class SelectDate(val date: LocalDate) : Event
 
@@ -140,14 +162,21 @@ data object FindFieldScreen : Screen {
 fun FindFieldPresenter(
   repository: PermitRepository,
   weatherRepository: WeatherRepository,
+  preferencesStore: FSPreferencesStore,
   navigator: Navigator,
 ): FindFieldScreen.State {
   val areas by repository.areas.collectAsRetainedState(Areas.default)
   val now by produceNyHour()
   val today = now.date
   val currentHour = now.hour
+  val scope = rememberCoroutineScope()
   var selectedDate by retain { mutableStateOf(today) }
-  var selectedWindow by retain { mutableStateOf(TimeWindow.forHour(currentHour)) }
+
+  val customWindows by preferencesStore.customTimeWindows.collectAsRetainedState(emptyList())
+  val windows = remember(customWindows) { (TimeWindow.builtIns + customWindows).toImmutableList() }
+  var selectedWindowId by retain { mutableStateOf(TimeWindow.forHour(currentHour)?.id) }
+  var isManagingWindows by retain { mutableStateOf(false) }
+  val selectedWindow = resolveSelectedWindow(selectedWindowId, windows, currentHour)
   // When the date rolls over at midnight, a selection of the old "today" moves to the new one.
   var lastToday by retain { mutableStateOf(today) }
   LaunchedEffect(today) {
@@ -195,12 +224,36 @@ fun FindFieldPresenter(
     selectedWindow = hours.window,
     isToday = selectedDate == today,
     currentHour = currentHour,
+    windows = windows,
+    isManagingWindows = isManagingWindows,
     lastUpdated = lastUpdatedText,
     availability = availability,
     weather = weather,
   ) { event ->
     when (event) {
-      is FindFieldScreen.Event.SelectWindow -> selectedWindow = event.window
+      is FindFieldScreen.Event.SelectWindow -> selectedWindowId = event.windowId
+      is FindFieldScreen.Event.ShowWindowManager -> isManagingWindows = event.show
+      is FindFieldScreen.Event.SaveWindow -> {
+        val isNew = event.id == null
+        if (isNew && customWindows.size >= TimeWindow.MAX_CUSTOM_WINDOWS) return@State
+        val window =
+          TimeWindow.custom(
+            id = event.id ?: "custom-${System.now().toEpochMilliseconds()}",
+            name = event.name.trim(),
+            startHour = event.startHour,
+            endHour = event.endHour,
+          )
+        if (isNew) {
+          selectedWindowId = window.id
+        }
+        scope.launch { preferencesStore.saveCustomTimeWindow(window) }
+      }
+      is FindFieldScreen.Event.DeleteWindow -> {
+        if (selectedWindowId == event.id) {
+          selectedWindowId = TimeWindow.forHour(currentHour)?.id
+        }
+        scope.launch { preferencesStore.deleteCustomTimeWindow(event.id) }
+      }
       is FindFieldScreen.Event.SelectDate -> selectedDate = event.date
       is FindFieldScreen.Event.NavigateToArea -> {
         val group = areas.groups[event.group] ?: return@State
@@ -295,7 +348,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         state.eventSink(FindFieldScreen.Event.SelectDate(newDate))
       }
       LazyRow(horizontalArrangement = spacedBy(8.dp)) {
-        items(TimeWindow.entries.toList()) { window ->
+        items(state.windows, key = { it.id }) { window ->
           val hasPassed = state.isToday && window.hasPassed(state.currentHour)
           val startHour =
             if (state.isToday) max(window.startHour, state.currentHour) else window.startHour
@@ -308,7 +361,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
             onClick = {
               state.eventSink(
                 FindFieldScreen.Event.SelectWindow(
-                  if (state.selectedWindow == window) null else window
+                  if (state.selectedWindow == window) null else window.id
                 )
               )
             },
@@ -329,9 +382,28 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
             },
           )
         }
+        item(key = "manage-windows") {
+          FilterChip(
+            selected = false,
+            onClick = { state.eventSink(FindFieldScreen.Event.ShowWindowManager(true)) },
+            label = { Icon(Icons.Outlined.Add, contentDescription = "Manage time windows") },
+          )
+        }
       }
     }
     Spacer(Modifier.height(8.dp))
+
+    if (state.isManagingWindows) {
+      TimeWindowsSheet(
+        windows = state.windows,
+        canAddWindow = state.canAddWindow,
+        onSave = { id, name, startHour, endHour ->
+          state.eventSink(FindFieldScreen.Event.SaveWindow(id, name, startHour, endHour))
+        },
+        onDelete = { id -> state.eventSink(FindFieldScreen.Event.DeleteWindow(id)) },
+        onDismiss = { state.eventSink(FindFieldScreen.Event.ShowWindowManager(false)) },
+      )
+    }
 
     if (state.availability == null) {
       Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -520,6 +592,20 @@ private fun FieldAvailabilityRow(
   }
 }
 
+/**
+ * The window for [selectedId] among [windows], or null for the whole day when [selectedId] is null.
+ * A selected window that no longer exists, like a deleted custom window, falls back to the built-in
+ * window for [currentHour].
+ */
+internal fun resolveSelectedWindow(
+  selectedId: String?,
+  windows: List<TimeWindow>,
+  currentHour: Int,
+): TimeWindow? {
+  if (selectedId == null) return null
+  return windows.find { it.id == selectedId } ?: TimeWindow.forHour(currentHour)
+}
+
 /** The window Find a Field searches and its hours, with an exclusive [endHour]. */
 internal data class SearchHours(val window: TimeWindow?, val startHour: Int, val endHour: Int)
 
@@ -696,7 +782,7 @@ private fun formatFreeRanges(freeHours: List<Int>): String {
   return ranges.joinToString(", ") { (s, e) -> formatHourRange(s, e) }
 }
 
-private fun formatHourRange(start: Int, end: Int): String {
+internal fun formatHourRange(start: Int, end: Int): String {
   fun formatHour(h: Int): String {
     val h12 = if (h == 0 || h == 24) 12 else if (h > 12) h - 12 else h
     val ampm = if (h < 12 || h == 24) "am" else "pm"
