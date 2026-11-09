@@ -76,7 +76,6 @@ import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
-import dev.zacsweers.fieldspottr.panes.ReserveEmptyDetailPane
 import dev.zacsweers.fieldspottr.ui.DataNote
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
@@ -307,9 +306,6 @@ fun FindFieldPresenter(
 @Composable
 fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()
-  // Wide windows open a field's grid beside this list. Until then, keep the pane with a hint so
-  // the list doesn't change width on the first pick.
-  ReserveEmptyDetailPane("Pick a field to see its schedule")
   val paneLayout = LocalPaneLayout.current
   val openArea = paneLayout.detailRoot as? AreaScreen
   val openGroup = openArea?.initialGroup

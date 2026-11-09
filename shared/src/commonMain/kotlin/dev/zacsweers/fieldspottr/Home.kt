@@ -28,6 +28,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,14 +46,28 @@ import com.slack.circuit.runtime.popUntil
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneHost
 import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
+import dev.zacsweers.fieldspottr.panes.PaneHost
 import dev.zacsweers.metro.AppScope
 
-private enum class Tab(val label: String) {
-  FIND_FIELD("Find a field"),
+private enum class Tab(
+  val label: String,
+  /**
+   * Text for the empty pane beside this tab on wide windows, or null when the tab fills the width.
+   */
+  val emptyPaneMessage: String? = null,
+) {
+  FIND_FIELD("Find a field", emptyPaneMessage = "Pick a field to see its schedule"),
   AREAS("Areas"),
   ABOUT("About"),
 }
+
+/**
+ * The empty pane text for the tab Home opens on, which is the first one. The app's [PaneHost]
+ * starts with it, so the first frame lays out with the right pane widths.
+ */
+internal val HomeInitialEmptyPaneMessage: String? = Tab.entries.first().emptyPaneMessage
 
 @CircuitSerializable(AppScope::class)
 data object HomeScreen : Screen {
@@ -107,6 +122,16 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
 fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   val snackbarHostState = remember { SnackbarHostState() }
   val onNavEvent: (NavEvent) -> Unit = { state.navigator.onNavEvent(it) }
+  val paneHost = LocalPaneHost.current
+  val selectTab: (Int) -> Unit = { index ->
+    // Reserve or release the empty pane with the switch, so the next frame composes the new tab and
+    // lays it out at its final width together
+    paneHost?.emptyDetailMessage = Tab.entries[index].emptyPaneMessage
+    state.eventSink(HomeScreen.Event.SelectTab(index))
+  }
+  // Keeps the reservation in step if the tab changes any other way
+  val currentTab = Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD
+  SideEffect { paneHost?.emptyDetailMessage = currentTab.emptyPaneMessage }
 
   LaunchedEffect(state.loadingMessage) {
     if (state.loadingMessage != null) {
@@ -125,7 +150,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         Tab.entries.forEachIndexed { index, tab ->
           NavigationRailItem(
             selected = state.selectedTabIndex == index,
-            onClick = { state.eventSink(HomeScreen.Event.SelectTab(index)) },
+            onClick = { selectTab(index) },
             icon = { TabIcon(tab) },
             label = { Text(tab.label) },
           )
@@ -151,7 +176,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
             Tab.entries.forEachIndexed { index, tab ->
               NavigationBarItem(
                 selected = state.selectedTabIndex == index,
-                onClick = { state.eventSink(HomeScreen.Event.SelectTab(index)) },
+                onClick = { selectTab(index) },
                 icon = { TabIcon(tab) },
                 label = { Text(tab.label) },
               )

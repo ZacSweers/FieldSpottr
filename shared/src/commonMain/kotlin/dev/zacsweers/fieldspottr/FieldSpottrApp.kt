@@ -63,7 +63,7 @@ fun FieldSpottrApp(
               }
             // Wide windows show the root screen beside the screens above it. One back stack backs
             // both layouts, so folding or unfolding only changes how it renders.
-            val paneHost = remember { PaneHost() }
+            val paneHost = remember { PaneHost(emptyDetailMessage = HomeInitialEmptyPaneMessage) }
             val paneNavigator =
               remember(navigator, paneHost) {
                 PaneAwareNavigator(navigator) { paneHost.layout.isSplit }

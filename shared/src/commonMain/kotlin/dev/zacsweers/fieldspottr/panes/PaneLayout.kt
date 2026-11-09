@@ -69,8 +69,7 @@ data class PaneLayout(
   val isWide: Boolean,
   /**
    * The right pane's style, or null when one screen fills the window. With only the root on the
-   * back stack, the right pane takes space only while the root's content reserves it through
-   * [ReserveEmptyDetailPane].
+   * back stack, the right pane takes space only while [PaneHost.emptyDetailMessage] reserves it.
    */
   val detailStyle: PaneStyle?,
   /** Width of the list beside the rail in the left pane, for [PaneStyle.LIST_DETAIL]. */

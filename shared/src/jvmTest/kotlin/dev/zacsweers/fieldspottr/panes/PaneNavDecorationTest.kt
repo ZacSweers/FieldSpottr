@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.panes
 
+import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,11 +46,16 @@ import com.slack.circuit.runtime.Navigator
 import com.slack.circuit.runtime.presenter.presenterOf
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.runtime.ui.ui
+import com.slack.circuit.sharedelements.SharedElementTransitionLayout
 import com.slack.circuitx.gesturenavigation.GestureNavigationDecorationFactory
 import kotlin.test.Test
 
 /** Renders real Circuit navigation through [PaneNavDecoration] at phone and wide window sizes. */
-@OptIn(ExperimentalTestApi::class, ExperimentalCircuitApi::class)
+@OptIn(
+  ExperimentalTestApi::class,
+  ExperimentalCircuitApi::class,
+  ExperimentalSharedTransitionApi::class,
+)
 class PaneNavDecorationTest {
   private data object Root : Screen
 
@@ -89,22 +95,27 @@ class PaneNavDecorationTest {
   private fun ComposeUiTest.setNavContent(root: Screen) {
     setContent {
       CircuitCompositionLocals(circuit) {
-        Box(Modifier.size(windowSize)) {
-          val backStack = rememberSaveableBackStack(root)
-          val circuitNavigator = rememberCircuitNavigator(backStack) {}
-          val host = remember { PaneHost() }
-          navigator =
-            remember(circuitNavigator) {
-              PaneAwareNavigator(circuitNavigator) { host.layout.isSplit }
+        // The app wraps navigation in this, which adds a lookahead pass to every layout
+        SharedElementTransitionLayout {
+          Box(Modifier.size(windowSize)) {
+            val backStack = rememberSaveableBackStack(root)
+            val circuitNavigator = rememberCircuitNavigator(backStack) {}
+            val host = remember {
+              PaneHost(emptyDetailMessage = if (root == ReservingRoot) "Pick one" else null)
             }
-          val decoration = remember {
-            PaneNavDecoration(
-              host,
-              AnimatedNavDecoration(emptyMap(), GestureNavigationDecorationFactory()),
-            )
-          }
-          CompositionLocalProvider(LocalPaneHost provides host) {
-            NavigableCircuitContent(navigator, backStack, decoration = decoration)
+            navigator =
+              remember(circuitNavigator) {
+                PaneAwareNavigator(circuitNavigator) { host.layout.isSplit }
+              }
+            val decoration = remember {
+              PaneNavDecoration(
+                host,
+                AnimatedNavDecoration(emptyMap(), GestureNavigationDecorationFactory()),
+              )
+            }
+            CompositionLocalProvider(LocalPaneHost provides host) {
+              NavigableCircuitContent(navigator, backStack, decoration = decoration)
+            }
           }
         }
       }
@@ -266,9 +277,6 @@ class PaneNavDecorationTest {
         is Stacked -> "stacked${screen.id}"
         else -> error("Unexpected screen $screen")
       }
-    if (screen == ReservingRoot) {
-      ReserveEmptyDetailPane("Pick one")
-    }
     var taps by rememberSaveable { mutableIntStateOf(0) }
     val role = LocalPaneRole.current
     val active = LocalRecordLifecycle.current.isActive

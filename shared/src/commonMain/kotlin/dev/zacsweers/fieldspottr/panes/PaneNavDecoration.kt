@@ -62,9 +62,8 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
  * state when it moves between the left pane and [delegate]. Each record renders in one place only,
  * because two calls would reuse the same saved state keys.
  *
- * Pane widths are decided at layout time. The root's content can reserve the right pane with
- * [ReserveEmptyDetailPane] from an effect, and the frame that composes it already lays out with the
- * reservation.
+ * Every layout decision is made in composition, never read during measure. Shared element
+ * transitions add a lookahead pass, and both passes must agree on the pane widths.
  */
 @Stable
 class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDecoration) :
@@ -116,6 +115,8 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
           .only(WindowInsetsSides.End)
           .asPaddingValues()
           .calculateEndPadding(layoutDirection)
+
+      val showsDetail = panes.detailRoot != null || host.emptyDetailMessage != null
 
       CompositionLocalProvider(LocalPaneLayout provides panes) {
         Layout(
@@ -172,18 +173,27 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
           val detail = measurables.first { it.layoutId == DetailPaneId }
           val primary = measurables.firstOrNull { it.layoutId == PrimaryPaneId }
           val divider = measurables.firstOrNull { it.layoutId == DividerId }
-          // Read here so a reservation made during this frame's composition applies to this frame
-          val showsDetail = panes.detailRoot != null || host.emptyDetailMessage != null
-          if (primary == null || divider == null || !showsDetail) {
-            val only = (primary ?: detail).measure(Constraints.fixed(width, height))
+          if (primary == null || divider == null) {
+            val only = detail.measure(Constraints.fixed(width, height))
             return@Layout layout(width, height) { only.placeRelative(0, 0) }
           }
-          val dividerPlaceable = divider.measure(Constraints(maxWidth = width, minHeight = height))
-          val dividerWidth = dividerPlaceable.width
+          // Every child is measured and placed in every branch, at zero width when hidden. Shared
+          // element transitions run a lookahead pass, and a child placed without a lookahead
+          // measurement throws.
+          val dividerWidth =
+            if (showsDetail) {
+              divider.maxIntrinsicWidth(height)
+            } else {
+              0
+            }
           val hingeSplit = panes.hinge
           val primaryWidth: Int
           val detailStart: Int
           when {
+            !showsDetail -> {
+              primaryWidth = width
+              detailStart = width
+            }
             hingeSplit != null -> {
               primaryWidth = hingeSplit.start.roundToPx()
               detailStart = maxOf(hingeSplit.end.roundToPx(), primaryWidth + dividerWidth)
@@ -200,6 +210,7 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
           }
           val primaryPlaceable =
             primary.measure(Constraints.fixed(primaryWidth.coerceIn(0, width), height))
+          val dividerPlaceable = divider.measure(Constraints.fixed(dividerWidth, height))
           val detailPlaceable =
             detail.measure(Constraints.fixed((width - detailStart).coerceAtLeast(0), height))
           layout(width, height) {
