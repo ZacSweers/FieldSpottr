@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -310,7 +311,19 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
   // the list doesn't change width on the first pick.
   ReserveEmptyDetailPane("Pick a field to see its schedule")
   val paneLayout = LocalPaneLayout.current
-  val openGroup = (paneLayout.detailRoot as? AreaScreen)?.initialGroup
+  val openArea = paneLayout.detailRoot as? AreaScreen
+  val openGroup = openArea?.initialGroup
+  // An open grid beside the list follows the list's date. The grid's own date chip changes only
+  // the grid.
+  val currentOpenArea by rememberUpdatedState(openArea)
+  LaunchedEffect(state.selectedDate) {
+    val area = currentOpenArea ?: return@LaunchedEffect
+    val group = area.initialGroup ?: return@LaunchedEffect
+    val listDate = state.selectedDate.atStartOfDayIn(TimeZone.currentSystemDefault()).epochSeconds
+    if (area.selectedDate != listDate) {
+      state.eventSink(FindFieldScreen.Event.NavigateToArea(group))
+    }
+  }
 
   Column(
     modifier.fillMaxSize().daySwipeable(daySwipe, state.selectedDate) { newDate ->
