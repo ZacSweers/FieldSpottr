@@ -34,7 +34,8 @@ fun GroupSelector(
           areas.entries.firstOrNull { it.areaName == areaName } ?: areas.entries.first()
         )
       }
-    val areasList = remember { areas.entries.sortedBy { it.displayName } }
+    // Keyed on areas so a refreshed catalog with new areas updates the dropdown.
+    val areasList = remember(areas) { areas.entries.sortedBy { it.displayName } }
     TextFieldDropdown(
       label = "Area",
       currentValue = selectedArea,
