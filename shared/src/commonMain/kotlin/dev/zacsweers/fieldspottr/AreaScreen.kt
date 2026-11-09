@@ -440,8 +440,13 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
         }
 
         val cornerSlot =
-          remember(state.date, state.weather) {
+          remember(state.date, state.weather, isBesideList) {
             movableContentOf {
+              // Beside the list, the list's date chip drives this grid, so a second one would only
+              // repeat it
+              if (isBesideList) {
+                return@movableContentOf
+              }
               DateSelector(
                 state.date,
                 id = "area",
