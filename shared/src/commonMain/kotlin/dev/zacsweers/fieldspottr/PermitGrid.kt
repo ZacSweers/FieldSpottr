@@ -43,13 +43,13 @@ import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
@@ -136,17 +136,8 @@ fun PermitGrid(
       density.run { (initialEarliestPermit * itemHeight).roundToPx() }
     }
 
-  val legendKinds =
-    remember(permits, resolvedLiveAvailability) {
-      gridLegendKinds(permits, resolvedLiveAvailability)
-    }
   val sunset = remember(selectedDate) { nycSunset(selectedDate) }
   Column(modifier) {
-    GridLegend(
-      legendKinds,
-      sunset = sunset,
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-    )
     BoxWithConstraints(Modifier.weight(1f)) {
       val availableFieldWidth =
         (maxWidth - GridHorizontalPadding * 2 - TimeColumnWidth).coerceAtLeast(0.dp)
@@ -312,7 +303,7 @@ fun PermitGrid(
             Row(
               Modifier.width(fieldAreaWidth)
                 .height(contentHeight)
-                .afterSunsetShade(sunset, itemHeight)
+                .sunsetLine(sunset, itemHeight)
                 .nowIndicator(selectedDate, itemHeight)
             ) {
               for (field in group.fields) {
@@ -740,24 +731,31 @@ private inline fun <T> withDensity(block: Density.() -> T): T {
   return with(density) { block() }
 }
 
-/** Draws a dashed "now" indicator line at the current time, animated in left-to-right. */
 /**
- * Shades the grid from [sunset] to midnight. It draws behind the columns, so it shows on free time
- * and booked blocks stay readable on top.
+ * Draws a dotted line across the grid at [sunset], over the columns like the "now" line, so it
+ * shows across booked blocks too. Dots keep it apart from the dashed "now" line.
  */
 @Composable
-private fun Modifier.afterSunsetShade(sunset: LocalTime, itemHeight: Dp): Modifier {
-  val color = afterSunsetShade()
+private fun Modifier.sunsetLine(sunset: LocalTime, itemHeight: Dp): Modifier {
   val sunsetOffsetPx = withDensity { ((sunset.hour + sunset.minute / 60f) * itemHeight).toPx() }
-  return drawBehind {
-    drawRect(
-      color = color,
-      topLeft = Offset(0f, sunsetOffsetPx),
-      size = Size(size.width, (size.height - sunsetOffsetPx).coerceAtLeast(0f)),
+  val lineColor = MaterialTheme.colorScheme.outline
+  val strokePx = withDensity { 2.dp.toPx() }
+  val gapPx = withDensity { 5.dp.toPx() }
+  return drawWithContent {
+    drawContent()
+    drawLine(
+      color = lineColor,
+      start = Offset(0f, sunsetOffsetPx),
+      end = Offset(size.width, sunsetOffsetPx),
+      strokeWidth = strokePx,
+      // A near-zero dash with round caps draws round dots
+      cap = StrokeCap.Round,
+      pathEffect = PathEffect.dashPathEffect(floatArrayOf(0.01f, gapPx)),
     )
   }
 }
 
+/** Draws a dashed "now" indicator line at the current time, animated in left-to-right. */
 @Composable
 private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modifier {
   val now = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }

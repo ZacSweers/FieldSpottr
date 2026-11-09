@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -16,19 +15,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
-import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
 import dev.zacsweers.fieldspottr.theme.fsColorScheme
-import dev.zacsweers.fieldspottr.ui.formatTime12
-import kotlinx.datetime.LocalTime
 
-/**
- * What a block in the day grid shows. Each kind has one color pair, used by the grid blocks and
- * explained by [GridLegend], so the two cannot drift apart. Entries are in legend order.
- */
+/** What a block in the day grid shows. Each kind has one color pair, used by the grid blocks. */
 internal enum class GridBlockKind(val label: String) {
   PERMIT("Permit"),
   PENDING_APPROVAL("Pending approval"),
@@ -80,59 +72,10 @@ internal fun GridBlockKind.contentColor(): Color {
   }
 }
 
-/** The kinds of block the day grid shows for [permits] and [liveAvailability], in legend order. */
-internal fun gridLegendKinds(
-  permits: PermitState?,
-  liveAvailability: LiveGroupAvailability?,
-): List<GridBlockKind> {
-  val kinds = buildSet {
-    permits?.fields?.values?.forEach { states ->
-      states.filterIsInstance<Reserved>().forEach { add(it.gridKind) }
-    }
-    liveAvailability?.fields?.values?.forEach { field ->
-      field.blocks.forEach { add(it.gridKind) }
-      if (field.advisories.isNotEmpty()) {
-        add(GridBlockKind.PENDING_REQUEST)
-      }
-    }
-  }
-  return GridBlockKind.entries.filter { it in kinds }
-}
-
 /**
- * A key for the colors in the day grid, limited to the [kinds] it shows, plus the after-sunset
- * shade when [sunset] is known.
+ * A color swatch and its label, for the week grid's key. Translucent colors get an outline so they
+ * show on any surface.
  */
-@Composable
-internal fun GridLegend(
-  kinds: List<GridBlockKind>,
-  sunset: LocalTime?,
-  modifier: Modifier = Modifier,
-) {
-  FlowRow(
-    modifier = modifier,
-    horizontalArrangement = spacedBy(12.dp),
-    verticalArrangement = spacedBy(4.dp),
-  ) {
-    for (kind in kinds) {
-      LegendItem(kind.containerColor(), kind.label)
-    }
-    if (sunset != null) {
-      LegendItem(afterSunsetShade(), "After sunset ${formatTime12(sunset)}")
-    }
-  }
-}
-
-/** Night tint drawn behind free grid time after sunset. Darker themes need more of it to show. */
-@Composable
-internal fun afterSunsetShade(): Color {
-  val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-  return NightTint.copy(alpha = if (isDark) 0.22f else 0.07f)
-}
-
-private val NightTint = Color(0xFF1A237E)
-
-/** A color swatch and its label. Translucent colors get an outline so they show on any surface. */
 @Composable
 internal fun LegendItem(color: Color, label: String) {
   Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = spacedBy(4.dp)) {
