@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
@@ -51,7 +54,6 @@ import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
-import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
@@ -62,14 +64,17 @@ import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneRole
+import dev.zacsweers.fieldspottr.panes.PaneRole
+import dev.zacsweers.fieldspottr.panes.PaneScreen
+import dev.zacsweers.fieldspottr.panes.PaneStyle
+import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
-import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.hours
-import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -85,7 +90,11 @@ data class AreaScreen(
   val fixedTitle: String? = null,
   val fixedSubtitle: String? = null,
   val selectedDate: Long? = null,
-) : Screen {
+) : PaneScreen {
+  // Wide windows open a field's grid beside the Find a Field list
+  override val paneStyle: PaneStyle
+    get() = PaneStyle.LIST_DETAIL
+
   data class State(
     val date: LocalDate,
     val areas: Areas,
@@ -96,7 +105,9 @@ data class AreaScreen(
     val defaultGroupMessage: String?,
     val permits: PermitState?,
     val liveAvailability: LiveGroupAvailability?,
-    val lastUpdated: String?,
+    /** The date is today or later and the group has no pending permit data for it. */
+    val isMissingPendingData: Boolean,
+    val lastUpdated: DataFreshness?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val weather: WeatherForecast?,
     val isDebug: Boolean,
@@ -171,6 +182,8 @@ fun AreaPresenter(
         PermitData(
           permits = PermitState.fromPermits(it, areas, selectedGroup),
           liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+          isMissingPendingData =
+            areas.groups[selectedGroup]?.let { group -> it.isMissingPendingData(group) } == true,
         )
       }
     }
@@ -186,12 +199,7 @@ fun AreaPresenter(
     remember(lastUpdateInstant) {
       lastUpdateInstant?.let { instant ->
         val elapsed = System.now() - instant
-        when {
-          elapsed < 1.minutes -> "Updated just now"
-          elapsed < 1.hours -> "Updated ${elapsed.inWholeMinutes}m ago"
-          elapsed < 1.days -> "Updated ${elapsed.inWholeHours}h ago"
-          else -> "Updated ${elapsed.inWholeDays}d ago"
-        }
+        DataFreshness(updatedText(elapsed), isStale = elapsed >= STALE_DATA_AGE)
       }
     }
 
@@ -212,6 +220,9 @@ fun AreaPresenter(
     defaultGroupMessage = defaultGroupMessage,
     permits = permitData?.permits,
     liveAvailability = permitData?.liveAvailability,
+    isMissingPendingData =
+      permitData?.isMissingPendingData == true &&
+        selectedDate >= System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     weather = weather,
@@ -292,8 +303,16 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     }
 
   val isDetail = state.fixedTitle != null
+  // Beside the list in the split layout. The list stays visible, so there's nothing to go back to
+  // and the list row doesn't grow into this screen.
+  val isBesideList = LocalPaneRole.current == PaneRole.DETAIL_ROOT
+  // Only the phone layout grows the list row into this screen
+  val sharesElements = isDetail && LocalPaneRole.current == PaneRole.SINGLE
+  val reflowKey = if (sharesElements) "area-${state.selectedGroup}" else null
   Box(modifier.fillMaxSize()) {
-    if (isDetail) {
+    if (isBesideList) {
+      Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface))
+    } else if (isDetail) {
       // Background - sharedElement, always opaque
       val containerKey = AreaContainerSharedElementKey(state.selectedGroup)
       Spacer(
@@ -310,7 +329,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     }
     // Content - sharedBounds when detail (cross-fades inside animated bounds)
     val contentModifier =
-      if (isDetail) {
+      if (sharesElements) {
         val contentKey = AreaContentSharedElementKey(state.selectedGroup)
         // Exit: fully gone by 30%. Enter: appears in the last 15%.
         val earlyEasing = Easing { (it / 0.3f).coerceAtMost(1f) }
@@ -329,12 +348,16 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     Scaffold(
       modifier = contentModifier,
       containerColor = Color.Transparent,
-      contentWindowInsets = WindowInsets(0, 0, 0, 0),
+      // The top bar handles the top inset. The sides keep the grid clear of side cutouts, such as
+      // the vertical status bar on the iPhone Duo or a phone's notch in landscape.
+      contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
       topBar = {
         TopAppBar(
           navigationIcon = {
-            IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
-              Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            if (!isBesideList) {
+              IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+              }
             }
           },
           title = {
@@ -342,7 +365,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
               Column(horizontalAlignment = Alignment.Start) {
                 ReflowText(
                   text = state.fixedTitle,
-                  sharedElementKey = "area-${state.selectedGroup}",
+                  sharedElementKey = reflowKey,
                   sharedElementKeySuffix = "title",
                   style = MaterialTheme.typography.titleLarge,
                   fontWeight = FontWeight.Bold,
@@ -350,7 +373,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
                 if (state.fixedSubtitle != null) {
                   ReflowText(
                     text = state.fixedSubtitle,
-                    sharedElementKey = "area-${state.selectedGroup}",
+                    sharedElementKey = reflowKey,
                     sharedElementKeySuffix = "subtitle",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -400,17 +423,30 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           }
           state.lastUpdated?.let { lastUpdated ->
             Text(
-              lastUpdated,
+              lastUpdated.text,
               style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              color =
+                if (lastUpdated.isStale) {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
               modifier = Modifier.padding(horizontal = 16.dp),
             )
           }
         }
+        if (state.isMissingPendingData) {
+          DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(horizontal = 16.dp))
+        }
 
         val cornerSlot =
-          remember(state.date, state.weather) {
+          remember(state.date, state.weather, isBesideList) {
             movableContentOf {
+              // Beside the list, the list's date chip drives this grid, so a second one would only
+              // repeat it
+              if (isBesideList) {
+                return@movableContentOf
+              }
               DateSelector(
                 state.date,
                 id = "area",

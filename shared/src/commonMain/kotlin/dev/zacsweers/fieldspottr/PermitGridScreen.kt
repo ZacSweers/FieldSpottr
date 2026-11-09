@@ -66,6 +66,8 @@ import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.favorites.FavoritesRepository
+import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.currentNyHour
 import dev.zacsweers.fieldspottr.ui.formatHour12
@@ -73,9 +75,6 @@ import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
-import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.hours
-import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -93,7 +92,9 @@ data object PermitGridScreen : Screen {
     val defaultGroupMessage: String?,
     val permits: PermitState?,
     val liveAvailability: LiveGroupAvailability?,
-    val lastUpdated: String?,
+    /** The date is today or later and the group has no pending permit data for it. */
+    val isMissingPendingData: Boolean,
+    val lastUpdated: DataFreshness?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val weather: WeatherForecast?,
     val viewMode: GridViewMode,
@@ -185,6 +186,8 @@ fun PermitGridPresenter(
         PermitData(
           permits = PermitState.fromPermits(it, areas, selectedGroup),
           liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+          isMissingPendingData =
+            areas.groups[selectedGroup]?.let { group -> it.isMissingPendingData(group) } == true,
         )
       }
     }
@@ -200,12 +203,7 @@ fun PermitGridPresenter(
     remember(lastUpdateInstant) {
       lastUpdateInstant?.let { instant ->
         val elapsed = System.now() - instant
-        when {
-          elapsed < 1.minutes -> "Updated just now"
-          elapsed < 1.hours -> "Updated ${elapsed.inWholeMinutes}m ago"
-          elapsed < 1.days -> "Updated ${elapsed.inWholeHours}h ago"
-          else -> "Updated ${elapsed.inWholeDays}d ago"
-        }
+        DataFreshness(updatedText(elapsed), isStale = elapsed >= STALE_DATA_AGE)
       }
     }
 
@@ -234,7 +232,13 @@ fun PermitGridPresenter(
     retain(gridDate, selectedGroup, viewMode, areas) {
       if (viewMode == GridViewMode.WEEK) {
         repository.permitsFlow(gridDate, days = 7, group = selectedGroup).map { permits ->
-          computeWeekAvailability(permits, areas, selectedGroup, gridDate)
+          computeWeekAvailability(
+            permits,
+            areas,
+            selectedGroup,
+            gridDate,
+            today = System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
+          )
         }
       } else {
         flowOf(null)
@@ -251,6 +255,9 @@ fun PermitGridPresenter(
     defaultGroupMessage = defaultGroupMessage,
     permits = permitData?.permits,
     liveAvailability = permitData?.liveAvailability,
+    isMissingPendingData =
+      permitData?.isMissingPendingData == true &&
+        gridDate >= System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     weather = weather,
@@ -384,27 +391,31 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
               else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
           )
         }
-        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleFavorite) }) {
-          Icon(
-            if (state.favorite.on) {
-              Icons.Filled.Favorite
-            } else {
-              Icons.Outlined.FavoriteBorder
-            },
-            contentDescription =
+        // Favorites are a data layer prototype that nothing else reads yet, so release builds hide
+        // them to keep the heart from being mistaken for the default-group star
+        if (state.isDebug) {
+          IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleFavorite) }) {
+            Icon(
               if (state.favorite.on) {
-                "Remove ${state.selectedGroup} from favorites"
+                Icons.Filled.Favorite
               } else {
-                "Add ${state.selectedGroup} to favorites"
+                Icons.Outlined.FavoriteBorder
               },
-            tint =
-              when {
-                // The server has not confirmed this group's change yet
-                state.favorite.pending -> MaterialTheme.colorScheme.tertiary
-                state.favorite.on -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-              },
-          )
+              contentDescription =
+                if (state.favorite.on) {
+                  "Remove ${state.selectedGroup} from favorites"
+                } else {
+                  "Add ${state.selectedGroup} to favorites"
+                },
+              tint =
+                when {
+                  // The server has not confirmed this group's change yet
+                  state.favorite.pending -> MaterialTheme.colorScheme.tertiary
+                  state.favorite.on -> MaterialTheme.colorScheme.primary
+                  else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                },
+            )
+          }
         }
         IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleDefaultGroup) }) {
           Icon(
@@ -448,13 +459,22 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
       }
       state.lastUpdated?.let { lastUpdated ->
         Text(
-          lastUpdated,
+          lastUpdated.text,
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color =
+            if (lastUpdated.isStale) {
+              MaterialTheme.colorScheme.error
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
           modifier = Modifier.padding(horizontal = 16.dp),
         )
       }
-      if (state.favorite.unsynced > 0) {
+      // The week view marks each day instead
+      if (state.isMissingPendingData && state.viewMode == GridViewMode.DAY) {
+        DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(horizontal = 16.dp))
+      }
+      if (state.isDebug && state.favorite.unsynced > 0) {
         val noun =
           if (state.favorite.unsynced == 1) {
             "favorite change"

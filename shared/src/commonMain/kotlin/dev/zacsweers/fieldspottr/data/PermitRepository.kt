@@ -105,6 +105,9 @@ interface PermitRepository {
 
   fun lastUpdateFlow(areaName: String): Flow<Instant?>
 
+  /** When each area's feed last downloaded, by area name. Areas never downloaded are absent. */
+  fun lastUpdatesFlow(): Flow<Map<String, Instant>>
+
   fun allPermitsInWindow(date: LocalDate, startHour: Int, endHour: Int): Flow<List<DbPermit>>
 
   fun permitsFlow(date: LocalDate, group: String): Flow<List<DbPermit>>
@@ -182,7 +185,7 @@ internal constructor(
   private val areasStore =
     StampedFileStore(
       fs = appDirs.fs,
-      path = areasJson,
+      path = { areasJson },
       db = db,
       io = io,
       fetchedAtKey = LAST_AREAS_FETCH_AT,
@@ -202,7 +205,7 @@ internal constructor(
   private val manifestStore =
     StampedFileStore(
       fs = appDirs.fs,
-      path = manifestJson,
+      path = { manifestJson },
       db = db,
       io = io,
       fetchedAtKey = LAST_MANIFEST_FETCH_AT,
@@ -355,6 +358,12 @@ internal constructor(
         emitAll(db.await().fsdbQueries.lastAreaUpdate(areaName).asFlow().mapToOneOrNull(io))
       }
       .map { millis -> millis?.let { Instant.fromEpochMilliseconds(it) } }
+      .flowOn(io)
+  }
+
+  override fun lastUpdatesFlow(): Flow<Map<String, Instant>> {
+    return flow { emitAll(db.await().fsdbQueries.allAreaUpdates().asFlow().mapToList(io)) }
+      .map { rows -> rows.associate { it.name to Instant.fromEpochMilliseconds(it.lastUpdated) } }
       .flowOn(io)
   }
 

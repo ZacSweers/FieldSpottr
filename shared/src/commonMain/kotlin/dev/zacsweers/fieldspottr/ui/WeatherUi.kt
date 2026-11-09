@@ -29,6 +29,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.time.Clock
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.LocalTime
 
 /** A small, flat weather glyph drawn with Canvas (no icon dependencies). */
 @Composable
@@ -250,6 +251,13 @@ fun WeatherStrip(
 
 internal fun currentNyHour(): Int {
   return Clock.System.now().toEpochMilliseconds().toNyLocalDateTime().hour
+}
+
+/** "4:44pm" for [time]. */
+internal fun formatTime12(time: LocalTime): String {
+  val h12 = ((time.hour % 12).takeIf { it != 0 } ?: 12)
+  val amPm = if (time.hour < 12) "am" else "pm"
+  return "$h12:${time.minute.toString().padStart(2, '0')}$amPm"
 }
 
 internal fun formatHour12(hour: Int): String {

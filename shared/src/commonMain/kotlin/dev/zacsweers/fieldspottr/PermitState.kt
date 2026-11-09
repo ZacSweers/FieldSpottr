@@ -287,9 +287,7 @@ data class PermitState(val fields: Map<Field, List<FieldState>>) {
         )
       }
 
-      val displayPermits = dbPermits.filterNot {
-        it.isAvailabilityOverlay || it.type == BbpAvailability.COVERAGE_KIND
-      }
+      val displayPermits = dbPermits.filterNot { it.isAvailabilityOverlay || it.isCoverageMarker }
       if (displayPermits.isEmpty()) return PermitState(emptyMap())
 
       val areasByName = areas.entries.associateBy { it.areaName }

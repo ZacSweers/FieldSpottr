@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import assertk.assertFailure
 import assertk.assertThat
+import assertk.assertions.containsExactly
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.Location
+import dev.zacsweers.fieldspottr.data.NycLiveAvailability
 import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.buildAreas
 import dev.zacsweers.fieldspottr.util.toNyInstant
@@ -31,6 +35,71 @@ class FindFieldScreenTest {
     assertThat(TimeWindow.forHour(18)).isEqualTo(TimeWindow.EVENING)
     assertThat(TimeWindow.forHour(22)).isEqualTo(TimeWindow.EVENING)
     assertThat(TimeWindow.forHour(23)).isEqualTo(null)
+  }
+
+  @Test
+  fun `today's window starts at the current hour`() {
+    assertThat(searchHours(TimeWindow.MORNING, isToday = true, currentHour = 10))
+      .isEqualTo(SearchHours(TimeWindow.MORNING, 10, 12))
+    assertThat(searchHours(TimeWindow.EVENING, isToday = true, currentHour = 10))
+      .isEqualTo(SearchHours(TimeWindow.EVENING, 18, 23))
+    assertThat(searchHours(null, isToday = true, currentHour = 15))
+      .isEqualTo(SearchHours(null, 15, 24))
+  }
+
+  @Test
+  fun `a passed window on today falls back to the current window`() {
+    assertThat(searchHours(TimeWindow.MORNING, isToday = true, currentHour = 14))
+      .isEqualTo(SearchHours(TimeWindow.AFTERNOON, 14, 18))
+    // No window holds 11pm, so the rest of the day is searched
+    assertThat(searchHours(TimeWindow.EVENING, isToday = true, currentHour = 23))
+      .isEqualTo(SearchHours(null, 23, 24))
+  }
+
+  @Test
+  fun `custom windows are searched like built-ins`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    assertThat(searchHours(afterWork, isToday = false, currentHour = 9))
+      .isEqualTo(SearchHours(afterWork, 17, 20))
+    assertThat(searchHours(afterWork, isToday = true, currentHour = 18))
+      .isEqualTo(SearchHours(afterWork, 18, 20))
+    assertThat(searchHours(afterWork, isToday = true, currentHour = 20))
+      .isEqualTo(SearchHours(TimeWindow.EVENING, 20, 23))
+  }
+
+  @Test
+  fun `a deleted selected window falls back to the current window`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    val windows = TimeWindow.builtIns + afterWork
+    assertThat(resolveSelectedWindow("custom-1", windows, currentHour = 9)).isEqualTo(afterWork)
+    assertThat(resolveSelectedWindow("custom-1", TimeWindow.builtIns, currentHour = 9))
+      .isEqualTo(TimeWindow.MORNING)
+    assertThat(resolveSelectedWindow(null, windows, currentHour = 9)).isEqualTo(null)
+  }
+
+  @Test
+  fun `windows must use whole hours in order`() {
+    assertFailure { TimeWindow("x", "Half", 17 * 60 + 30, 19 * 60) }
+    assertFailure { TimeWindow.custom("x", "Backwards", 20, 17) }
+    assertFailure { TimeWindow.custom("x", "Too late", 20, 25) }
+  }
+
+  @Test
+  fun `windows that ended today are hidden`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    val windows = TimeWindow.builtIns + afterWork
+    assertThat(visibleWindows(windows, isToday = true, currentHour = 19))
+      .containsExactly(TimeWindow.EVENING, afterWork)
+    assertThat(visibleWindows(windows, isToday = true, currentHour = 23)).isEmpty()
+    assertThat(visibleWindows(windows, isToday = false, currentHour = 23)).isEqualTo(windows)
+  }
+
+  @Test
+  fun `other days search the full window`() {
+    assertThat(searchHours(TimeWindow.MORNING, isToday = false, currentHour = 14))
+      .isEqualTo(SearchHours(TimeWindow.MORNING, 6, 12))
+    assertThat(searchHours(null, isToday = false, currentHour = 14))
+      .isEqualTo(SearchHours(null, 0, 24))
   }
 
   @Test
@@ -104,6 +173,173 @@ class FindFieldScreenTest {
           .openTimeRange
       )
       .isEqualTo("8–11pm")
+  }
+
+  @Test
+  fun `a free surface keeps a booked group partially open`() {
+    // Field 1 at Baruch is booked all evening, but field 2 is free
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Baruch",
+          group = "Baruch",
+          fieldId = "Softball-01",
+          startHour = 18,
+          endHour = 23,
+        )
+      )
+
+    val baruch =
+      computeAvailability(permits, Areas.default, 18, 23).partiallyOpen.single {
+        it.group.name == "Baruch"
+      }
+    assertThat(baruch.openTimeRange).isEqualTo("")
+    assertThat(baruch.fieldOpenings).containsExactly(FieldOpening("Soccer 2, Softball 2", "6–11pm"))
+  }
+
+  @Test
+  fun `a booked half leaves the other half free longer than the whole field`() {
+    // Independent halves, as scripts/add_nyc_park.py models them
+    val areas = buildAreas {
+      area(name = "Park", displayName = "Park") {
+        group(name = "Field", location = Location(gmaps = "", amaps = "")) {
+          field(csvName = "Soccer-01A", displayName = "West Half", sharedFields = setOf("a"))
+          field(csvName = "Soccer-01", displayName = "Whole Field", sharedFields = setOf("a", "b"))
+          field(csvName = "Soccer-01B", displayName = "East Half", sharedFields = setOf("b"))
+        }
+      }
+    }
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Park",
+          group = "Field",
+          fieldId = "Soccer-01A",
+          startHour = 18,
+          endHour = 20,
+        )
+      )
+
+    val field = computeAvailability(permits, areas, 18, 23).partiallyOpen.single()
+    assertThat(field.openTimeRange).isEqualTo("8–11pm")
+    assertThat(field.fieldOpenings).containsExactly(FieldOpening("East Half", "6–11pm"))
+  }
+
+  @Test
+  fun `a booked bushwick half leaves the other half free`() {
+    // The catalog models Bushwick Inlet's halves as independent surfaces of one whole field
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Bushwick Inlet Park",
+          group = "Bushwick Inlet Park",
+          fieldId = westHalfFieldId(),
+          startHour = 18,
+          endHour = 20,
+        )
+      )
+
+    val bushwick =
+      computeAvailability(permits, Areas.default, 18, 23).partiallyOpen.single {
+        it.group.name == "Bushwick Inlet Park"
+      }
+    assertThat(bushwick.openTimeRange).isEqualTo("8–11pm")
+    assertThat(bushwick.fieldOpenings).containsExactly(FieldOpening("East Half", "6–11pm"))
+  }
+
+  @Test
+  fun `fields free only with the whole group add no openings`() {
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Baruch",
+          group = "Baruch",
+          fieldId = "Softball-01",
+          startHour = 18,
+          endHour = 20,
+        ),
+        permit(
+          recordId = 2,
+          area = "Baruch",
+          group = "Baruch",
+          fieldId = "Softball-02",
+          startHour = 18,
+          endHour = 20,
+        ),
+      )
+
+    val baruch =
+      computeAvailability(permits, Areas.default, 18, 23).partiallyOpen.single {
+        it.group.name == "Baruch"
+      }
+    assertThat(baruch.openTimeRange).isEqualTo("8–11pm")
+    assertThat(baruch.fieldOpenings).isEmpty()
+  }
+
+  private fun westHalfFieldId(): String {
+    return Areas.default.groups
+      .getValue("Bushwick Inlet Park")
+      .fields
+      .single {
+        it.displayName == "West Half"
+      }
+      .name
+  }
+
+  @Test
+  fun `open live groups without coverage are missing pending data`() {
+    val areas = buildAreas {
+      area(name = "Live", displayName = "Live") {
+        group(name = "Live", location = Location(gmaps = "", amaps = "")) {
+          field(csvName = "Soccer-01", displayName = "Soccer", apiLocationId = "M1-SOCCER-1")
+        }
+      }
+      area(name = "Schedule", displayName = "Schedule") {
+        group(name = "Schedule", location = Location(gmaps = "", amaps = "")) {
+          field(csvName = "Turf", displayName = "Turf")
+        }
+      }
+    }
+    val coverage =
+      permit(
+        recordId = 1,
+        area = "Live",
+        group = "Live",
+        fieldId = "Soccer-01",
+        startHour = 0,
+        endHour = 23,
+        type = NycLiveAvailability.COVERAGE_KIND,
+      )
+
+    assertThat(computeAvailability(emptyList(), areas, 18, 23).isMissingPendingData).isTrue()
+    val covered = computeAvailability(listOf(coverage), areas, 18, 23)
+    assertThat(covered.isMissingPendingData).isFalse()
+    // Coverage markers never book a field
+    assertThat(covered.fullyOpen.map { it.group.name }).containsExactly("Live", "Schedule")
+  }
+
+  @Test
+  fun `the grid ignores live coverage markers`() {
+    val coverage =
+      permit(
+        recordId = 1,
+        area = "Baruch",
+        group = "Baruch",
+        fieldId = "Softball-01",
+        startHour = 0,
+        endHour = 23,
+        type = NycLiveAvailability.COVERAGE_KIND,
+      )
+    val permits = listOf(coverage)
+    val group = Areas.default.groups.getValue("Baruch")
+
+    assertThat(PermitState.fromPermits(permits, Areas.default, "Baruch").fields).isEmpty()
+    assertThat(permits.isMissingPendingData(group)).isFalse()
+    assertThat(emptyList<DbPermit>().isMissingPendingData(group)).isTrue()
   }
 
   @Test

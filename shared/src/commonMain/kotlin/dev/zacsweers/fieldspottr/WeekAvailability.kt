@@ -30,6 +30,8 @@ data class WeekDayAvailability(
   val date: LocalDate,
   /** One state per hour in [WEEK_VIEW_START_HOUR, WEEK_VIEW_END_HOUR). */
   val hourStates: ImmutableList<WeekSlotState>,
+  /** Today or later, and the group has no pending permit data for this date. */
+  val isMissingPendingData: Boolean = false,
 ) {
   fun stateAt(hour: Int): WeekSlotState = hourStates[hour - WEEK_VIEW_START_HOUR]
 }
@@ -51,7 +53,10 @@ internal fun computeWeekAvailability(
   areas: Areas,
   group: String,
   startDate: LocalDate,
+  /** Days from here on are checked for missing pending data. Null skips the check. */
+  today: LocalDate? = null,
 ): WeekAvailability {
+  val fieldGroup = areas.groups[group]
   val fieldCount = areas.groups[group]?.fields?.size ?: 0
   val permitsByDate = permits.groupBy { it.start.toNyLocalDateTime().date }
 
@@ -84,7 +89,15 @@ internal fun computeWeekAvailability(
           }
         }
 
-      WeekDayAvailability(date = date, hourStates = hourStates.toImmutableList())
+      WeekDayAvailability(
+        date = date,
+        hourStates = hourStates.toImmutableList(),
+        isMissingPendingData =
+          today != null &&
+            date >= today &&
+            fieldGroup != null &&
+            dayPermits.isMissingPendingData(fieldGroup),
+      )
     }
 
   return WeekAvailability(startDate = startDate, days = days.toImmutableList())

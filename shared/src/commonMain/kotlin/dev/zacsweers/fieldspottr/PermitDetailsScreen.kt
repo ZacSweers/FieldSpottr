@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -61,11 +62,14 @@ import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
-import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneRole
+import dev.zacsweers.fieldspottr.panes.PaneRole
+import dev.zacsweers.fieldspottr.panes.PaneScreen
+import dev.zacsweers.fieldspottr.panes.PaneStyle
 import dev.zacsweers.fieldspottr.ui.Group
 import dev.zacsweers.fieldspottr.ui.Schedule
 import dev.zacsweers.fieldspottr.util.DragToDismiss
@@ -90,7 +94,12 @@ data class PermitDetailsScreen(
   val org: String,
   val status: String,
   val orgVisible: Boolean,
-) : Screen {
+) : PaneScreen {
+  // Expanded windows open a permit's details beside the Areas grid. Over a Find a Field grid, it
+  // opens in that grid's pane.
+  override val paneStyle: PaneStyle
+    get() = PaneStyle.SUPPORTING
+
   data class State(
     val fieldName: String,
     val index: Int,
@@ -135,6 +144,7 @@ fun PermitDetailsPresenter(
       .map { dbPermits ->
         // Group permits by date, then by month
         dbPermits
+          .filterNot { it.isCoverageMarker }
           .groupBy { it.start.toNyLocalDateTime().date }
           .map { (date, permitsOnDate) ->
             PermitDayGroup(
@@ -185,8 +195,20 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
       PermitSharedElementKey(state.fieldName, state.index, state.name, state.timeRange, state.org)
     val animatedScope = requireAnimatedScope(Navigation)
     val headerTextColor = MaterialTheme.colorScheme.onSecondaryContainer
+    val role = LocalPaneRole.current
+    // Beside the Areas grid, closing replaces going back
+    val isBesideGrid = role == PaneRole.DETAIL_ROOT
+    // Only the phone layout grows the card out of the tapped block. With panes side by side the
+    // block stays visible, and swapping details in a pane has no real hero to follow.
+    val sharesElements = role == PaneRole.SINGLE
+    val reflowKey =
+      if (sharesElements) {
+        "permit-${state.fieldName}-${state.index}"
+      } else {
+        null
+      }
 
-    DragToDismiss(onDismiss = state.onBack) {
+    DragToDismiss(onDismiss = state.onBack, enabled = role == PaneRole.SINGLE) {
       // Non-hero elements exit quickly — fully gone by 35% of the transition progress.
       // With predictive back this is gesture-driven, so we use easing rather than duration.
       val earlyEasing = Easing { (it / 0.35f).coerceAtMost(1f) }
@@ -226,7 +248,11 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
               title = {},
               navigationIcon = {
                 IconButton(onClick = state.onBack) {
-                  Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                  if (isBesideGrid) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Close")
+                  } else {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                  }
                 }
               },
               colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -241,16 +267,22 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
               onClick = state.onBack,
               modifier =
                 Modifier.fillMaxWidth()
-                  .sharedBounds(
-                    sharedContentState = rememberSharedContentState(sharedBoundsKey),
-                    animatedVisibilityScope = animatedScope,
-                    clipInOverlayDuringTransition = OverlayClip(cardShape),
-                    // Default fade — detail content cross-fades with grid underneath.
-                    // Grid provides solid background (its exit is slow), so no alpha dip.
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    // Render above grid container (z=0) so detail dissolves over it on back nav
-                    zIndexInOverlay = 1f,
+                  .then(
+                    if (!sharesElements) {
+                      Modifier
+                    } else {
+                      Modifier.sharedBounds(
+                        sharedContentState = rememberSharedContentState(sharedBoundsKey),
+                        animatedVisibilityScope = animatedScope,
+                        clipInOverlayDuringTransition = OverlayClip(cardShape),
+                        // Default fade — detail content cross-fades with grid underneath.
+                        // Grid provides solid background (its exit is slow), so no alpha dip.
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        // Render above grid container (z=0) so detail dissolves over it on back nav
+                        zIndexInOverlay = 1f,
+                      )
+                    }
                   ),
               shape = cardShape,
               color = MaterialTheme.colorScheme.secondaryContainer,
@@ -259,7 +291,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
                 Column(verticalArrangement = spacedBy(16.dp)) {
                   ReflowText(
                     text = state.name,
-                    sharedElementKey = "permit-${state.fieldName}-${state.index}",
+                    sharedElementKey = reflowKey,
                     sharedElementKeySuffix = "title",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
@@ -284,8 +316,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
                     Icon(Icons.Group, contentDescription = "Group icon", tint = headerTextColor)
                     ReflowText(
                       text = state.org,
-                      sharedElementKey =
-                        if (state.orgVisible) "permit-${state.fieldName}-${state.index}" else null,
+                      sharedElementKey = reflowKey.takeIf { state.orgVisible },
                       sharedElementKeySuffix = "org",
                       style = MaterialTheme.typography.bodyLarge,
                       color = headerTextColor,

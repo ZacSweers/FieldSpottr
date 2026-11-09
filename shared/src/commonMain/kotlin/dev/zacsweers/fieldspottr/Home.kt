@@ -3,8 +3,14 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Place
@@ -12,6 +18,8 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -20,6 +28,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,16 +42,32 @@ import com.slack.circuit.foundation.onNavEvent
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
+import com.slack.circuit.runtime.popUntil
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneHost
+import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
+import dev.zacsweers.fieldspottr.panes.PaneHost
 import dev.zacsweers.metro.AppScope
 
-private enum class Tab(val label: String) {
-  FIND_FIELD("Find a field"),
+private enum class Tab(
+  val label: String,
+  /**
+   * Text for the empty pane beside this tab on wide windows, or null when the tab fills the width.
+   */
+  val emptyPaneMessage: String? = null,
+) {
+  FIND_FIELD("Find a field", emptyPaneMessage = "Pick a field to see its schedule"),
   AREAS("Areas"),
   ABOUT("About"),
 }
+
+/**
+ * The empty pane text for the tab Home opens on, which is the first one. The app's [PaneHost]
+ * starts with it, so the first frame lays out with the right pane widths.
+ */
+internal val HomeInitialEmptyPaneMessage: String? = Tab.entries.first().emptyPaneMessage
 
 @CircuitSerializable(AppScope::class)
 data object HomeScreen : Screen {
@@ -81,7 +106,13 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
     navigator = navigator,
   ) { event ->
     when (event) {
-      is HomeScreen.Event.SelectTab -> selectedTabIndex = event.index
+      is HomeScreen.Event.SelectTab -> {
+        // In the split layout the rail stays visible beside open details, so close them before
+        // showing another tab. Phones cover the bar with pushed screens, so this pops nothing
+        // there.
+        navigator.popUntil { it is HomeScreen }
+        selectedTabIndex = event.index
+      }
     }
   }
 }
@@ -91,6 +122,16 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
 fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   val snackbarHostState = remember { SnackbarHostState() }
   val onNavEvent: (NavEvent) -> Unit = { state.navigator.onNavEvent(it) }
+  val paneHost = LocalPaneHost.current
+  val selectTab: (Int) -> Unit = { index ->
+    // Reserve or release the empty pane with the switch, so the next frame composes the new tab and
+    // lays it out at its final width together
+    paneHost?.emptyDetailMessage = Tab.entries[index].emptyPaneMessage
+    state.eventSink(HomeScreen.Event.SelectTab(index))
+  }
+  // Keeps the reservation in step if the tab changes any other way
+  val currentTab = Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD
+  SideEffect { paneHost?.emptyDetailMessage = currentTab.emptyPaneMessage }
 
   LaunchedEffect(state.loadingMessage) {
     if (state.loadingMessage != null) {
@@ -98,41 +139,71 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
-  Scaffold(
-    modifier = modifier,
-    snackbarHost = {
-      SnackbarHost(hostState = snackbarHostState) { snackbarData ->
-        Snackbar(snackbarData = snackbarData)
-      }
-    },
-    bottomBar = {
-      NavigationBar {
+  // Wide windows put the tabs in a rail on the start edge, which leaves the full height for content
+  val showsRail = LocalPaneLayout.current.isWide
+  Row(modifier.fillMaxSize()) {
+    if (showsRail) {
+      NavigationRail(
+        windowInsets =
+          WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)
+      ) {
         Tab.entries.forEachIndexed { index, tab ->
-          NavigationBarItem(
+          NavigationRailItem(
             selected = state.selectedTabIndex == index,
-            onClick = { state.eventSink(HomeScreen.Event.SelectTab(index)) },
-            icon = {
-              Icon(
-                when (tab) {
-                  Tab.FIND_FIELD -> Icons.Outlined.Search
-                  Tab.AREAS -> Icons.Outlined.Place
-                  Tab.ABOUT -> Icons.Outlined.Info
-                },
-                contentDescription = tab.label,
-              )
-            },
+            onClick = { selectTab(index) },
+            icon = { TabIcon(tab) },
             label = { Text(tab.label) },
           )
         }
       }
-    },
-  ) { innerPadding ->
-    Box(Modifier.padding(innerPadding).fillMaxSize()) {
-      when (Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD) {
-        Tab.FIND_FIELD -> CircuitContent(FindFieldScreen, onNavEvent = onNavEvent)
-        Tab.AREAS -> CircuitContent(PermitGridScreen, onNavEvent = onNavEvent)
-        Tab.ABOUT -> CircuitContent(AboutScreen, onNavEvent = onNavEvent)
+    }
+    Scaffold(
+      modifier =
+        if (showsRail) {
+          Modifier.weight(1f)
+            .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+        } else {
+          Modifier.weight(1f)
+        },
+      snackbarHost = {
+        SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+          Snackbar(snackbarData = snackbarData)
+        }
+      },
+      bottomBar = {
+        if (!showsRail) {
+          NavigationBar {
+            Tab.entries.forEachIndexed { index, tab ->
+              NavigationBarItem(
+                selected = state.selectedTabIndex == index,
+                onClick = { selectTab(index) },
+                icon = { TabIcon(tab) },
+                label = { Text(tab.label) },
+              )
+            }
+          }
+        }
+      },
+    ) { innerPadding ->
+      Box(Modifier.padding(innerPadding).fillMaxSize()) {
+        when (Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD) {
+          Tab.FIND_FIELD -> CircuitContent(FindFieldScreen, onNavEvent = onNavEvent)
+          Tab.AREAS -> CircuitContent(PermitGridScreen, onNavEvent = onNavEvent)
+          Tab.ABOUT -> CircuitContent(AboutScreen, onNavEvent = onNavEvent)
+        }
       }
     }
   }
+}
+
+@Composable
+private fun TabIcon(tab: Tab) {
+  Icon(
+    when (tab) {
+      Tab.FIND_FIELD -> Icons.Outlined.Search
+      Tab.AREAS -> Icons.Outlined.Place
+      Tab.ABOUT -> Icons.Outlined.Info
+    },
+    contentDescription = tab.label,
+  )
 }

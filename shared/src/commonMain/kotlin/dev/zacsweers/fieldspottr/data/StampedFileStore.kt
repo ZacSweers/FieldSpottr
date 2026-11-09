@@ -31,7 +31,11 @@ import okio.use
  */
 internal class StampedFileStore<T : Any>(
   private val fs: FileSystem,
-  private val path: Path,
+  /**
+   * Resolves the file's path. It runs on [io] at the first file access, since resolving an app
+   * directory can create it.
+   */
+  path: () -> Path,
   private val db: SuspendLazy<FSDatabase>,
   /** Runs the file and database calls, which block. */
   private val io: CoroutineDispatcher,
@@ -40,6 +44,7 @@ internal class StampedFileStore<T : Any>(
   private val decode: (String) -> T?,
   private val encode: (T) -> String,
 ) : QueryStore<T> {
+  private val path by lazy(path)
   // Null until the first read loads the file
   private val loaded = MutableStateFlow<Loaded<T>?>(null)
   // Takes turns between the calls that change the file, so a check and its write are one step

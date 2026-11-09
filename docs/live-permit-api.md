@@ -13,20 +13,19 @@ Example:
 https://www.nycgovparks.org/api/athletic-fields?location=M165-FOOTBALL-1&date=2026-06-02
 ```
 
-Important: requests need a browser-like user agent or Parks may block/reject them. The app and
-`scripts/update_live_field_ids.py` both need to impersonate a browser.
+Important: Parks may block or reject requests that do not come from a browser.
+`scripts/update-availability.sh` fetches through a browser, and `scripts/update_live_field_ids.py`
+sends a browser-like user agent.
 
 ## Architecture
 
-- `LivePermitRepository` is separate from `PermitRepository`.
-- Live data is not written to SQLDelight and remains an ad hoc/on-demand overlay.
-- Live checks happen only for the currently selected `FieldGroup` and date. Find a Field is too
-  broad because checking every candidate would require many individual field-detail requests.
-- Results are retained in screen state, not persisted in the repository.
-- The live check button is a FAB. It is hidden when the selected group has no live API IDs.
-- Once fetched, the FAB becomes a checked/disabled "Live activity" state so we do not send repeat
-  requests for the same retained screen state.
-- The repository caches responses in memory by field API ID and requested date.
+- The app does not call this API. The generator fetches it for the next `LIVE_DAYS` days and writes
+  the results into the area feeds as overlay rows (`kind` `NYC live` or `advisory`).
+- For each fetched field and date, the generator also writes a daily `NYC live coverage` marker.
+  Only live data has pending requests, so the app shows a note on dates without markers.
+- The app imports those rows into SQLDelight with the other feed rows.
+- `availabilityOverlays` turns the overlay rows for the selected group and date into
+  `LiveGroupAvailability`, which the grid draws over the CSV permits.
 
 ## UI Semantics
 
@@ -42,9 +41,9 @@ Live API results are overlaid on top of the normal CSV permit grid:
 
 ## Parsing
 
-The response is keyed by epoch seconds. Slots are 30-minute increments. One API response can include
-multiple days starting from the requested date, so parsing filters down to the requested local NYC
-date.
+The generator parses responses. The response is keyed by epoch seconds. Slots are 30-minute
+increments. One API response can include multiple days starting from the requested date, so parsing
+filters down to the live window in NYC time.
 
 Current hard-block interpretation:
 
@@ -106,7 +105,7 @@ sync when changing this.
 
 Live API IDs live in both:
 
-- `shared/src/commonMain/kotlin/dev/zacsweers/fieldspottr/data/Area.kt`
+- `models/src/commonMain/kotlin/dev/zacsweers/fieldspottr/data/Area.kt`
 - `areas.json`
 
 Use the Python helper to find or verify `apiLocationId` values from NYC Parks' vector tiles:
@@ -126,13 +125,13 @@ still useful for ambiguous field labels.
 
 Current regression coverage lives mostly in:
 
-- `shared/src/jvmTest/kotlin/dev/zacsweers/fieldspottr/data/LivePermitRepositoryTest.kt`
+- `generator/src/test/kotlin/dev/zacsweers/fieldspottr/generator/GeneratorTest.kt`
+- `shared/src/jvmTest/kotlin/dev/zacsweers/fieldspottr/data/LiveAvailabilityTest.kt`
 - `shared/src/jvmTest/kotlin/dev/zacsweers/fieldspottr/PermitGridTest.kt`
 
 Important cases:
 
-- Pending final approval becomes a pending block.
-- Advisory-only pending counts do not become hard blocks.
+- The generator accepts valid live responses and rejects challenge pages and unrelated JSON.
 - Live blocks propagate to overlapping fields.
 - Live normalization is idempotent.
 - Live blocks are clipped around CSV reservations rather than dropped wholesale.

@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.LocalTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -77,13 +78,15 @@ class WeatherRepositoryTest {
   private val sampleResponse =
     """
     {
+      "utc_offset_seconds": -14400,
       "current": {"temperature_2m": 72.6, "weather_code": 2},
       "daily": {
         "time": ["2026-06-10", "2026-06-11"],
         "weather_code": [2, 61],
         "temperature_2m_max": [73.4, 64.2],
         "temperature_2m_min": [58.1, 55.0],
-        "precipitation_probability_max": [20, 80]
+        "precipitation_probability_max": [20, 80],
+        "sunset": ["2026-06-10T20:28", "2026-06-11T20:29"]
       },
       "hourly": {
         "time": ["2026-06-10T15:00", "2026-06-10T18:00", "2026-06-10T19:00", "2026-06-11T12:00"],
@@ -109,6 +112,7 @@ class WeatherRepositoryTest {
     assertThat(daily!!.highF).isEqualTo(73)
     assertThat(daily.lowF).isEqualTo(58)
     assertThat(daily.precipProbability).isEqualTo(20)
+    assertThat(daily.sunset).isEqualTo(LocalTime(20, 28))
 
     assertThat(forecast.hourlyAt(date, 15)!!.condition).isEqualTo(WeatherCondition.CLEAR)
     assertThat(forecast.hourlyAt(date, 18)!!.precipProbability).isEqualTo(60)
@@ -164,6 +168,62 @@ class WeatherRepositoryTest {
   }
 
   @Test
+  fun `times across a daylight saving change read as new york time`() {
+    // Open-Meteo answered in EST, so it wrote the times before the November 1 change an hour early
+    val forecast =
+      json
+        .decodeFromString<OpenMeteoResponse>(
+          """
+          {
+            "utc_offset_seconds": -18000,
+            "daily": {
+              "time": ["2026-10-31", "2026-11-02"],
+              "weather_code": [2, 2],
+              "temperature_2m_max": [60.0, 58.0],
+              "temperature_2m_min": [45.0, 44.0],
+              "sunset": ["2026-10-31T16:53", "2026-11-02T16:51"]
+            },
+            "hourly": {
+              "time": ["2026-10-31T14:00", "2026-11-02T14:00"],
+              "weather_code": [61, 61],
+              "precipitation_probability": [70, 70]
+            }
+          }
+          """
+            .trimIndent()
+        )
+        .toWeatherForecast()
+
+    assertThat(forecast.daily(LocalDate(2026, 10, 31))!!.sunset).isEqualTo(LocalTime(17, 53))
+    assertThat(forecast.daily(LocalDate(2026, 11, 2))!!.sunset).isEqualTo(LocalTime(16, 51))
+    assertThat(forecast.hourly(LocalDate(2026, 10, 31)).single().hour).isEqualTo(15)
+    assertThat(forecast.hourly(LocalDate(2026, 11, 2)).single().hour).isEqualTo(14)
+  }
+
+  @Test
+  fun `stored forecasts without an offset keep their times`() {
+    val forecast =
+      json
+        .decodeFromString<OpenMeteoResponse>(
+          """
+          {
+            "daily": {
+              "time": ["2026-06-10"],
+              "weather_code": [2],
+              "temperature_2m_max": [73.4],
+              "temperature_2m_min": [58.1],
+              "sunset": ["2026-06-10T20:28"]
+            }
+          }
+          """
+            .trimIndent()
+        )
+        .toWeatherForecast()
+
+    assertThat(forecast.daily(date)!!.sunset).isEqualTo(LocalTime(20, 28))
+  }
+
+  @Test
   fun `empty cache fetches and stores the forecast`() = runTest {
     val repository = repository()
 
@@ -181,6 +241,16 @@ class WeatherRepositoryTest {
     assertThat(repository.forecast.first()!!.current!!.tempF).isEqualTo(STORED_TEMP)
     // A refresh queues behind the collector's staleness check, so this counts only its own request
     repository.refresh().awaitSucceeded()
+    assertThat(requests.get()).isEqualTo(1)
+  }
+
+  @Test
+  fun `fresh cache from before the sunset is fetched again`() = runTest {
+    writeCache(fetchedAt = START - 10.minutes, withOffset = false)
+    val repository = repository()
+
+    val forecast = repository.forecast.first { it?.current?.tempF == FETCHED_TEMP }
+    assertThat(forecast!!.daily(date)!!.sunset).isEqualTo(LocalTime(20, 28))
     assertThat(requests.get()).isEqualTo(1)
   }
 
@@ -249,9 +319,16 @@ class WeatherRepositoryTest {
     return WeatherRepository(data, store, json, lazyOf(client))
   }
 
-  /** Writes the file as the store does: the response under "value" beside its fetch time. */
-  private fun writeCache(fetchedAt: Instant) {
-    val stored = json.parseToJsonElement(sampleResponse.replace("72.6", "50.0"))
+  /**
+   * Writes the file as the store does: the response under "value" beside its fetch time. Without
+   * [withOffset], it matches a forecast stored before the app read Open-Meteo's offset.
+   */
+  private fun writeCache(fetchedAt: Instant, withOffset: Boolean = true) {
+    var response = sampleResponse.replace("72.6", "50.0")
+    if (!withOffset) {
+      response = response.replace("\"utc_offset_seconds\": -14400,", "")
+    }
+    val stored = json.parseToJsonElement(response)
     val record = buildJsonObject {
       put("fetchedAt", fetchedAt.toEpochMilliseconds())
       put("value", stored)

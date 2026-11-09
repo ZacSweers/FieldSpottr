@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -20,6 +21,7 @@ import java.nio.file.Paths
 import kotlin.io.path.createFile
 import kotlin.io.path.exists
 import kotlin.io.path.writeText
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
@@ -36,6 +38,8 @@ fun main(args: Array<String>) {
         height = 800.dp,
         position = WindowPosition(Alignment.Center),
       )
+    // Escape goes back, as a back gesture does on phones
+    val backRequests = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
     Window(
       title = "Field Spottr",
       state = windowState,
@@ -55,12 +59,16 @@ fun main(args: Array<String>) {
             dumpAreasJson(fsGraph.json)
             true
           }
+          Key.Escape if event.type == KeyEventType.KeyUp -> {
+            backRequests.tryEmit(Unit)
+            true
+          }
 
           else -> false
         }
       },
     ) {
-      fsGraph.fsApp(onRootPop = ::exitApplication)
+      fsGraph.fsApp(onRootPop = ::exitApplication, backRequests = backRequests)
     }
   }
 }

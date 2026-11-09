@@ -12,6 +12,13 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.constrainHeight
 
+/** Slot for the width-bounded measurement, distinct from the per-size slots. */
+private object WrappedSlot
+
+/**
+ * Shrinks single-line [content] from [maxSize] toward [minSize] until it fits the width. Content
+ * still too wide at [minSize] is measured within the width, so text that allows wrapping wraps.
+ */
 @Composable
 fun AutoMeasureText(
   modifier: Modifier = Modifier,
@@ -32,8 +39,12 @@ fun AutoMeasureText(
     while (placeable.width > constraints.maxWidth) {
       val newSize = (currentSize * 0.9f)
       if (newSize < minSize) {
-        // It won't fit, measure at the minimum size and give up
-        placeable = measureAt(minSize)
+        // Too wide even at the minimum size, so measure within the width and let content that
+        // allows it wrap instead of spilling past its neighbors
+        placeable =
+          subcompose(WrappedSlot) { Box { content(minSize) } }
+            .single()
+            .measure(Constraints(maxWidth = constraints.maxWidth))
         break
       }
       currentSize = newSize
