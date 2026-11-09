@@ -27,11 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -326,9 +324,9 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       state.eventSink(FindFieldScreen.Event.SelectDate(newDate))
     }
   ) {
-    // App title + refresh
+    // App title. Pull down on the list to refresh.
     Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp),
+      modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
@@ -338,9 +336,6 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         fontStyle = FontStyle.Italic,
         modifier = Modifier.weight(1f),
       )
-      IconButton(onClick = { state.eventSink(FindFieldScreen.Event.Refresh) }) {
-        Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
-      }
     }
     // Updated-at, weather, and sunset on one quiet line that wraps on narrow screens
     val hasWeather = state.weather?.daily(state.selectedDate) != null
