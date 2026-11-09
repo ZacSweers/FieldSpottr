@@ -218,8 +218,8 @@ class FindFieldScreenTest {
   }
 
   @Test
-  fun `halves that share a token block each other`() {
-    // Bushwick's halves share the "bushwick inlet field" token, like the grid's overlap model
+  fun `a booked bushwick half leaves the other half free`() {
+    // The catalog models Bushwick Inlet's halves as independent surfaces of one whole field
     val permits =
       listOf(
         permit(
@@ -237,7 +237,7 @@ class FindFieldScreenTest {
         it.group.name == "Bushwick Inlet Park"
       }
     assertThat(bushwick.openTimeRange).isEqualTo("8–11pm")
-    assertThat(bushwick.fieldOpenings).isEmpty()
+    assertThat(bushwick.fieldOpenings).containsExactly(FieldOpening("East Half", "6–11pm"))
   }
 
   @Test

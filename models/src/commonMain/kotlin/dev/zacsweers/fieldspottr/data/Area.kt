@@ -181,19 +181,19 @@ fun buildDefaultAreas(): Areas {
         field(
           csvName = "Soccer-01A East 6th Street",
           displayName = "North Half",
-          sharedFields = setOf("Track field", "track field 1a"),
+          sharedFields = setOf("track field 1a"),
           apiLocationId = "M144-ZN05-SOCCER-2",
         )
         field(
           csvName = "Soccer-04 East 6th Street",
           displayName = "Whole Field",
-          sharedFields = setOf("Track field"),
+          sharedFields = setOf("track field 1a", "track field 1b"),
           apiLocationId = "M144-ZN05-SOCCER-1",
         )
         field(
           csvName = "Soccer-01B East 6th Street",
           displayName = "South Half",
-          sharedFields = setOf("Track field", "track field 1b"),
+          sharedFields = setOf("track field 1b"),
           apiLocationId = "M144-ZN05-SOCCER-3",
         )
       }
@@ -422,19 +422,19 @@ fun buildDefaultAreas(): Areas {
         field(
           csvName = "Soccer-01A",
           displayName = "West Half",
-          sharedFields = setOf("bushwick inlet field", "field 1a"),
+          sharedFields = setOf("field 1a"),
           apiLocationId = "B529-SOCCER-3",
         )
         field(
           csvName = "Soccer-01",
           displayName = "Whole Field",
-          sharedFields = setOf("bushwick inlet field"),
+          sharedFields = setOf("field 1a", "field 1b"),
           apiLocationId = "B529-SOCCER-2",
         )
         field(
           csvName = "Soccer-01B",
           displayName = "East Half",
-          sharedFields = setOf("bushwick inlet field", "field 1b"),
+          sharedFields = setOf("field 1b"),
           apiLocationId = "B529-SOCCER-1",
         )
       }

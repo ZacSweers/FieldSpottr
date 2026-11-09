@@ -68,7 +68,6 @@
               "displayName": "North Half",
               "group": "Track",
               "sharedFields": [
-                "Track field",
                 "track field 1a"
               ],
               "apiLocationId": "M144-ZN05-SOCCER-2"
@@ -78,7 +77,8 @@
               "displayName": "Whole Field",
               "group": "Track",
               "sharedFields": [
-                "Track field"
+                "track field 1a",
+                "track field 1b"
               ],
               "apiLocationId": "M144-ZN05-SOCCER-1"
             },
@@ -87,7 +87,6 @@
               "displayName": "South Half",
               "group": "Track",
               "sharedFields": [
-                "Track field",
                 "track field 1b"
               ],
               "apiLocationId": "M144-ZN05-SOCCER-3"
@@ -429,7 +428,6 @@
               "displayName": "West Half",
               "group": "Bushwick Inlet Park",
               "sharedFields": [
-                "bushwick inlet field",
                 "field 1a"
               ],
               "apiLocationId": "B529-SOCCER-3"
@@ -439,7 +437,8 @@
               "displayName": "Whole Field",
               "group": "Bushwick Inlet Park",
               "sharedFields": [
-                "bushwick inlet field"
+                "field 1a",
+                "field 1b"
               ],
               "apiLocationId": "B529-SOCCER-2"
             },
@@ -448,7 +447,6 @@
               "displayName": "East Half",
               "group": "Bushwick Inlet Park",
               "sharedFields": [
-                "bushwick inlet field",
                 "field 1b"
               ],
               "apiLocationId": "B529-SOCCER-1"
