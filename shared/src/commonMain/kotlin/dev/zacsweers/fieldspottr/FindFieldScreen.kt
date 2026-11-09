@@ -85,7 +85,6 @@ import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.daySwipeable
-import dev.zacsweers.fieldspottr.util.nycSunset
 import dev.zacsweers.fieldspottr.util.produceNyHour
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
@@ -146,8 +145,8 @@ data object FindFieldScreen : Screen {
     /** The selected date is today or later and some open groups lack pending permit data. */
     val isMissingPendingData: Boolean,
     val freshness: DataFreshness?,
-    /** Sunset in New York time on [selectedDate]. */
-    val sunset: LocalTime,
+    /** Sunset in New York time on [selectedDate], or null when the forecast doesn't cover it. */
+    val sunset: LocalTime?,
     /** A refresh the user started is running. */
     val isRefreshing: Boolean,
     val availability: AvailabilityBuckets?,
@@ -243,7 +242,7 @@ fun FindFieldPresenter(
     isManagingWindows = isManagingWindows,
     isMissingPendingData = availability?.isMissingPendingData == true && selectedDate >= today,
     freshness = freshness,
-    sunset = remember(selectedDate) { nycSunset(selectedDate) },
+    sunset = weather?.daily(selectedDate)?.sunset,
     isRefreshing = isRefreshing,
     availability = availability,
     weather = weather,
@@ -387,18 +386,20 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       state.weather?.let { weather ->
         WeatherStrip(forecast = weather, date = state.selectedDate, isToday = state.isToday)
       }
-      if (state.freshness != null || hasWeather) {
+      state.sunset?.let { sunset ->
+        if (state.freshness != null || hasWeather) {
+          Text(
+            "·",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
         Text(
-          "·",
+          "Sunset ${formatTime12(sunset)}",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
-      Text(
-        "Sunset ${formatTime12(state.sunset)}",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
     }
     Spacer(Modifier.height(8.dp))
 

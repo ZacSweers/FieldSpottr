@@ -82,7 +82,6 @@ import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.formatTime12
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.ReflowText
-import dev.zacsweers.fieldspottr.util.nycSunset
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
@@ -140,7 +139,8 @@ fun PermitGrid(
       density.run { (initialEarliestPermit * itemHeight).roundToPx() }
     }
 
-  val sunset = remember(selectedDate) { nycSunset(selectedDate) }
+  // From the forecast, so dates past it show no sunset line
+  val sunset = weather?.daily(selectedDate)?.sunset
   Column(modifier) {
     BoxWithConstraints(Modifier.weight(1f)) {
       val availableFieldWidth =
@@ -737,18 +737,20 @@ private inline fun <T> withDensity(block: Density.() -> T): T {
 }
 
 /**
- * Draws a muted dotted line across the grid at [sunset], labeled with the time at its start. It
- * draws over the columns so it shows across booked blocks too. The label explains the line, and the
- * dots and muted color keep it apart from the solid "now" line.
+ * Draws a muted dotted line across the grid at [sunset], labeled with the time at its start, or
+ * nothing when [sunset] is null. It draws over the columns so it shows across booked blocks too.
+ * The label explains the line, and the dots and muted color keep it apart from the solid "now"
+ * line.
  *
  * The label stays at the visible start of the field area while [horizontalScrollState] scrolls it.
  */
 @Composable
 private fun Modifier.sunsetLine(
-  sunset: LocalTime,
+  sunset: LocalTime?,
   itemHeight: Dp,
   horizontalScrollState: ScrollState,
 ): Modifier {
+  if (sunset == null) return this
   val sunsetOffsetPx = withDensity { ((sunset.hour + sunset.minute / 60f) * itemHeight).toPx() }
   val lineColor = MaterialTheme.colorScheme.outline
   val labelColor = MaterialTheme.colorScheme.onSurfaceVariant

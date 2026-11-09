@@ -12,6 +12,7 @@ import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.refresh
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.fieldspottr.di.IoDispatcher
+import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Inject
@@ -26,10 +27,15 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.LocalTime
+import kotlinx.datetime.UtcOffset
+import kotlinx.datetime.toInstant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -46,7 +52,7 @@ private const val OPEN_METEO_URL =
     "&temperature_unit=fahrenheit" +
     "&forecast_days=8" +
     "&current=temperature_2m,weather_code" +
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunset" +
     "&hourly=weather_code,precipitation_probability"
 
 private val WEATHER_REFRESH_INTERVAL = 1.hours
@@ -109,6 +115,8 @@ data class DailyForecast(
   val lowF: Int,
   /** 0-100, or null if unavailable. */
   val precipProbability: Int?,
+  /** Sunset in New York time, or null if unavailable. */
+  val sunset: LocalTime? = null,
 )
 
 @Immutable
@@ -197,6 +205,17 @@ internal constructor(
   /** Latest known forecast, or null until one loads. Collecting it fetches first when stale. */
   val forecast: Flow<WeatherForecast?> = query.data.values().map { it?.toWeatherForecast() }
 
+  init {
+    // A forecast stored before the app read Open-Meteo's offset has no sunset, and it can stay
+    // fresh for an hour after an update. Replace it once, so the sunset shows right away.
+    data.scope.launch {
+      val stored = query.stored.first()
+      if (stored != null && stored.value.utcOffsetSeconds == null) {
+        query.requestFetch(force = true)
+      }
+    }
+  }
+
   /** Fetches now, even when the stored forecast is fresh. */
   fun refresh(): Operation = query.refresh()
 
@@ -209,6 +228,12 @@ internal constructor(
 
 @Serializable
 internal data class OpenMeteoResponse(
+  /**
+   * The offset of every local time in the response. Open-Meteo applies the one in effect when it
+   * answers, even to times on the far side of a daylight saving change. Null in forecasts stored
+   * before the app read it.
+   */
+  @SerialName("utc_offset_seconds") val utcOffsetSeconds: Int? = null,
   val current: OpenMeteoCurrent? = null,
   val daily: OpenMeteoDaily? = null,
   val hourly: OpenMeteoHourly? = null,
@@ -227,6 +252,7 @@ internal data class OpenMeteoDaily(
   @SerialName("temperature_2m_max") val temperatureMax: List<Double?> = emptyList(),
   @SerialName("temperature_2m_min") val temperatureMin: List<Double?> = emptyList(),
   @SerialName("precipitation_probability_max") val precipProbabilityMax: List<Int?> = emptyList(),
+  val sunset: List<String?> = emptyList(),
 )
 
 @Serializable
@@ -255,12 +281,14 @@ internal fun OpenMeteoResponse.toWeatherForecast(): WeatherForecast {
         highF = high.roundToInt(),
         lowF = low.roundToInt(),
         precipProbability = daily.precipProbabilityMax.getOrNull(i),
+        sunset = daily.sunset.getOrNull(i)?.toNyLocalDateTimeOrNull(utcOffsetSeconds)?.time,
       )
     }
 
   val hourlyForecasts =
     hourly?.time.orEmpty().mapIndexedNotNull { i, timeString ->
-      val dateTime = timeString.toLocalDateTimeOrNull() ?: return@mapIndexedNotNull null
+      val dateTime =
+        timeString.toNyLocalDateTimeOrNull(utcOffsetSeconds) ?: return@mapIndexedNotNull null
       val code = hourly?.weatherCode?.getOrNull(i) ?: return@mapIndexedNotNull null
       HourlyForecast(
         date = dateTime.date,
@@ -291,4 +319,16 @@ private fun String.toLocalDateTimeOrNull(): LocalDateTime? {
   } catch (_: Exception) {
     null
   }
+}
+
+/**
+ * Reads an Open-Meteo local time as New York time, through the response's [utcOffsetSeconds]. A
+ * time stored without an offset is already New York time, except across a daylight saving change.
+ */
+private fun String.toNyLocalDateTimeOrNull(utcOffsetSeconds: Int?): LocalDateTime? {
+  val local = toLocalDateTimeOrNull() ?: return null
+  if (utcOffsetSeconds == null) {
+    return local
+  }
+  return local.toInstant(UtcOffset(seconds = utcOffsetSeconds)).toNyLocalDateTime()
 }
