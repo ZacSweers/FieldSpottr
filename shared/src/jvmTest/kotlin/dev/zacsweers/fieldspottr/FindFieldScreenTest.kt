@@ -34,6 +34,33 @@ class FindFieldScreenTest {
   }
 
   @Test
+  fun `today's window starts at the current hour`() {
+    assertThat(searchHours(TimeWindow.MORNING, isToday = true, currentHour = 10))
+      .isEqualTo(SearchHours(TimeWindow.MORNING, 10, 12))
+    assertThat(searchHours(TimeWindow.EVENING, isToday = true, currentHour = 10))
+      .isEqualTo(SearchHours(TimeWindow.EVENING, 18, 23))
+    assertThat(searchHours(null, isToday = true, currentHour = 15))
+      .isEqualTo(SearchHours(null, 15, 24))
+  }
+
+  @Test
+  fun `a passed window on today falls back to the current window`() {
+    assertThat(searchHours(TimeWindow.MORNING, isToday = true, currentHour = 14))
+      .isEqualTo(SearchHours(TimeWindow.AFTERNOON, 14, 18))
+    // No window holds 11pm, so the rest of the day is searched
+    assertThat(searchHours(TimeWindow.EVENING, isToday = true, currentHour = 23))
+      .isEqualTo(SearchHours(null, 23, 24))
+  }
+
+  @Test
+  fun `other days search the full window`() {
+    assertThat(searchHours(TimeWindow.MORNING, isToday = false, currentHour = 14))
+      .isEqualTo(SearchHours(TimeWindow.MORNING, 6, 12))
+    assertThat(searchHours(null, isToday = false, currentHour = 14))
+      .isEqualTo(SearchHours(null, 0, 24))
+  }
+
+  @Test
   fun `find field does not recommend BBP without coverage`() {
     val unavailable =
       permit(

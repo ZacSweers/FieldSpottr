@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +71,7 @@ import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.WeatherStrip
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.daySwipeable
+import dev.zacsweers.fieldspottr.util.produceNyHour
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import dev.zacsweers.metro.AppScope
@@ -86,7 +88,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
-import kotlinx.datetime.toLocalDateTime
 
 @Immutable
 data class FieldAvailability(
@@ -112,8 +113,11 @@ data class AvailabilityBuckets(
 data object FindFieldScreen : Screen {
   data class State(
     val selectedDate: LocalDate,
+    /** The window in effect, after a passed window on today falls back to the current one. */
     val selectedWindow: TimeWindow?,
     val isToday: Boolean,
+    /** The current New York hour. On today, search hours and window chips start here. */
+    val currentHour: Int,
     val lastUpdated: String?,
     val availability: AvailabilityBuckets?,
     val weather: WeatherForecast?,
@@ -139,14 +143,20 @@ fun FindFieldPresenter(
   navigator: Navigator,
 ): FindFieldScreen.State {
   val areas by repository.areas.collectAsRetainedState(Areas.default)
-  val currentLocalDateTime = remember {
-    System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-  }
-  val today = currentLocalDateTime.date
+  val now by produceNyHour()
+  val today = now.date
+  val currentHour = now.hour
   var selectedDate by retain { mutableStateOf(today) }
-  var selectedWindow by retain {
-    mutableStateOf(TimeWindow.forHour(currentLocalDateTime.hour))
+  var selectedWindow by retain { mutableStateOf(TimeWindow.forHour(currentHour)) }
+  // When the date rolls over at midnight, a selection of the old "today" moves to the new one.
+  var lastToday by retain { mutableStateOf(today) }
+  LaunchedEffect(today) {
+    if (selectedDate == lastToday) {
+      selectedDate = today
+    }
+    lastToday = today
   }
+  val hours = searchHours(selectedWindow, isToday = selectedDate == today, currentHour)
 
   // Last updated — use the first area as a representative
   val firstAreaName = remember(areas) { areas.entries.firstOrNull()?.areaName }
@@ -169,12 +179,10 @@ fun FindFieldPresenter(
     }
 
   // Availability
-  val startHour = selectedWindow?.startHour ?: 0
-  val endHour = selectedWindow?.endHour ?: 24
   val availabilityFlow =
-    retain(selectedDate, selectedWindow, areas) {
-      repository.allPermitsInWindow(selectedDate, startHour, endHour).map { permits ->
-        computeAvailability(permits, areas, startHour, endHour)
+    retain(selectedDate, hours, areas) {
+      repository.allPermitsInWindow(selectedDate, hours.startHour, hours.endHour).map { permits ->
+        computeAvailability(permits, areas, hours.startHour, hours.endHour)
       }
     }
   val availability by availabilityFlow.collectAsRetainedState(null)
@@ -184,8 +192,9 @@ fun FindFieldPresenter(
 
   return FindFieldScreen.State(
     selectedDate = selectedDate,
-    selectedWindow = selectedWindow,
+    selectedWindow = hours.window,
     isToday = selectedDate == today,
+    currentHour = currentHour,
     lastUpdated = lastUpdatedText,
     availability = availability,
     weather = weather,
@@ -287,11 +296,15 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       }
       LazyRow(horizontalArrangement = spacedBy(8.dp)) {
         items(TimeWindow.entries.toList()) { window ->
+          val hasPassed = state.isToday && window.hasPassed(state.currentHour)
+          val startHour =
+            if (state.isToday) max(window.startHour, state.currentHour) else window.startHour
           val isRainy =
-            state.weather?.isRainyWindow(state.selectedDate, window.startHour, window.endHour) ==
-              true
+            !hasPassed &&
+              state.weather?.isRainyWindow(state.selectedDate, startHour, window.endHour) == true
           FilterChip(
             selected = state.selectedWindow == window,
+            enabled = !hasPassed,
             onClick = {
               state.eventSink(
                 FindFieldScreen.Event.SelectWindow(
@@ -505,6 +518,31 @@ private fun FieldAvailabilityRow(
       )
     }
   }
+}
+
+/** The window Find a Field searches and its hours, with an exclusive [endHour]. */
+internal data class SearchHours(val window: TimeWindow?, val startHour: Int, val endHour: Int)
+
+/**
+ * Resolves the hours to search for [selected], where null means the whole day. On today, hours
+ * before [currentHour] drop off the start, and a window that has already ended falls back to the
+ * window that holds [currentHour], or to the rest of the day when no window holds it.
+ */
+internal fun searchHours(selected: TimeWindow?, isToday: Boolean, currentHour: Int): SearchHours {
+  if (!isToday) {
+    return SearchHours(selected, selected?.startHour ?: 0, selected?.endHour ?: 24)
+  }
+  val window =
+    if (selected != null && selected.hasPassed(currentHour)) {
+      TimeWindow.forHour(currentHour)
+    } else {
+      selected
+    }
+  return SearchHours(
+    window = window,
+    startHour = max(window?.startHour ?: 0, currentHour),
+    endHour = window?.endHour ?: 24,
+  )
 }
 
 internal fun computeAvailability(

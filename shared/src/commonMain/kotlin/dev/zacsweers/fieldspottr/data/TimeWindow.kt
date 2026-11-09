@@ -14,6 +14,9 @@ enum class TimeWindow(
 
   fun label(isToday: Boolean): String = if (isToday) todayLabel else otherDayLabel
 
+  /** Whether this window has ended on today's date once the clock reaches [currentHour]. */
+  fun hasPassed(currentHour: Int): Boolean = currentHour >= endHour
+
   companion object {
     fun forHour(hour: Int): TimeWindow? {
       require(hour in 0..23) { "Hour must be between 0 and 23." }
