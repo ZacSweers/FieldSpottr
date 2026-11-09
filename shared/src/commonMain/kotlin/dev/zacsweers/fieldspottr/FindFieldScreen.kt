@@ -492,7 +492,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
                 field = field,
                 dotColor = MaterialTheme.colorScheme.primary,
                 isSelected = field.group.name == openGroup,
-                sharesElements = !paneLayout.isSplit,
+                opensInPane = paneLayout.isSplit,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -507,7 +507,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
                 field = field,
                 dotColor = MaterialTheme.colorScheme.tertiary,
                 isSelected = field.group.name == openGroup,
-                sharesElements = !paneLayout.isSplit,
+                opensInPane = paneLayout.isSplit,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -522,7 +522,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
                 field = field,
                 dotColor = MaterialTheme.colorScheme.error,
                 isSelected = field.group.name == openGroup,
-                sharesElements = !paneLayout.isSplit,
+                opensInPane = paneLayout.isSplit,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -557,16 +557,26 @@ private fun FieldAvailabilityRow(
   /** The row's group is open in the pane beside the list. */
   isSelected: Boolean = false,
   /**
-   * The row grows into the area screen when tapped. Off in the split layout, where the row stays
-   * visible beside the grid it opens.
+   * Tapping opens the area in the pane beside the list, as in the split layout. The row stays
+   * visible, so it doesn't grow into the area screen or show a push chevron, and its highlight sits
+   * inset from the pane edges.
    */
-  sharesElements: Boolean = true,
+  opensInPane: Boolean = false,
 ) = SharedElementTransitionScope {
   val containerKey = AreaContainerSharedElementKey(field.group.name)
   val contentKey = AreaContentSharedElementKey(field.group.name)
   val navScope = requireAnimatedScope(Navigation)
+  val sharesElements = !opensInPane
   val reflowKey = if (sharesElements) "area-${field.group.name}" else null
-  Box(modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable(onClick = onClick)) {
+  // Content stays 16dp from the list edge either way
+  val inset = if (opensInPane) 8.dp else 0.dp
+  Box(
+    modifier
+      .fillMaxWidth()
+      .padding(horizontal = inset)
+      .clip(MaterialTheme.shapes.medium)
+      .clickable(onClick = onClick)
+  ) {
     // Background — sharedElement, always opaque, no cross-fade
     Spacer(
       Modifier.matchParentSize()
@@ -608,7 +618,7 @@ private fun FieldAvailabilityRow(
               Modifier
             }
           )
-          .padding(horizontal = 16.dp, vertical = 12.dp),
+          .padding(horizontal = 16.dp - inset, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = spacedBy(12.dp),
     ) {
@@ -681,11 +691,13 @@ private fun FieldAvailabilityRow(
       }
 
       // Chevron
-      Icon(
-        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+      if (!opensInPane) {
+        Icon(
+          Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
   }
 }
