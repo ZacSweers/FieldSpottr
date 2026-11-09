@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -38,14 +39,19 @@ private const val DRAG_DIVISOR = 1000f
  * - Dragging down scales content from 1.0 down to [MIN_SCALE].
  * - Releasing past [DRAG_DISMISS_THRESHOLD] triggers [onDismiss].
  * - Releasing before the threshold springs the scale back to 1.0.
+ *
+ * @param enabled turns the gesture off without changing the content's composition, such as while
+ *   the content sits in a side pane where dismissing by drag doesn't fit.
  */
 @Composable
 fun DragToDismiss(
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
+  enabled: Boolean = true,
   content: @Composable () -> Unit,
 ) {
   val scope = rememberCoroutineScope()
+  val isEnabled by rememberUpdatedState(enabled)
   var dragProgress by remember { mutableFloatStateOf(0f) }
   val dragDismissAnim = remember { Animatable(0f) }
   val currentDragProgress = if (dragDismissAnim.isRunning) dragDismissAnim.value else dragProgress
@@ -90,7 +96,12 @@ fun DragToDismiss(
         // Only when the inner list didn't consume anything in this axis — this
         // means the list was already at the top, not that it just reached the top
         // mid-fling. Also ignore fling-sourced overscroll entirely.
-        if (available.y > 0f && consumed.y == 0f && source == NestedScrollSource.UserInput) {
+        if (
+          isEnabled &&
+            available.y > 0f &&
+            consumed.y == 0f &&
+            source == NestedScrollSource.UserInput
+        ) {
           dragProgress = (dragProgress + available.y / DRAG_DIVISOR).coerceIn(0f, 1f)
           return Offset(0f, available.y)
         }
@@ -120,6 +131,7 @@ fun DragToDismiss(
         .draggable(
           state = draggableState,
           orientation = Orientation.Vertical,
+          enabled = enabled,
           onDragStopped = { settle() },
         )
   ) {

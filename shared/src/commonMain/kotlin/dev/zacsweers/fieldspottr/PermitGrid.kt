@@ -73,6 +73,8 @@ import dev.zacsweers.fieldspottr.data.LivePermitAdvisory
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.withOverlapsFrom
+import dev.zacsweers.fieldspottr.panes.LocalPaneRole
+import dev.zacsweers.fieldspottr.panes.PaneRole
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.ReflowText
@@ -809,8 +811,11 @@ fun PermitEvent(
   val containerColor = kind.containerColor()
   val isClickable = onEventClick != null && !isOverlap && !event.isBlocked && !event.isUnavailable
   var orgVisible by remember { mutableStateOf(false) }
+  // In the left pane, details open beside the grid and the block stays visible, so it doesn't grow
+  // into them
+  val sharesElements = isClickable && LocalPaneRole.current != PaneRole.PRIMARY
   val sharedBoundsModifier =
-    if (isClickable) {
+    if (sharesElements) {
       val sharedBoundsKey =
         PermitSharedElementKey(
           fieldName,
@@ -845,7 +850,7 @@ fun PermitEvent(
 
       ReflowText(
         text = event.title,
-        sharedElementKey = if (isClickable) "permit-${fieldName}-${index}" else null,
+        sharedElementKey = if (sharesElements) "permit-${fieldName}-${index}" else null,
         sharedElementKeySuffix = "title",
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
@@ -855,7 +860,8 @@ fun PermitEvent(
 
       ReflowText(
         text = event.org,
-        sharedElementKey = if (isClickable && orgVisible) "permit-${fieldName}-${index}" else null,
+        sharedElementKey =
+          if (sharesElements && orgVisible) "permit-${fieldName}-${index}" else null,
         modifier = Modifier.onPlaced { orgVisible = it.size.height > 0 && it.size.width > 0 },
         sharedElementKeySuffix = "org",
         style = MaterialTheme.typography.bodySmall,
