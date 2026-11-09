@@ -185,7 +185,7 @@ internal constructor(
   private val areasStore =
     StampedFileStore(
       fs = appDirs.fs,
-      path = areasJson,
+      path = { areasJson },
       db = db,
       io = io,
       fetchedAtKey = LAST_AREAS_FETCH_AT,
@@ -205,7 +205,7 @@ internal constructor(
   private val manifestStore =
     StampedFileStore(
       fs = appDirs.fs,
-      path = manifestJson,
+      path = { manifestJson },
       db = db,
       io = io,
       fetchedAtKey = LAST_MANIFEST_FETCH_AT,

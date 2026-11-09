@@ -19,7 +19,7 @@ class StampedFileStoreContractTest : QueryStoreContract() {
   override fun TestScope.newStore(): QueryStore<String> =
     StampedFileStore(
       fs = fileSystem,
-      path = "/data/value.txt".toPath(),
+      path = { "/data/value.txt".toPath() },
       db = suspendLazy { temporaryDatabase.db() },
       // Real threads, the way the app's stores run their blocking calls
       io = Dispatchers.IO,
