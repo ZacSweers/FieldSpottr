@@ -599,7 +599,8 @@ private fun FieldAvailabilityRow(
             "${opening.fieldNames} · ${opening.openTimeRange}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.tertiary,
-            maxLines = 1,
+            // Two lines fit the free times next to a wide time chip
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
           )
         }
