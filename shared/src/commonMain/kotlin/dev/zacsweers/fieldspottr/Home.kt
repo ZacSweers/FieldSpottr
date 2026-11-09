@@ -3,8 +3,14 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Place
@@ -12,6 +18,8 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -33,9 +41,11 @@ import com.slack.circuit.foundation.onNavEvent
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
+import com.slack.circuit.runtime.popUntil
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
 import dev.zacsweers.metro.AppScope
 
 private enum class Tab(val label: String) {
@@ -81,7 +91,13 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
     navigator = navigator,
   ) { event ->
     when (event) {
-      is HomeScreen.Event.SelectTab -> selectedTabIndex = event.index
+      is HomeScreen.Event.SelectTab -> {
+        // In the split layout the rail stays visible beside open details, so close them before
+        // showing another tab. Phones cover the bar with pushed screens, so this pops nothing
+        // there.
+        navigator.popUntil { it is HomeScreen }
+        selectedTabIndex = event.index
+      }
     }
   }
 }
@@ -98,41 +114,71 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
-  Scaffold(
-    modifier = modifier,
-    snackbarHost = {
-      SnackbarHost(hostState = snackbarHostState) { snackbarData ->
-        Snackbar(snackbarData = snackbarData)
-      }
-    },
-    bottomBar = {
-      NavigationBar {
+  // Wide windows put the tabs in a rail on the start edge, which leaves the full height for content
+  val isWide = LocalPaneLayout.current.isWide
+  Row(modifier.fillMaxSize()) {
+    if (isWide) {
+      NavigationRail(
+        windowInsets =
+          WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)
+      ) {
         Tab.entries.forEachIndexed { index, tab ->
-          NavigationBarItem(
+          NavigationRailItem(
             selected = state.selectedTabIndex == index,
             onClick = { state.eventSink(HomeScreen.Event.SelectTab(index)) },
-            icon = {
-              Icon(
-                when (tab) {
-                  Tab.FIND_FIELD -> Icons.Outlined.Search
-                  Tab.AREAS -> Icons.Outlined.Place
-                  Tab.ABOUT -> Icons.Outlined.Info
-                },
-                contentDescription = tab.label,
-              )
-            },
+            icon = { TabIcon(tab) },
             label = { Text(tab.label) },
           )
         }
       }
-    },
-  ) { innerPadding ->
-    Box(Modifier.padding(innerPadding).fillMaxSize()) {
-      when (Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD) {
-        Tab.FIND_FIELD -> CircuitContent(FindFieldScreen, onNavEvent = onNavEvent)
-        Tab.AREAS -> CircuitContent(PermitGridScreen, onNavEvent = onNavEvent)
-        Tab.ABOUT -> CircuitContent(AboutScreen, onNavEvent = onNavEvent)
+    }
+    Scaffold(
+      modifier =
+        if (isWide) {
+          Modifier.weight(1f)
+            .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+        } else {
+          Modifier.weight(1f)
+        },
+      snackbarHost = {
+        SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+          Snackbar(snackbarData = snackbarData)
+        }
+      },
+      bottomBar = {
+        if (!isWide) {
+          NavigationBar {
+            Tab.entries.forEachIndexed { index, tab ->
+              NavigationBarItem(
+                selected = state.selectedTabIndex == index,
+                onClick = { state.eventSink(HomeScreen.Event.SelectTab(index)) },
+                icon = { TabIcon(tab) },
+                label = { Text(tab.label) },
+              )
+            }
+          }
+        }
+      },
+    ) { innerPadding ->
+      Box(Modifier.padding(innerPadding).fillMaxSize()) {
+        when (Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD) {
+          Tab.FIND_FIELD -> CircuitContent(FindFieldScreen, onNavEvent = onNavEvent)
+          Tab.AREAS -> CircuitContent(PermitGridScreen, onNavEvent = onNavEvent)
+          Tab.ABOUT -> CircuitContent(AboutScreen, onNavEvent = onNavEvent)
+        }
       }
     }
   }
+}
+
+@Composable
+private fun TabIcon(tab: Tab) {
+  Icon(
+    when (tab) {
+      Tab.FIND_FIELD -> Icons.Outlined.Search
+      Tab.AREAS -> Icons.Outlined.Place
+      Tab.ABOUT -> Icons.Outlined.Info
+    },
+    contentDescription = tab.label,
+  )
 }
