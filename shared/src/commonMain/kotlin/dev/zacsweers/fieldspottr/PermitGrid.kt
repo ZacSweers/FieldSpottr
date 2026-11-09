@@ -308,8 +308,8 @@ fun PermitGrid(
               Modifier.width(fieldAreaWidth)
                 .height(contentHeight)
                 // Outer draws last, so the now line stays on top of the sunset line
-                .nowIndicator(selectedDate, itemHeight)
-                .sunsetLine(sunset, itemHeight)
+                .nowIndicator(selectedDate, itemHeight, horizontalScrollState)
+                .sunsetLine(sunset, itemHeight, horizontalScrollState)
             ) {
               for (field in group.fields) {
                 val fieldStates = fields[field] ?: FieldState.EMPTY
@@ -740,9 +740,15 @@ private inline fun <T> withDensity(block: Density.() -> T): T {
  * Draws a muted dotted line across the grid at [sunset], labeled with the time at its start. It
  * draws over the columns so it shows across booked blocks too. The label explains the line, and the
  * dots and muted color keep it apart from the solid "now" line.
+ *
+ * The label stays at the visible start of the field area while [horizontalScrollState] scrolls it.
  */
 @Composable
-private fun Modifier.sunsetLine(sunset: LocalTime, itemHeight: Dp): Modifier {
+private fun Modifier.sunsetLine(
+  sunset: LocalTime,
+  itemHeight: Dp,
+  horizontalScrollState: ScrollState,
+): Modifier {
   val sunsetOffsetPx = withDensity { ((sunset.hour + sunset.minute / 60f) * itemHeight).toPx() }
   val lineColor = MaterialTheme.colorScheme.outline
   val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -769,19 +775,21 @@ private fun Modifier.sunsetLine(sunset: LocalTime, itemHeight: Dp): Modifier {
       cap = StrokeCap.Round,
       pathEffect = PathEffect.dashPathEffect(floatArrayOf(0.01f, gapPx)),
     )
-    // The label sits just above the line on a background, so it reads over booked blocks
+    // The label sits just above the line on a background, so it reads over booked blocks. Reading
+    // the scroll offset here only redraws on scroll.
+    val labelStart = horizontalScrollState.value + marginPx
     val labelHeight = label.size.height + paddingPx
     val labelTop = sunsetOffsetPx - labelHeight - strokePx
     drawRoundRect(
       color = labelBackground,
-      topLeft = Offset(marginPx, labelTop),
+      topLeft = Offset(labelStart, labelTop),
       size = Size(label.size.width + paddingPx * 2, labelHeight),
       cornerRadius = CornerRadius(cornerPx),
     )
     drawText(
       label,
       color = labelColor,
-      topLeft = Offset(marginPx + paddingPx, labelTop + paddingPx / 2),
+      topLeft = Offset(labelStart + paddingPx, labelTop + paddingPx / 2),
     )
   }
 }
@@ -789,9 +797,15 @@ private fun Modifier.sunsetLine(sunset: LocalTime, itemHeight: Dp): Modifier {
 /**
  * Draws a solid "now" line at the current time with a dot at its start, like a calendar, animated
  * in left to right.
+ *
+ * The dot stays at the visible start of the field area while [horizontalScrollState] scrolls it.
  */
 @Composable
-private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modifier {
+private fun Modifier.nowIndicator(
+  selectedDate: LocalDate,
+  itemHeight: Dp,
+  horizontalScrollState: ScrollState,
+): Modifier {
   val now = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }
   val isToday = selectedDate == now.date
   if (!isToday) return this
@@ -825,7 +839,8 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
       strokeWidth = strokePx,
     )
     if (progress.value > 0f) {
-      drawCircle(color = lineColor, radius = dotRadiusPx, center = Offset(dotRadiusPx, nowOffsetPx))
+      val dotX = horizontalScrollState.value + dotRadiusPx
+      drawCircle(color = lineColor, radius = dotRadiusPx, center = Offset(dotX, nowOffsetPx))
     }
   }
 }
