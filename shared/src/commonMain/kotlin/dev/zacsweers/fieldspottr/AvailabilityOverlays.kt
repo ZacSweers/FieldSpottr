@@ -3,10 +3,13 @@
 package dev.zacsweers.fieldspottr
 
 import dev.zacsweers.fieldspottr.data.Areas
+import dev.zacsweers.fieldspottr.data.BbpAvailability
+import dev.zacsweers.fieldspottr.data.FieldGroup
 import dev.zacsweers.fieldspottr.data.LiveFieldAvailability
 import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.LivePermitAdvisory
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
+import dev.zacsweers.fieldspottr.data.NycLiveAvailability
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
 import kotlin.time.Clock
 import kotlinx.collections.immutable.toImmutableList
@@ -15,10 +18,30 @@ import kotlinx.collections.immutable.toImmutableMap
 internal data class PermitData(
   val permits: PermitState,
   val liveAvailability: LiveGroupAvailability?,
+  /** See [isMissingPendingData]. */
+  val isMissingPendingData: Boolean = false,
 )
 
 internal val DbPermit.isAvailabilityOverlay: Boolean
   get() = isOverlap != 0L || advisory != null || type == "advisory"
+
+/** Daily rows that record source coverage. They never book a field or show in the grid. */
+internal val DbPermit.isCoverageMarker: Boolean
+  get() = type == BbpAvailability.COVERAGE_KIND || type == NycLiveAvailability.COVERAGE_KIND
+
+/**
+ * Whether [group] has NYC live fields but [permits] for one date carry none of the group's live
+ * coverage markers. Pending permit requests come only from live data, so that date shows issued
+ * permits only.
+ */
+internal fun List<DbPermit>.isMissingPendingData(group: FieldGroup): Boolean {
+  if (group.fields.none { it.apiLocationId != null }) return false
+  return none { permit ->
+    permit.type == NycLiveAvailability.COVERAGE_KIND &&
+      permit.area == group.area &&
+      permit.groupName == group.name
+  }
+}
 
 internal fun List<DbPermit>.availabilityOverlays(
   areas: Areas,

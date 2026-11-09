@@ -12,6 +12,7 @@ import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.Location
+import dev.zacsweers.fieldspottr.data.NycLiveAvailability
 import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.buildAreas
 import dev.zacsweers.fieldspottr.util.toNyInstant
@@ -277,6 +278,58 @@ class FindFieldScreenTest {
         it.displayName == "West Half"
       }
       .name
+  }
+
+  @Test
+  fun `open live groups without coverage are missing pending data`() {
+    val areas = buildAreas {
+      area(name = "Live", displayName = "Live") {
+        group(name = "Live", location = Location(gmaps = "", amaps = "")) {
+          field(csvName = "Soccer-01", displayName = "Soccer", apiLocationId = "M1-SOCCER-1")
+        }
+      }
+      area(name = "Schedule", displayName = "Schedule") {
+        group(name = "Schedule", location = Location(gmaps = "", amaps = "")) {
+          field(csvName = "Turf", displayName = "Turf")
+        }
+      }
+    }
+    val coverage =
+      permit(
+        recordId = 1,
+        area = "Live",
+        group = "Live",
+        fieldId = "Soccer-01",
+        startHour = 0,
+        endHour = 23,
+        type = NycLiveAvailability.COVERAGE_KIND,
+      )
+
+    assertThat(computeAvailability(emptyList(), areas, 18, 23).isMissingPendingData).isTrue()
+    val covered = computeAvailability(listOf(coverage), areas, 18, 23)
+    assertThat(covered.isMissingPendingData).isFalse()
+    // Coverage markers never book a field
+    assertThat(covered.fullyOpen.map { it.group.name }).containsExactly("Live", "Schedule")
+  }
+
+  @Test
+  fun `the grid ignores live coverage markers`() {
+    val coverage =
+      permit(
+        recordId = 1,
+        area = "Baruch",
+        group = "Baruch",
+        fieldId = "Softball-01",
+        startHour = 0,
+        endHour = 23,
+        type = NycLiveAvailability.COVERAGE_KIND,
+      )
+    val permits = listOf(coverage)
+    val group = Areas.default.groups.getValue("Baruch")
+
+    assertThat(PermitState.fromPermits(permits, Areas.default, "Baruch").fields).isEmpty()
+    assertThat(permits.isMissingPendingData(group)).isFalse()
+    assertThat(emptyList<DbPermit>().isMissingPendingData(group)).isTrue()
   }
 
   @Test

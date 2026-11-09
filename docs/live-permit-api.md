@@ -21,6 +21,8 @@ sends a browser-like user agent.
 
 - The app does not call this API. The generator fetches it for the next `LIVE_DAYS` days and writes
   the results into the area feeds as overlay rows (`kind` `NYC live` or `advisory`).
+- For each fetched field and date, the generator also writes a daily `NYC live coverage` marker.
+  Only live data has pending requests, so the app shows a note on dates without markers.
 - The app imports those rows into SQLDelight with the other feed rows.
 - `availabilityOverlays` turns the overlay rows for the selected group and date into
   `LiveGroupAvailability`, which the grid draws over the CSV permits.

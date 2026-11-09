@@ -135,6 +135,7 @@ fun PermitDetailsPresenter(
       .map { dbPermits ->
         // Group permits by date, then by month
         dbPermits
+          .filterNot { it.isCoverageMarker }
           .groupBy { it.start.toNyLocalDateTime().date }
           .map { (date, permitsOnDate) ->
             PermitDayGroup(

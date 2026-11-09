@@ -12,6 +12,7 @@ import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.AvailabilityAreaFeed
 import dev.zacsweers.fieldspottr.data.AvailabilityFeedRow
 import dev.zacsweers.fieldspottr.data.Field
+import dev.zacsweers.fieldspottr.data.NycLiveAvailability
 import java.nio.file.Files
 import java.time.LocalDate
 import kotlin.test.Test
@@ -355,6 +356,32 @@ class GeneratorTest {
         "Required fresh NYC live sources failed for Baruch: " +
           "nyc-parks-live:M165-FOOTBALL-1, nyc-parks-live:M165-FOOTBALL-2"
       )
+  }
+
+  @Test
+  fun `live coverage markers cover each fetched date and stay daily`() {
+    val area = Area("Baruch", "Baruch", fieldGroups = persistentListOf())
+    val field = Field("Football-01", "Soccer 1", "Baruch", apiLocationId = "M165-FOOTBALL-1")
+    val rows =
+      nycLiveCoverageRows(
+        area = area,
+        groupName = "Baruch",
+        field = field,
+        startDateInclusive = LocalDate.of(2026, 6, 5),
+        endDateExclusive = LocalDate.of(2026, 6, 8),
+      )
+
+    val canonicalRows = AvailabilityAreaFeed("Baruch", rows = rows).canonical().rows
+    assertThat(canonicalRows.map { it.start to it.end })
+      .containsExactly(
+        nyMillis("2026-06-05T00:00") to nyMillis("2026-06-06T00:00"),
+        nyMillis("2026-06-06T00:00") to nyMillis("2026-06-07T00:00"),
+        nyMillis("2026-06-07T00:00") to nyMillis("2026-06-08T00:00"),
+      )
+    assertThat(canonicalRows.map { it.kind }.distinct())
+      .containsExactly(NycLiveAvailability.COVERAGE_KIND)
+    assertThat(canonicalRows.map { it.sourceId }.distinct())
+      .containsExactly("nyc-parks-live:M165-FOOTBALL-1")
   }
 
   @Test

@@ -11,6 +11,7 @@ import dev.zacsweers.fieldspottr.data.AvailabilityManifestArea
 import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.data.FieldGroup
+import dev.zacsweers.fieldspottr.data.NycLiveAvailability
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -493,9 +494,39 @@ private suspend fun HttpClient.fetchNycLiveRows(
       }
 
       rows += fieldRows
+      rows += nycLiveCoverageRows(area, group.name, field, today, windowEndExclusive)
     }
   }
   return NycLiveFetchResult(rows, failedSourceIds)
+}
+
+/**
+ * One coverage marker per date in [startDateInclusive, endDateExclusive) for a field whose live
+ * data was fetched. Markers share the field's live source id, so a failed refresh preserves them
+ * with the rest of that field's previous live rows.
+ */
+internal fun nycLiveCoverageRows(
+  area: Area,
+  groupName: String,
+  field: Field,
+  startDateInclusive: LocalDate,
+  endDateExclusive: LocalDate,
+): List<AvailabilityFeedRow> {
+  return generateSequence(startDateInclusive) { it.plusDays(1) }
+    .takeWhile { it < endDateExclusive }
+    .map { date ->
+      AvailabilityFeedRow(
+        areaName = area.areaName,
+        groupName = groupName,
+        fieldId = field.name,
+        start = date.atStartOfDay(nyZone).toInstant().toEpochMilli(),
+        end = date.plusDays(1).atStartOfDay(nyZone).toInstant().toEpochMilli(),
+        title = "Live coverage",
+        kind = NycLiveAvailability.COVERAGE_KIND,
+        sourceId = "nyc-parks-live:${field.apiLocationId}",
+      )
+    }
+    .toList()
 }
 
 private suspend fun HttpClient.getNycLiveResponse(
@@ -1259,8 +1290,12 @@ private fun List<AvailabilityFeedRow>.mergeAdjacentRows(): List<AvailabilityFeed
 }
 
 private fun AvailabilityFeedRow.canMergeWith(other: AvailabilityFeedRow): Boolean {
-  // Daily BBP markers must stay separate because app queries select rows by start date.
-  if (kind == BbpAvailability.COVERAGE_KIND || kind == BbpAvailability.UNAVAILABLE_KIND)
+  // Daily markers must stay separate because app queries select rows by start date.
+  if (
+    kind == BbpAvailability.COVERAGE_KIND ||
+      kind == BbpAvailability.UNAVAILABLE_KIND ||
+      kind == NycLiveAvailability.COVERAGE_KIND
+  )
     return false
   return areaName == other.areaName &&
     groupName == other.groupName &&

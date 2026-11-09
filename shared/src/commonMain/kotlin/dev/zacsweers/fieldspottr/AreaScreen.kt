@@ -62,6 +62,8 @@ import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
+import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.ReflowText
@@ -96,6 +98,8 @@ data class AreaScreen(
     val defaultGroupMessage: String?,
     val permits: PermitState?,
     val liveAvailability: LiveGroupAvailability?,
+    /** The date is today or later and the group has no pending permit data for it. */
+    val isMissingPendingData: Boolean,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val weather: WeatherForecast?,
@@ -171,6 +175,8 @@ fun AreaPresenter(
         PermitData(
           permits = PermitState.fromPermits(it, areas, selectedGroup),
           liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+          isMissingPendingData =
+            areas.groups[selectedGroup]?.let { group -> it.isMissingPendingData(group) } == true,
         )
       }
     }
@@ -212,6 +218,9 @@ fun AreaPresenter(
     defaultGroupMessage = defaultGroupMessage,
     permits = permitData?.permits,
     liveAvailability = permitData?.liveAvailability,
+    isMissingPendingData =
+      permitData?.isMissingPendingData == true &&
+        selectedDate >= System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     weather = weather,
@@ -406,6 +415,9 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
               modifier = Modifier.padding(horizontal = 16.dp),
             )
           }
+        }
+        if (state.isMissingPendingData) {
+          DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(horizontal = 16.dp))
         }
 
         val cornerSlot =

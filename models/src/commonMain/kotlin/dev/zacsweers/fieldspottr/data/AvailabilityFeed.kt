@@ -60,3 +60,11 @@ object BbpAvailability {
   const val COVERAGE_KIND = "BBP schedule coverage"
   const val UNAVAILABLE_KIND = "BBP unavailable"
 }
+
+/**
+ * Daily markers for each date the generator fetched a field from the NYC Parks live API. Only live
+ * data includes pending permit requests, so a date without a marker shows issued permits only.
+ */
+object NycLiveAvailability {
+  const val COVERAGE_KIND = "NYC live coverage"
+}

@@ -71,6 +71,8 @@ import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
+import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.WeatherStrip
 import dev.zacsweers.fieldspottr.util.ReflowText
@@ -116,6 +118,8 @@ data class AvailabilityBuckets(
   val fullyOpen: ImmutableList<FieldAvailability>,
   val partiallyOpen: ImmutableList<FieldAvailability>,
   val closed: ImmutableList<FieldAvailability>,
+  /** Some open groups have no pending permit data for the date, so their times may be requested. */
+  val isMissingPendingData: Boolean = false,
 ) {
   val totalOpen: Int
     get() = fullyOpen.size + partiallyOpen.size
@@ -133,6 +137,8 @@ data object FindFieldScreen : Screen {
     /** Built-in windows followed by saved custom windows. */
     val windows: ImmutableList<TimeWindow>,
     val isManagingWindows: Boolean,
+    /** The selected date is today or later and some open groups lack pending permit data. */
+    val isMissingPendingData: Boolean,
     val lastUpdated: String?,
     val availability: AvailabilityBuckets?,
     val weather: WeatherForecast?,
@@ -234,6 +240,7 @@ fun FindFieldPresenter(
     currentHour = currentHour,
     windows = windows,
     isManagingWindows = isManagingWindows,
+    isMissingPendingData = availability?.isMissingPendingData == true && selectedDate >= today,
     lastUpdated = lastUpdatedText,
     availability = availability,
     weather = weather,
@@ -426,6 +433,12 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = 16.dp),
       )
+      if (state.isMissingPendingData) {
+        DataNote(
+          PENDING_DATA_NOTE,
+          modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+      }
       Spacer(Modifier.height(8.dp))
 
       if (totalOpen == 0 && closed.isEmpty()) {
@@ -660,6 +673,7 @@ internal fun computeAvailability(
   val fullyOpen = mutableListOf<FieldAvailability>()
   val partiallyOpen = mutableListOf<FieldAvailability>()
   val closed = mutableListOf<FieldAvailability>()
+  var isMissingPendingData = false
 
   for (area in areas.entries) {
     for (group in area.fieldGroups) {
@@ -691,7 +705,9 @@ internal fun computeAvailability(
           startHour = startHour,
           endHour = endHour,
         )
+      val groupMissesPendingData = groupPermits.isMissingPendingData(group)
       if (bookedHours.isEmpty()) {
+        isMissingPendingData = isMissingPendingData || groupMissesPendingData
         fullyOpen.add(
           FieldAvailability(
             group = group,
@@ -708,6 +724,7 @@ internal fun computeAvailability(
             groupFreeHours = freeHours,
           )
         if (freeHours.isNotEmpty() || openings.isNotEmpty()) {
+          isMissingPendingData = isMissingPendingData || groupMissesPendingData
           partiallyOpen.add(
             FieldAvailability(
               group = group,
@@ -754,6 +771,7 @@ internal fun computeAvailability(
     fullyOpen = fullyOpen.toImmutableList(),
     partiallyOpen = partiallyOpen.toImmutableList(),
     closed = closed.toImmutableList(),
+    isMissingPendingData = isMissingPendingData,
   )
 }
 
@@ -813,9 +831,9 @@ private fun fieldOpenings(
     .toImmutableList()
 }
 
-/** Whether this row books its field. Live overlays and BBP coverage markers do not. */
+/** Whether this row books its field. Live overlays and coverage markers do not. */
 private val DbPermit.isBooking: Boolean
-  get() = !isAvailabilityOverlay && type != BbpAvailability.COVERAGE_KIND
+  get() = !isAvailabilityOverlay && !isCoverageMarker
 
 /**
  * The hours in [startHour, endHour) that this permit touches, counting a partial hour as booked.

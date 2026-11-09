@@ -66,6 +66,8 @@ import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.favorites.FavoritesRepository
+import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.currentNyHour
 import dev.zacsweers.fieldspottr.ui.formatHour12
@@ -93,6 +95,8 @@ data object PermitGridScreen : Screen {
     val defaultGroupMessage: String?,
     val permits: PermitState?,
     val liveAvailability: LiveGroupAvailability?,
+    /** The date is today or later and the group has no pending permit data for it. */
+    val isMissingPendingData: Boolean,
     val lastUpdated: String?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val weather: WeatherForecast?,
@@ -185,6 +189,8 @@ fun PermitGridPresenter(
         PermitData(
           permits = PermitState.fromPermits(it, areas, selectedGroup),
           liveAvailability = it.availabilityOverlays(areas, selectedGroup),
+          isMissingPendingData =
+            areas.groups[selectedGroup]?.let { group -> it.isMissingPendingData(group) } == true,
         )
       }
     }
@@ -251,6 +257,9 @@ fun PermitGridPresenter(
     defaultGroupMessage = defaultGroupMessage,
     permits = permitData?.permits,
     liveAvailability = permitData?.liveAvailability,
+    isMissingPendingData =
+      permitData?.isMissingPendingData == true &&
+        gridDate >= System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
     lastUpdated = lastUpdatedText,
     permitDateRange = permitDateRange,
     weather = weather,
@@ -453,6 +462,9 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.padding(horizontal = 16.dp),
         )
+      }
+      if (state.isMissingPendingData) {
+        DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(horizontal = 16.dp))
       }
       if (state.favorite.unsynced > 0) {
         val noun =
