@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -13,6 +16,10 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import androidx.navigationevent.DirectNavigationEventInput
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventDispatcherOwner
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.di.JvmFSGraph
 import dev.zacsweers.metro.createGraph
@@ -36,6 +43,10 @@ fun main(args: Array<String>) {
         height = 800.dp,
         position = WindowPosition(Alignment.Center),
       )
+    // Escape sends a back event, as a back gesture does on phones. Circuit's handlers decide what
+    // it closes. None are enabled on the root screen, so there it does nothing and never quits the
+    // app.
+    val escapeInput = remember { DirectNavigationEventInput() }
     Window(
       title = "Field Spottr",
       state = windowState,
@@ -55,12 +66,32 @@ fun main(args: Array<String>) {
             dumpAreasJson(fsGraph.json)
             true
           }
+          Key.Escape if event.type == KeyEventType.KeyUp -> {
+            escapeInput.backCompleted()
+            true
+          }
 
           else -> false
         }
       },
     ) {
-      fsGraph.fsApp(onRootPop = ::exitApplication)
+      // Use the window's dispatcher when Compose provides one, so Escape and Circuit's back
+      // handlers share it
+      val owner =
+        LocalNavigationEventDispatcherOwner.current
+          ?: remember {
+            object : NavigationEventDispatcherOwner {
+              override val navigationEventDispatcher = NavigationEventDispatcher()
+            }
+          }
+      DisposableEffect(owner) {
+        val dispatcher = owner.navigationEventDispatcher
+        dispatcher.addInput(escapeInput)
+        onDispose { dispatcher.removeInput(escapeInput) }
+      }
+      CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
+        fsGraph.fsApp(onRootPop = ::exitApplication)
+      }
     }
   }
 }
