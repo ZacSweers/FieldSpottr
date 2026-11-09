@@ -87,7 +87,8 @@ import kotlinx.datetime.toLocalDateTime
 
 private val GridHorizontalPadding = 16.dp
 private val TimeColumnWidth = 64.dp
-private val FieldColumnMinWidth = 112.dp
+// Three-field groups fit without scrolling on phones 384dp wide and wider
+private val FieldColumnMinWidth = 96.dp
 private const val OverflowCueFadeDurationMillis = 280
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -205,7 +206,7 @@ fun PermitGrid(
                   // Share horizontal scroll with the body so field titles stay aligned.
                   .horizontalScroll(horizontalScrollState)
               ) {
-                Row(Modifier.width(fieldAreaWidth)) {
+                Row(Modifier.width(fieldAreaWidth), verticalAlignment = CenterVertically) {
                   for (columnNumber in 0..<numColumns) {
                     val defaultTextStyle = MaterialTheme.typography.titleMedium
                     val textAlign = TextAlign.Center
@@ -215,14 +216,18 @@ fun PermitGrid(
                       maxSize = defaultTextStyle.fontSize,
                       textAlign = textAlign,
                     ) { fontSize ->
+                      // Names too long for one line at the smallest size wrap to a second line
                       Text(
                         group.fields[columnNumber].displayName,
                         textAlign = textAlign,
                         fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        softWrap = false,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                         style = defaultTextStyle,
                         fontSize = fontSize,
+                        // The style's line height suits its full size, so scale it for wrapped
+                        // lines at a smaller size
+                        lineHeight = fontSize * 1.25f,
                       )
                     }
                   }
