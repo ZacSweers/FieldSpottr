@@ -89,9 +89,11 @@ class QuickDatePickerOverlay(
           sharedContentState = rememberSharedContentState(sharedKey),
           animatedVisibilityScope = overlayScope,
         )
+      // The dialog container color keeps the card distinct from the scrim in dark themes, where
+      // the shadow does not show
       Surface(
         shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.surface,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shadowElevation = 8.dp,
         modifier = Modifier.padding(horizontal = 24.dp).then(sharedModifier),
       ) {
@@ -143,12 +145,18 @@ private fun DayCell(
   onClick: () -> Unit,
 ) {
   val daily = weather?.daily(date)
+  // Every color in a cell pairs with its container, so a selected cell stays readable
+  val colors = MaterialTheme.colorScheme
+  val containerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainerLowest
+  val contentColor = if (isSelected) colors.onSecondaryContainer else colors.onSurface
+  val secondaryContentColor =
+    if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant
+  val precipColor = if (isSelected) colors.onSecondaryContainer else colors.tertiary
   Surface(
     onClick = onClick,
     shape = MaterialTheme.shapes.large,
-    color =
-      if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-      else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+    color = containerColor,
+    contentColor = contentColor,
     modifier = modifier,
   ) {
     Column(
@@ -159,7 +167,7 @@ private fun DayCell(
       Text(
         date.dayOfWeek.name.take(3),
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = secondaryContentColor,
       )
       Text(
         date.day.toString(),
@@ -168,18 +176,18 @@ private fun DayCell(
         textAlign = TextAlign.Center,
       )
       if (daily != null) {
-        WeatherGlyph(daily.condition, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        WeatherGlyph(daily.condition, tint = secondaryContentColor)
         Text(
           "${daily.highF}°",
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = secondaryContentColor,
         )
         val precip = daily.precipProbability
         if (precip != null && precip >= 30) {
           Text(
             "$precip%",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.tertiary,
+            color = precipColor,
           )
         } else {
           Spacer(Modifier.height(MaterialTheme.typography.labelSmall.lineHeight.value.dp / 2))
@@ -194,7 +202,7 @@ private fun MoreCell(modifier: Modifier = Modifier, onClick: () -> Unit) {
   Surface(
     onClick = onClick,
     shape = MaterialTheme.shapes.large,
-    color = MaterialTheme.colorScheme.surface,
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
     modifier = modifier,
   ) {
