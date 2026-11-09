@@ -27,12 +27,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -84,13 +86,9 @@ import dev.zacsweers.metro.AppScope
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Clock.System
-import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.hours
-import kotlin.time.Duration.Companion.minutes
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
@@ -139,7 +137,9 @@ data object FindFieldScreen : Screen {
     val isManagingWindows: Boolean,
     /** The selected date is today or later and some open groups lack pending permit data. */
     val isMissingPendingData: Boolean,
-    val lastUpdated: String?,
+    val freshness: DataFreshness?,
+    /** A refresh the user started is running. */
+    val isRefreshing: Boolean,
     val availability: AvailabilityBuckets?,
     val weather: WeatherForecast?,
     val eventSink: (Event) -> Unit = {},
@@ -201,25 +201,12 @@ fun FindFieldPresenter(
   }
   val hours = searchHours(selectedWindow, isToday = selectedDate == today, currentHour)
 
-  // Last updated — use the first area as a representative
-  val firstAreaName = remember(areas) { areas.entries.firstOrNull()?.areaName }
-  val lastUpdateFlow =
-    retain(firstAreaName) {
-      if (firstAreaName != null) repository.lastUpdateFlow(firstAreaName) else flowOf(null)
-    }
-  val lastUpdateInstant by lastUpdateFlow.collectAsRetainedState(null)
-  val lastUpdatedText =
-    remember(lastUpdateInstant) {
-      lastUpdateInstant?.let { instant ->
-        val elapsed = System.now() - instant
-        when {
-          elapsed < 1.minutes -> "Updated just now"
-          elapsed < 1.hours -> "Updated ${elapsed.inWholeMinutes}m ago"
-          elapsed < 1.days -> "Updated ${elapsed.inWholeHours}h ago"
-          else -> "Updated ${elapsed.inWholeDays}d ago"
-        }
-      }
-    }
+  // Freshness across every area, recomputed when downloads land and at least hourly
+  val lastUpdatesFlow = retain { repository.lastUpdatesFlow() }
+  val lastUpdates by lastUpdatesFlow.collectAsRetainedState(emptyMap())
+  val freshness =
+    remember(lastUpdates, areas, now) { dataFreshness(areas.entries, lastUpdates, System.now()) }
+  var isRefreshing by remember { mutableStateOf(false) }
 
   // Availability
   val availabilityFlow =
@@ -241,7 +228,8 @@ fun FindFieldPresenter(
     windows = windows,
     isManagingWindows = isManagingWindows,
     isMissingPendingData = availability?.isMissingPendingData == true && selectedDate >= today,
-    lastUpdated = lastUpdatedText,
+    freshness = freshness,
+    isRefreshing = isRefreshing,
     availability = availability,
     weather = weather,
   ) { event ->
@@ -286,13 +274,21 @@ fun FindFieldPresenter(
         )
       }
       FindFieldScreen.Event.Refresh -> {
-        repository.refresh()
+        isRefreshing = true
         weatherRepository.refresh()
+        scope.launch {
+          try {
+            repository.refresh().await()
+          } finally {
+            isRefreshing = false
+          }
+        }
       }
     }
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @CircuitInject(FindFieldScreen::class, AppScope::class)
 @Composable
 fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
@@ -321,20 +317,25 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
     }
     // Updated-at + weather on one quiet line
     val hasWeather = state.weather?.daily(state.selectedDate) != null
-    if (state.lastUpdated != null || hasWeather) {
+    if (state.freshness != null || hasWeather) {
       Row(
         modifier = Modifier.padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = spacedBy(6.dp),
       ) {
-        state.lastUpdated?.let {
+        state.freshness?.let { freshness ->
           Text(
-            it,
+            freshness.text,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color =
+              if (freshness.isStale) {
+                MaterialTheme.colorScheme.error
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
           )
         }
-        if (state.lastUpdated != null && hasWeather) {
+        if (state.freshness != null && hasWeather) {
           Text(
             "·",
             style = MaterialTheme.typography.labelSmall,
@@ -420,37 +421,46 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       )
     }
 
-    if (state.availability == null) {
-      Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        AdaptiveCircularProgressIndicator()
-      }
-    } else {
-      val (fullyOpen, partiallyOpen, closed) = state.availability
-      val totalOpen = state.availability.totalOpen
-      Text(
-        "$totalOpen fields open",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp),
-      )
-      if (state.isMissingPendingData) {
-        DataNote(
-          PENDING_DATA_NOTE,
-          modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-      }
-      Spacer(Modifier.height(8.dp))
-
-      if (totalOpen == 0 && closed.isEmpty()) {
+    // Pull to refresh works on every state below, so the list is always the scrolling child
+    PullToRefreshBox(
+      isRefreshing = state.isRefreshing,
+      onRefresh = { state.eventSink(FindFieldScreen.Event.Refresh) },
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      if (state.availability == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-          Text(
-            "No open fields in this window",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+          AdaptiveCircularProgressIndicator()
         }
       } else {
+        val (fullyOpen, partiallyOpen, closed) = state.availability
+        val totalOpen = state.availability.totalOpen
         LazyColumn(modifier = Modifier.fillMaxSize()) {
+          item(key = "summary") {
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+              Text(
+                "$totalOpen fields open",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              if (state.isMissingPendingData) {
+                DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(top = 4.dp))
+              }
+            }
+          }
+          if (totalOpen == 0 && closed.isEmpty()) {
+            item(key = "empty") {
+              Box(
+                Modifier.fillParentMaxWidth().fillParentMaxHeight(0.7f),
+                contentAlignment = Alignment.Center,
+              ) {
+                Text(
+                  "No open fields in this window",
+                  style = MaterialTheme.typography.bodyLarge,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
+          }
           if (fullyOpen.isNotEmpty()) {
             item(key = "header-fully-open") { SectionHeader("FULLY OPEN") }
             items(fullyOpen, key = { "full-${it.group.name}" }) { field ->

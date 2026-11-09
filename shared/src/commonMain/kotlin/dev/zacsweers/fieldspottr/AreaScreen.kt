@@ -69,9 +69,6 @@ import dev.zacsweers.fieldspottr.util.Platform.Native
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.metro.AppScope
 import kotlin.time.Clock.System
-import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.hours
-import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -100,7 +97,7 @@ data class AreaScreen(
     val liveAvailability: LiveGroupAvailability?,
     /** The date is today or later and the group has no pending permit data for it. */
     val isMissingPendingData: Boolean,
-    val lastUpdated: String?,
+    val lastUpdated: DataFreshness?,
     val permitDateRange: Pair<LocalDate, LocalDate>?,
     val weather: WeatherForecast?,
     val isDebug: Boolean,
@@ -192,12 +189,7 @@ fun AreaPresenter(
     remember(lastUpdateInstant) {
       lastUpdateInstant?.let { instant ->
         val elapsed = System.now() - instant
-        when {
-          elapsed < 1.minutes -> "Updated just now"
-          elapsed < 1.hours -> "Updated ${elapsed.inWholeMinutes}m ago"
-          elapsed < 1.days -> "Updated ${elapsed.inWholeHours}h ago"
-          else -> "Updated ${elapsed.inWholeDays}d ago"
-        }
+        DataFreshness(updatedText(elapsed), isStale = elapsed >= STALE_DATA_AGE)
       }
     }
 
@@ -409,9 +401,14 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           }
           state.lastUpdated?.let { lastUpdated ->
             Text(
-              lastUpdated,
+              lastUpdated.text,
               style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              color =
+                if (lastUpdated.isStale) {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
               modifier = Modifier.padding(horizontal = 16.dp),
             )
           }

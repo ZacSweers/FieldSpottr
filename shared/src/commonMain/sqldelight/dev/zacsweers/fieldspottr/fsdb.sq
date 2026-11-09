@@ -60,6 +60,9 @@ VALUES ?;
 lastAreaUpdate:
 SELECT lastUpdated FROM dbArea WHERE name = ?;
 
+allAreaUpdates:
+SELECT name, lastUpdated FROM dbArea;
+
 upsertAreaFeed:
 INSERT OR REPLACE INTO dbAreaFeed
 VALUES ?;

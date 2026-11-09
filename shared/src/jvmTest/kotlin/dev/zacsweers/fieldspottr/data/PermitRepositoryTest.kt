@@ -570,6 +570,27 @@ class PermitRepositoryTest {
   }
 
   @Test
+  fun `last updates report each imported area`() = runTest {
+    assertThat(repository.lastUpdatesFlow().first()).isEqualTo(emptyMap())
+
+    for ((areaName, fetchedAt) in listOf("AreaA" to 300L, "AreaB" to 500L)) {
+      repository.importAreaFeed(
+        AvailabilityAreaFeed(areaName = areaName, rows = emptyList()),
+        AvailabilityManifestArea(areaName = areaName, hash = "hash-$areaName"),
+        fetchedAt = fetchedAt,
+      )
+    }
+
+    assertThat(repository.lastUpdatesFlow().first())
+      .isEqualTo(
+        mapOf(
+          "AreaA" to Instant.fromEpochMilliseconds(300L),
+          "AreaB" to Instant.fromEpochMilliseconds(500L),
+        )
+      )
+  }
+
+  @Test
   fun `area feed import preserves overlap and advisory rows`() = runTest {
     val feed =
       AvailabilityAreaFeed(
