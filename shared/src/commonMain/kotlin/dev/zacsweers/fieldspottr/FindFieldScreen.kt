@@ -155,6 +155,10 @@ data object FindFieldScreen : Screen {
 
     val canAddWindow: Boolean
       get() = customWindows.size < TimeWindow.MAX_CUSTOM_WINDOWS
+
+    /** The window chips to show. See [visibleWindows]. */
+    val visibleWindows: List<TimeWindow>
+      get() = visibleWindows(windows, isToday, currentHour)
   }
 
   sealed interface Event {
@@ -380,16 +384,13 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         state.eventSink(FindFieldScreen.Event.SelectDate(newDate))
       }
       LazyRow(horizontalArrangement = spacedBy(8.dp)) {
-        items(state.windows, key = { it.id }) { window ->
-          val hasPassed = state.isToday && window.hasPassed(state.currentHour)
+        items(state.visibleWindows, key = { it.id }) { window ->
           val startHour =
             if (state.isToday) max(window.startHour, state.currentHour) else window.startHour
           val isRainy =
-            !hasPassed &&
-              state.weather?.isRainyWindow(state.selectedDate, startHour, window.endHour) == true
+            state.weather?.isRainyWindow(state.selectedDate, startHour, window.endHour) == true
           FilterChip(
             selected = state.selectedWindow == window,
-            enabled = !hasPassed,
             onClick = {
               state.eventSink(
                 FindFieldScreen.Event.SelectWindow(
@@ -648,6 +649,18 @@ private fun FieldAvailabilityRow(
       )
     }
   }
+}
+
+/**
+ * The windows worth offering as chips. On today, windows that have already ended are hidden, so the
+ * windows still ahead and the manage chip stay on screen.
+ */
+internal fun visibleWindows(
+  windows: List<TimeWindow>,
+  isToday: Boolean,
+  currentHour: Int,
+): List<TimeWindow> {
+  return if (isToday) windows.filterNot { it.hasPassed(currentHour) } else windows
 }
 
 /**

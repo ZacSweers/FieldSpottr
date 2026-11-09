@@ -85,6 +85,16 @@ class FindFieldScreenTest {
   }
 
   @Test
+  fun `windows that ended today are hidden`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    val windows = TimeWindow.builtIns + afterWork
+    assertThat(visibleWindows(windows, isToday = true, currentHour = 19))
+      .containsExactly(TimeWindow.EVENING, afterWork)
+    assertThat(visibleWindows(windows, isToday = true, currentHour = 23)).isEmpty()
+    assertThat(visibleWindows(windows, isToday = false, currentHour = 23)).isEqualTo(windows)
+  }
+
+  @Test
   fun `other days search the full window`() {
     assertThat(searchHours(TimeWindow.MORNING, isToday = false, currentHour = 14))
       .isEqualTo(SearchHours(TimeWindow.MORNING, 6, 12))
