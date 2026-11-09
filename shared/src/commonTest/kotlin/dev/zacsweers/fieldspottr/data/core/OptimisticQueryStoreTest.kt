@@ -956,7 +956,88 @@ class OptimisticQueryStoreTest {
     assertThat(data.actionFailures.assertSingle<IllegalStateException>()).isSameInstanceAs(diskFull)
     data.fetchFailures.assertNone()
   }
+
+  @Test
+  fun `a counter refreshed while its exchange runs shows the change twice until the answer`() =
+    runTest {
+      data = testDataScope(clock = testClock(START))
+      val server = CounterServer(answer = CompletableDeferred())
+      val store = data.counterStore(server, QueryStore.inMemory(Fetched(0, START)))
+      val query = data.query(store, fetch = { server.count }, Freshness.staleAfter(1.hours))
+
+      query.data.test {
+        assertThat(awaitItem()?.value).isEqualTo(0)
+        val handle = store.mutate(1)
+        assertThat(awaitItem()?.value).isEqualTo(1)
+        store.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
+
+        // The server took the change and holds its answer. A refresh reads its count of 1, and the
+        // store cannot tell that the count holds the waiting change, so it applies it on top.
+        query.requestFetch(force = true).awaitSucceeded()
+        assertThat(awaitItem()?.value).isEqualTo(2)
+
+        server.answer.complete(Unit)
+        handle.awaitSucceeded()
+        assertThat(awaitItem()?.value).isEqualTo(1)
+        cancelAndIgnoreRemainingEvents()
+      }
+      assertThat(store.data.first()?.value).isEqualTo(1)
+      assertThat(server.count).isEqualTo(1)
+      data.assertNoFailures()
+    }
+
+  @Test
+  fun `a counter left sending at a restart shows the change twice until the resend answers`() =
+    runTest {
+      data = testDataScope(clock = testClock(START), online = false)
+      // What an owner that stopped after it stored the server's answer leaves behind: the count
+      // holds the change, and its row still says Sending
+      val rows = data.outboxStore<KeyedMutation<Unit, Int>>("count")
+      rows.insert(key = Unit.toString(), payload = KeyedMutation(Unit, 1))
+      val row = rows.entries().first().single()
+      rows.update(row.copy(status = OutboxStatus.Sending), expected = OutboxStatus.Queued)
+      val server = CounterServer(count = 1, applied = setOf(row.id))
+
+      val store = data.counterStore(server, QueryStore.inMemory(Fetched(1, START)))
+      assertThat(store.data.first()?.value).isEqualTo(2)
+
+      // The resend carries the row's id, so the server answers without counting the change again
+      data.online.value = true
+      store.pending.first { it.isEmpty() }
+      assertThat(store.data.first()?.value).isEqualTo(1)
+      assertThat(server.count).isEqualTo(1)
+      data.assertNoFailures()
+    }
 }
+
+/**
+ * A counter server that counts each change once by its row id, as an idempotency key makes a real
+ * one do. Each answer waits for [answer], after the change is counted.
+ */
+private class CounterServer(
+  var count: Int = 0,
+  applied: Set<EntryId> = emptySet(),
+  val answer: CompletableDeferred<Unit> = CompletableDeferred(Unit),
+) {
+  private val applied = applied.toMutableSet()
+
+  suspend fun exchange(delta: Int, id: EntryId): Int {
+    if (applied.add(id)) {
+      count += delta
+    }
+    answer.await()
+    return count
+  }
+}
+
+/** A count over [base] that [server] answers each change for, with the server's count. */
+private fun DataScope.counterStore(server: CounterServer, base: QueryStore<Int>) =
+  optimisticStore<Int, Int>(
+    name = "count",
+    base = base,
+    apply = { value, delta -> (value ?: 0) + delta },
+    exchange = server::exchange,
+  )
 
 /** Outbox stores whose inserts wait while held, like a database that is slow to write. */
 private class HoldingOutboxStores : OutboxStores {

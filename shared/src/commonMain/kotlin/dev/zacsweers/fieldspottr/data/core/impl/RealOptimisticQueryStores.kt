@@ -72,7 +72,8 @@ import kotlinx.coroutines.withContext
  * [apply] gets a value that already holds the change, so [apply] must be idempotent, as
  * [dev.zacsweers.fieldspottr.data.core.optimisticStore] requires. Each commit checks this on the
  * value it folded, and the first change found not to be idempotent is reported to [onFailure],
- * once.
+ * once. A change that [deliver] answers with a value is never folded, so nothing checks it, and a
+ * counter shows twice in both cases until a server answer replaces the truth.
  *
  * Each key's truth has two writers, the query's fetch and the outbox's commit, and they take turns
  * on the key's lock. A fetch write is dropped when the truth's fetch time has moved past the fetch
