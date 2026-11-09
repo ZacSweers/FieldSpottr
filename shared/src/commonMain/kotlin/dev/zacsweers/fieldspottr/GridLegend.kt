@@ -16,11 +16,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
 import dev.zacsweers.fieldspottr.theme.fsColorScheme
+import dev.zacsweers.fieldspottr.ui.formatTime12
+import kotlinx.datetime.LocalTime
 
 /**
  * What a block in the day grid shows. Each kind has one color pair, used by the grid blocks and
@@ -96,9 +99,16 @@ internal fun gridLegendKinds(
   return GridBlockKind.entries.filter { it in kinds }
 }
 
-/** A key for the colors in the day grid, limited to the [kinds] it shows. */
+/**
+ * A key for the colors in the day grid, limited to the [kinds] it shows, plus the after-sunset
+ * shade when [sunset] is known.
+ */
 @Composable
-internal fun GridLegend(kinds: List<GridBlockKind>, modifier: Modifier = Modifier) {
+internal fun GridLegend(
+  kinds: List<GridBlockKind>,
+  sunset: LocalTime?,
+  modifier: Modifier = Modifier,
+) {
   FlowRow(
     modifier = modifier,
     horizontalArrangement = spacedBy(12.dp),
@@ -107,8 +117,20 @@ internal fun GridLegend(kinds: List<GridBlockKind>, modifier: Modifier = Modifie
     for (kind in kinds) {
       LegendItem(kind.containerColor(), kind.label)
     }
+    if (sunset != null) {
+      LegendItem(afterSunsetShade(), "After sunset ${formatTime12(sunset)}")
+    }
   }
 }
+
+/** Night tint drawn behind free grid time after sunset. Darker themes need more of it to show. */
+@Composable
+internal fun afterSunsetShade(): Color {
+  val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+  return NightTint.copy(alpha = if (isDark) 0.22f else 0.07f)
+}
+
+private val NightTint = Color(0xFF1A237E)
 
 /** A color swatch and its label. Translucent colors get an outline so they show on any surface. */
 @Composable

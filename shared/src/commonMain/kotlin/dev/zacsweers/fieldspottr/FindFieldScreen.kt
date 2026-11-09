@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -77,8 +78,10 @@ import dev.zacsweers.fieldspottr.ui.DataNote
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.WeatherStrip
+import dev.zacsweers.fieldspottr.ui.formatTime12
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.daySwipeable
+import dev.zacsweers.fieldspottr.util.nycSunset
 import dev.zacsweers.fieldspottr.util.produceNyHour
 import dev.zacsweers.fieldspottr.util.rememberDaySwipeState
 import dev.zacsweers.fieldspottr.util.toNyLocalDateTime
@@ -92,6 +95,7 @@ import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
 
@@ -138,6 +142,8 @@ data object FindFieldScreen : Screen {
     /** The selected date is today or later and some open groups lack pending permit data. */
     val isMissingPendingData: Boolean,
     val freshness: DataFreshness?,
+    /** Sunset in New York time on [selectedDate]. */
+    val sunset: LocalTime,
     /** A refresh the user started is running. */
     val isRefreshing: Boolean,
     val availability: AvailabilityBuckets?,
@@ -229,6 +235,7 @@ fun FindFieldPresenter(
     isManagingWindows = isManagingWindows,
     isMissingPendingData = availability?.isMissingPendingData == true && selectedDate >= today,
     freshness = freshness,
+    sunset = remember(selectedDate) { nycSunset(selectedDate) },
     isRefreshing = isRefreshing,
     availability = availability,
     weather = weather,
@@ -315,37 +322,46 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
       }
     }
-    // Updated-at + weather on one quiet line
+    // Updated-at, weather, and sunset on one quiet line that wraps on narrow screens
     val hasWeather = state.weather?.daily(state.selectedDate) != null
-    if (state.freshness != null || hasWeather) {
-      Row(
-        modifier = Modifier.padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = spacedBy(6.dp),
-      ) {
-        state.freshness?.let { freshness ->
-          Text(
-            freshness.text,
-            style = MaterialTheme.typography.labelSmall,
-            color =
-              if (freshness.isStale) {
-                MaterialTheme.colorScheme.error
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-          )
-        }
-        if (state.freshness != null && hasWeather) {
-          Text(
-            "·",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        state.weather?.let { weather ->
-          WeatherStrip(forecast = weather, date = state.selectedDate, isToday = state.isToday)
-        }
+    FlowRow(
+      modifier = Modifier.padding(horizontal = 16.dp),
+      horizontalArrangement = spacedBy(6.dp),
+    ) {
+      state.freshness?.let { freshness ->
+        Text(
+          freshness.text,
+          style = MaterialTheme.typography.labelSmall,
+          color =
+            if (freshness.isStale) {
+              MaterialTheme.colorScheme.error
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
       }
+      if (state.freshness != null && hasWeather) {
+        Text(
+          "·",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      state.weather?.let { weather ->
+        WeatherStrip(forecast = weather, date = state.selectedDate, isToday = state.isToday)
+      }
+      if (state.freshness != null || hasWeather) {
+        Text(
+          "·",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      Text(
+        "Sunset ${formatTime12(state.sunset)}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
     }
     Spacer(Modifier.height(8.dp))
 

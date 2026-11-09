@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -75,10 +76,12 @@ import dev.zacsweers.fieldspottr.data.withOverlapsFrom
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.ReflowText
+import dev.zacsweers.fieldspottr.util.nycSunset
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
@@ -134,10 +137,13 @@ fun PermitGrid(
     remember(permits, resolvedLiveAvailability) {
       gridLegendKinds(permits, resolvedLiveAvailability)
     }
+  val sunset = remember(selectedDate) { nycSunset(selectedDate) }
   Column(modifier) {
-    if (legendKinds.isNotEmpty()) {
-      GridLegend(legendKinds, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
-    }
+    GridLegend(
+      legendKinds,
+      sunset = sunset,
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    )
     BoxWithConstraints(Modifier.weight(1f)) {
       val availableFieldWidth =
         (maxWidth - GridHorizontalPadding * 2 - TimeColumnWidth).coerceAtLeast(0.dp)
@@ -294,6 +300,7 @@ fun PermitGrid(
             Row(
               Modifier.width(fieldAreaWidth)
                 .height(contentHeight)
+                .afterSunsetShade(sunset, itemHeight)
                 .nowIndicator(selectedDate, itemHeight)
             ) {
               for (field in group.fields) {
@@ -722,6 +729,23 @@ private inline fun <T> withDensity(block: Density.() -> T): T {
 }
 
 /** Draws a dashed "now" indicator line at the current time, animated in left-to-right. */
+/**
+ * Shades the grid from [sunset] to midnight. It draws behind the columns, so it shows on free time
+ * and booked blocks stay readable on top.
+ */
+@Composable
+private fun Modifier.afterSunsetShade(sunset: LocalTime, itemHeight: Dp): Modifier {
+  val color = afterSunsetShade()
+  val sunsetOffsetPx = withDensity { ((sunset.hour + sunset.minute / 60f) * itemHeight).toPx() }
+  return drawBehind {
+    drawRect(
+      color = color,
+      topLeft = Offset(0f, sunsetOffsetPx),
+      size = Size(size.width, (size.height - sunsetOffsetPx).coerceAtLeast(0f)),
+    )
+  }
+}
+
 @Composable
 private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modifier {
   val now = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }
