@@ -4,14 +4,31 @@ package dev.zacsweers.fieldspottr
 
 import android.app.Application
 import android.os.StrictMode
+import androidx.work.Configuration
 import com.bugsnag.android.Bugsnag
+import dev.zacsweers.fieldspottr.data.work.OutboxDrainWorkerFactory
 import dev.zacsweers.fieldspottr.di.AndroidFSGraph
 import dev.zacsweers.fieldspottr.di.FSGraph
 import dev.zacsweers.metro.createGraphFactory
 
-class FieldSpottrApplication : Application() {
+/**
+ * Builds the graph and configures WorkManager on demand, so the drain worker gets the graph's
+ * outbox owners. The manifest removes WorkManager's automatic initializer for that.
+ */
+class FieldSpottrApplication : Application(), Configuration.Provider {
 
   internal lateinit var fsGraph: FSGraph
+
+  // WorkManager asks for this on its first use, which the graph's scheduler defers until a row
+  // waits, so the graph exists by then. Reading the owner set constructs the owners not built yet,
+  // and their outboxes start draining.
+  override val workManagerConfiguration: Configuration
+    get() =
+      Configuration.Builder()
+        .setWorkerFactory(
+          OutboxDrainWorkerFactory(fsGraph.dataScopeFactory) { fsGraph.outboxOwners }
+        )
+        .build()
 
   override fun onCreate() {
     super.onCreate()

@@ -1,0 +1,310 @@
+// Copyright (C) 2026 Zac Sweers
+// SPDX-License-Identifier: Apache-2.0
+package dev.zacsweers.fieldspottr.data.core.impl
+
+import dev.zacsweers.fieldspottr.data.core.DataQuery
+import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
+import dev.zacsweers.fieldspottr.data.core.FetchStatus
+import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.Freshness
+import dev.zacsweers.fieldspottr.data.core.OnPrevious
+import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.Ordering
+import dev.zacsweers.fieldspottr.data.core.QueryStore
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+/**
+ * [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. Its
+ * watcher runs in [scope] while anyone collects [data]. [holds] keeps whatever owns this query
+ * alive, such as the per-key entry inside a keyed query, for as long as the watcher or a request
+ * still needs it.
+ */
+@OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
+internal class RealDataQuery<T>(
+  private val store: QueryStore<T>,
+  private val fetch: suspend () -> T,
+  private val freshness: Freshness,
+  private val clock: Clock,
+  private val scope: CoroutineScope,
+  /** Hears each failed fetch. */
+  private val onFetchFailure: (Throwable) -> Unit,
+  /** Hears every other failed command, like an invalidate() whose store throws. */
+  private val onActionFailure: (Throwable) -> Unit,
+  private val holds: QueryHolds = QueryHolds.None,
+) : DataQuery<T> {
+  private val actions = RealActionRunner(scope, ::report)
+  // Private, so only this query's commands chain on it
+  private val key = Any()
+  // How many observers collect data, and the watcher that runs while any do. Updated by
+  // compare-and-set only.
+  private val watching = AtomicReference(Watching(observers = 0, watcher = null))
+
+  /**
+   * The store's values. Each observer checks the stored time when it subscribes, joining a check
+   * already queued, since the data can go stale between observers. The check is a command of its
+   * own, so an observer that takes the first value and leaves, like `first()`, still started it.
+   * The first observer also starts the watcher, which checks again whenever the fetched data goes
+   * away. The check starts first, so the watcher can wait for it, as [watch] describes.
+   */
+  override val data: Flow<Fetched<T>?> = flow {
+    val check = fetchIfStale()
+    startWatching(check)
+    holds.holdUntilSettled(check)
+    try {
+      emitAll(store.data)
+    } finally {
+      stopWatching()
+    }
+  }
+
+  override val stored: Flow<Fetched<T>?> = store.data
+
+  /** Counts an observer in, and starts the watcher for the first one, whose check is [check]. */
+  private fun startWatching(check: Operation) {
+    while (true) {
+      val current = watching.load()
+      if (current.observers > 0) {
+        if (watching.compareAndSet(current, Watching(current.observers + 1, current.watcher))) {
+          return
+        }
+        continue
+      }
+      val watcher = scope.launch(start = CoroutineStart.LAZY) { watch(check) }
+      if (watching.compareAndSet(current, Watching(observers = 1, watcher))) {
+        // The watcher takes a hold on the owner, which also covers the requests the watcher makes
+        if (holds.tryAcquire()) {
+          watcher.invokeOnCompletion { holds.release() }
+          watcher.start()
+        } else {
+          watcher.cancel()
+        }
+        return
+      }
+      watcher.cancel()
+    }
+  }
+
+  /** Counts an observer out, and stops the watcher after the last one. */
+  private fun stopWatching() {
+    while (true) {
+      val current = watching.load()
+      val last = current.observers == 1
+      val next =
+        if (last) {
+          Watching(observers = 0, watcher = null)
+        } else {
+          Watching(current.observers - 1, current.watcher)
+        }
+      if (watching.compareAndSet(current, next)) {
+        if (last) {
+          current.watcher?.cancel()
+        }
+        return
+      }
+    }
+  }
+
+  /**
+   * One ordered view of the store for every observer, so each change starts one check however many
+   * observers see it, and however late. A value that goes away, or keeps only local changes with
+   * [QueryStore.UNFETCHED], is checked again once the work already queued is done, so a value
+   * cleared while a fetch is still writing gets a check after that write. An invalidated value
+   * keeps its data and waits for the next collect, as [invalidate] promises.
+   *
+   * The first value needs no check of its own, since the observer that started the watcher made
+   * [check], unless that value is nothing stored. [check] may be one this observer joined, which
+   * read a value before a clear, so it never fetched. So the watcher waits for it, and when it
+   * succeeded and the store is still empty, checks once more. A check that failed, like a fetch
+   * while offline, already made its attempt, so the watcher leaves it to the next request.
+   */
+  private suspend fun watch(check: Operation) {
+    var previous: Fetched<T>? = null
+    var first = true
+    store.data.collect { current ->
+      if (first) {
+        first = false
+        val emptyAfterCheck =
+          current == null && check.await() == OperationState.Succeeded && store.data.first() == null
+        if (emptyAfterCheck) {
+          holds.holdUntilSettled(recheck())
+        }
+      } else if (lostFetch(previous, current)) {
+        holds.holdUntilSettled(recheck())
+      }
+      previous = current
+    }
+  }
+
+  /** Whether [current] has lost the fetched data that [previous] showed. */
+  private fun lostFetch(previous: Fetched<T>?, current: Fetched<T>?): Boolean {
+    if (previous == null) {
+      return false
+    }
+    if (current == null) {
+      return true
+    }
+    return current.fetchedAt == QueryStore.UNFETCHED && previous.fetchedAt != QueryStore.UNFETCHED
+  }
+
+  override val status: StateFlow<FetchStatus>
+    field = MutableStateFlow<FetchStatus>(FetchStatus.Idle)
+
+  override fun requestFetch(force: Boolean): Operation =
+    if (force) {
+      fetchNow()
+    } else {
+      fetchIfStale()
+    }
+
+  /**
+   * Joins a forced fetch that has not settled, even behind checks queued after it, else fetches
+   * now. An invalidate() queued after it stops the search, so a later request never joins a fetch
+   * from before the data changed. See [requestFetch].
+   */
+  private fun fetchNow(): Operation =
+    actions.runOrJoin(
+      Ordering.Keyed(key, OnPrevious.Cancel),
+      Request.Forced,
+      joins = { it.tag == Request.Forced },
+      passes = { it.tag == Request.Check },
+    ) {
+      fetchOnce(forced = true)
+    }
+
+  /**
+   * Single flight. Joins the check or fetch that is the newest command on this query's key, else
+   * checks the stored time and fetches if stale.
+   */
+  private fun fetchIfStale(): Operation =
+    actions.runOrJoin(
+      Ordering.Keyed(key),
+      Request.Check,
+      joins = { it.tag is Request },
+      block = ::checkStale,
+    )
+
+  /**
+   * Checks the stored time once the work already queued is done. It joins only a check that has not
+   * started, which reads the store later anyway, and never work that may have read it already.
+   */
+  private fun recheck(): Operation =
+    actions.runOrJoin(
+      Ordering.Keyed(key),
+      Request.Check,
+      joins = { it.tag == Request.Check && !it.hasStarted },
+      block = ::checkStale,
+    )
+
+  // The newest command on the key from here on, so a later request waits for it and checks the
+  // store again instead of joining a fetch that started before the data changed
+  override fun invalidate(): Operation = actions.run(Ordering.Keyed(key)) { store.invalidate() }
+
+  // Reads the store on this query's key, so it never races a fetch
+  private suspend fun checkStale() {
+    if (isStale(store.data.first()?.fetchedAt)) {
+      fetchOnce(forced = false)
+    }
+  }
+
+  private fun isStale(at: Instant?): Boolean {
+    if (at == null || at <= QueryStore.INVALIDATED) {
+      return true
+    }
+    val now = clock.now()
+    // A time in the future means the clock moved back or the record is bad
+    return at > now || freshness.isStale(at, now)
+  }
+
+  private suspend fun fetchOnce(forced: Boolean) {
+    status.value = FetchStatus.Fetching(forced)
+    try {
+      val fetchedAt = clock.now()
+      val value = fetch()
+      // A fetch superseded while it ran never writes, even one whose fetch ignored cancellation
+      currentCoroutineContext().ensureActive()
+      // A fetch also never overwrites data that another writer put in the store meanwhile with a
+      // newer fetch time, like a second query's fetch or a sent change the server already holds.
+      // The store checks and writes in one update, so such a write cannot land between the two. An
+      // equal time is this fetch's own or as new, so it is replaced. A fetch time ahead of the
+      // clock is a bad record, which isStale treats as stale, so the fetch replaces that too.
+      store.writeFetched(value, fetchedAt) { storedAt ->
+        storedAt > fetchedAt && storedAt <= clock.now()
+      }
+      status.value = FetchStatus.Idle
+    } catch (t: Throwable) {
+      // Stopped by its owner, or replaced by a newer forced fetch that starts only after this one
+      // ends and then sets its own status
+      if (!currentCoroutineContext().isActive) {
+        status.value = FetchStatus.Idle
+        throw t
+      }
+      status.value = FetchStatus.Failed(t)
+      // The handle settles Failed and the failure reporter hears it
+      throw t
+    }
+  }
+
+  /**
+   * Sends a failed command's [cause] to [onFetchFailure] when a fetch threw it, and to
+   * [onActionFailure] otherwise. A failed fetch sets [status] to its failure before its command
+   * settles, and no other command on this query's key starts before then, so the status still names
+   * it when the runner reports.
+   */
+  private fun report(cause: Throwable) {
+    if ((status.value as? FetchStatus.Failed)?.cause === cause) {
+      onFetchFailure(cause)
+    } else {
+      onActionFailure(cause)
+    }
+  }
+
+  /** What a request on this query's key is, so a later request can tell whether to join it. */
+  private enum class Request {
+    Check,
+    Forced,
+  }
+
+  private class Watching(val observers: Int, val watcher: Job?)
+}
+
+/**
+ * Holds that keep a query's owner alive while the query still needs it. The owner is whatever
+ * created the query and may drop it once it is unused, such as the per-key entry inside a keyed
+ * query. A hold can be taken only while the owner is already held, so a hold never revives an owner
+ * that was dropped.
+ */
+internal interface QueryHolds {
+  /** Takes a hold, or returns false once the owner was dropped. */
+  fun tryAcquire(): Boolean
+
+  fun release()
+
+  /** Holds the owner until [operation]'s command finishes, cancelled or not. */
+  fun holdUntilSettled(operation: Operation)
+
+  /** A query without an owner to keep. */
+  object None : QueryHolds {
+    override fun tryAcquire(): Boolean = true
+
+    override fun release() {}
+
+    override fun holdUntilSettled(operation: Operation) {}
+  }
+}
