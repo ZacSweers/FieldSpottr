@@ -171,11 +171,16 @@ fun PermitGrid(
         verticalScrollState.scrollTo(target.coerceAtMost(verticalScrollState.maxValue))
         onAutoScrolledToFirstPermit()
       }
-      val isScrolled by remember { derivedStateOf { verticalScrollState.value > 0 } }
-      val showPreviousFields by remember { derivedStateOf { horizontalScrollState.value > 0 } }
-      val showMoreFields by remember {
-        derivedStateOf { horizontalScrollState.value < horizontalScrollState.maxValue }
-      }
+      // Keyed on the scroll states, which change with the group and date. Unkeyed, these kept
+      // reading the first group's state, like a four-field group's overflow on a three-field grid.
+      val isScrolled by
+        remember(verticalScrollState) { derivedStateOf { verticalScrollState.value > 0 } }
+      val showPreviousFields by
+        remember(horizontalScrollState) { derivedStateOf { horizontalScrollState.value > 0 } }
+      val showMoreFields by
+        remember(horizontalScrollState) {
+          derivedStateOf { horizontalScrollState.value < horizontalScrollState.maxValue }
+        }
 
       Column(Modifier.fillMaxSize()) {
         // Names of the fields as a header
