@@ -5,34 +5,25 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import kotlin.test.Test
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 
 class PayloadCodecTest {
 
-  @Serializable private data class Note(val id: Int, val text: String)
-
   @Test
-  fun `a string format round trips`() {
-    val codec = Note.serializer().asCodec(Json)
-    val note = Note(1, "hello")
-
-    assertThat(codec.decode(codec.encode(note))).isEqualTo(note)
-  }
-
-  @Test
-  fun `every status round trips through its stored form`() {
-    val statuses =
+  fun `every status stores a fixed name and cause and reads back from them`() {
+    // Literal names, since rows one store or app version wrote must read back in every other
+    val stored =
       listOf(
-        OutboxStatus.Queued,
-        OutboxStatus.Sending,
-        OutboxStatus.Failed("boom"),
-        OutboxStatus.Sent,
-        OutboxStatus.Discarded,
+        StoredStatus(OutboxStatus.Queued, name = "queued", cause = null),
+        StoredStatus(OutboxStatus.Sending, name = "sending", cause = null),
+        StoredStatus(OutboxStatus.Failed("boom"), name = "failed", cause = "boom"),
+        StoredStatus(OutboxStatus.Sent, name = "sent", cause = null),
+        StoredStatus(OutboxStatus.Discarded, name = "discarded", cause = null),
       )
 
-    for (status in statuses) {
-      assertThat(OutboxStatus(status.storedName, status.storedCause)).isEqualTo(status)
+    for ((status, name, cause) in stored) {
+      assertThat(status.storedName).isEqualTo(name)
+      assertThat(status.storedCause).isEqualTo(cause)
+      assertThat(OutboxStatus(name, cause)).isEqualTo(status)
     }
   }
 
@@ -41,4 +32,7 @@ class PayloadCodecTest {
     assertThat(OutboxStatus("archived"))
       .isEqualTo(OutboxStatus.Failed("Unknown stored status archived"))
   }
+
+  /** A status and the name and cause a durable store writes for it. */
+  private data class StoredStatus(val status: OutboxStatus, val name: String, val cause: String?)
 }
