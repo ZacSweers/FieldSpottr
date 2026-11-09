@@ -391,27 +391,31 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
               else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
           )
         }
-        IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleFavorite) }) {
-          Icon(
-            if (state.favorite.on) {
-              Icons.Filled.Favorite
-            } else {
-              Icons.Outlined.FavoriteBorder
-            },
-            contentDescription =
+        // Favorites are a data layer prototype that nothing else reads yet, so release builds hide
+        // them to keep the heart from being mistaken for the default-group star
+        if (state.isDebug) {
+          IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleFavorite) }) {
+            Icon(
               if (state.favorite.on) {
-                "Remove ${state.selectedGroup} from favorites"
+                Icons.Filled.Favorite
               } else {
-                "Add ${state.selectedGroup} to favorites"
+                Icons.Outlined.FavoriteBorder
               },
-            tint =
-              when {
-                // The server has not confirmed this group's change yet
-                state.favorite.pending -> MaterialTheme.colorScheme.tertiary
-                state.favorite.on -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-              },
-          )
+              contentDescription =
+                if (state.favorite.on) {
+                  "Remove ${state.selectedGroup} from favorites"
+                } else {
+                  "Add ${state.selectedGroup} to favorites"
+                },
+              tint =
+                when {
+                  // The server has not confirmed this group's change yet
+                  state.favorite.pending -> MaterialTheme.colorScheme.tertiary
+                  state.favorite.on -> MaterialTheme.colorScheme.primary
+                  else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                },
+            )
+          }
         }
         IconButton(onClick = { state.eventSink(PermitGridScreen.Event.ToggleDefaultGroup) }) {
           Icon(
@@ -470,7 +474,7 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
       if (state.isMissingPendingData && state.viewMode == GridViewMode.DAY) {
         DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(horizontal = 16.dp))
       }
-      if (state.favorite.unsynced > 0) {
+      if (state.isDebug && state.favorite.unsynced > 0) {
         val noun =
           if (state.favorite.unsynced == 1) {
             "favorite change"
