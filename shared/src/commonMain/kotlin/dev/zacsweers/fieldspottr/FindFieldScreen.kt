@@ -64,6 +64,7 @@ import dev.zacsweers.fieldspottr.data.Area
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.BbpAvailability
 import dev.zacsweers.fieldspottr.data.FSPreferencesStore
+import dev.zacsweers.fieldspottr.data.Field
 import dev.zacsweers.fieldspottr.data.FieldGroup
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.TimeWindow
@@ -85,6 +86,7 @@ import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -97,11 +99,17 @@ import kotlinx.datetime.atStartOfDayIn
 data class FieldAvailability(
   val group: FieldGroup,
   val areaDisplayName: String,
+  /** Hours when every field in the group is free. Empty when only some fields are free. */
   val openTimeRange: String,
   val isFullyOpen: Boolean,
   /** If non-null, this field is closed for the window and this is the (short) reason. */
   val closedReason: String? = null,
+  /** Fields that are free for more of the window than the whole group, like one free half. */
+  val fieldOpenings: ImmutableList<FieldOpening> = persistentListOf(),
 )
+
+/** One or more fields in a group, by display name, with the same free [openTimeRange]. */
+@Immutable data class FieldOpening(val fieldNames: String, val openTimeRange: String)
 
 @Immutable
 data class AvailabilityBuckets(
@@ -547,6 +555,15 @@ private fun FieldAvailabilityRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
+        for (opening in field.fieldOpenings) {
+          Text(
+            "${opening.fieldNames} · ${opening.openTimeRange}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.tertiary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
       }
 
       // Time chip (or closed badge)
@@ -575,7 +592,8 @@ private fun FieldAvailabilityRow(
           color = MaterialTheme.colorScheme.secondaryContainer,
         ) {
           Text(
-            text = field.openTimeRange,
+            // Only some fields are free, and the opening lines list them
+            text = field.openTimeRange.ifEmpty { "Some fields" },
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
           )
@@ -684,13 +702,19 @@ internal fun computeAvailability(
         )
       } else {
         val freeHours = (startHour until endHour).filter { it !in bookedHours }
-        if (freeHours.isNotEmpty()) {
+        val openings =
+          fieldOpenings(
+            freeHoursByField(groupPermits, area, group, startHour, endHour),
+            groupFreeHours = freeHours,
+          )
+        if (freeHours.isNotEmpty() || openings.isNotEmpty()) {
           partiallyOpen.add(
             FieldAvailability(
               group = group,
               areaDisplayName = area.displayName,
               openTimeRange = formatFreeRanges(freeHours),
               isFullyOpen = false,
+              fieldOpenings = openings,
             )
           )
         } else {
@@ -743,25 +767,69 @@ private fun bookedHoursForGroup(
 
   val bookedHours = mutableSetOf<Int>()
   for (permit in permits) {
-    if (permit.isAvailabilityOverlay || permit.type == BbpAvailability.COVERAGE_KIND) continue
+    if (!permit.isBooking) continue
     if (permit.fieldId !in area.fieldMappings) continue
-
-    val permitStart = permit.start.toNyLocalDateTime()
-    val permitEnd = permit.end.toNyLocalDateTime()
-    val permitStartHour = permitStart.hour
-    val permitEndHour =
-      when {
-        permitEnd.hour == 0 && permitEnd.date > permitStart.date -> 24
-        permitEnd.minute > 0 || permitEnd.second > 0 || permitEnd.nanosecond > 0 ->
-          permitEnd.hour + 1
-        else -> permitEnd.hour
-      }
-
-    for (hour in max(startHour, permitStartHour) until min(endHour, permitEndHour)) {
-      bookedHours.add(hour)
-    }
+    bookedHours += permit.bookedHours(startHour, endHour)
   }
   return bookedHours
+}
+
+/**
+ * Free hours in [startHour, endHour) for each field in [group]. A permit blocks its own field and
+ * every field that shares a surface with it (see `Field.overlapsWith`), so one booked half leaves
+ * the other half free but blocks the whole field.
+ */
+private fun freeHoursByField(
+  permits: List<DbPermit>,
+  area: Area,
+  group: FieldGroup,
+  startHour: Int,
+  endHour: Int,
+): Map<Field, List<Int>> {
+  val bookedByPermitField = mutableMapOf<Field, MutableSet<Int>>()
+  for (permit in permits) {
+    if (!permit.isBooking) continue
+    val field = area.fieldMappings[permit.fieldId] ?: continue
+    bookedByPermitField.getOrPut(field) { mutableSetOf() } += permit.bookedHours(startHour, endHour)
+  }
+  return group.fields.associateWith { field ->
+    val booked = bookedByPermitField.filterKeys { it.overlapsWith(field) }.values.flatten().toSet()
+    (startHour until endHour).filter { it !in booked }
+  }
+}
+
+/**
+ * Openings for fields that are free for more hours than [groupFreeHours], the hours when the whole
+ * group is free. Fields with the same free hours share one opening, in catalog order.
+ */
+private fun fieldOpenings(
+  freeHoursByField: Map<Field, List<Int>>,
+  groupFreeHours: List<Int>,
+): ImmutableList<FieldOpening> {
+  return freeHoursByField.entries
+    .filter { (_, free) -> free.isNotEmpty() && free != groupFreeHours }
+    .groupBy({ it.value }, { it.key.displayName })
+    .map { (free, names) -> FieldOpening(names.joinToString(", "), formatFreeRanges(free)) }
+    .toImmutableList()
+}
+
+/** Whether this row books its field. Live overlays and BBP coverage markers do not. */
+private val DbPermit.isBooking: Boolean
+  get() = !isAvailabilityOverlay && type != BbpAvailability.COVERAGE_KIND
+
+/**
+ * The hours in [startHour, endHour) that this permit touches, counting a partial hour as booked.
+ */
+private fun DbPermit.bookedHours(startHour: Int, endHour: Int): IntRange {
+  val permitStart = start.toNyLocalDateTime()
+  val permitEnd = end.toNyLocalDateTime()
+  val permitEndHour =
+    when {
+      permitEnd.hour == 0 && permitEnd.date > permitStart.date -> 24
+      permitEnd.minute > 0 || permitEnd.second > 0 || permitEnd.nanosecond > 0 -> permitEnd.hour + 1
+      else -> permitEnd.hour
+    }
+  return max(startHour, permitStart.hour) until min(endHour, permitEndHour)
 }
 
 private fun formatFreeRanges(freeHours: List<Int>): String {

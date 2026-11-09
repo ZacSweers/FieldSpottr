@@ -4,6 +4,8 @@ package dev.zacsweers.fieldspottr
 
 import assertk.assertFailure
 import assertk.assertThat
+import assertk.assertions.containsExactly
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
@@ -160,6 +162,121 @@ class FindFieldScreenTest {
           .openTimeRange
       )
       .isEqualTo("8–11pm")
+  }
+
+  @Test
+  fun `a free surface keeps a booked group partially open`() {
+    // Field 1 at Baruch is booked all evening, but field 2 is free
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Baruch",
+          group = "Baruch",
+          fieldId = "Softball-01",
+          startHour = 18,
+          endHour = 23,
+        )
+      )
+
+    val baruch =
+      computeAvailability(permits, Areas.default, 18, 23).partiallyOpen.single {
+        it.group.name == "Baruch"
+      }
+    assertThat(baruch.openTimeRange).isEqualTo("")
+    assertThat(baruch.fieldOpenings).containsExactly(FieldOpening("Soccer 2, Softball 2", "6–11pm"))
+  }
+
+  @Test
+  fun `a booked half leaves the other half free longer than the whole field`() {
+    // Independent halves, as scripts/add_nyc_park.py models them
+    val areas = buildAreas {
+      area(name = "Park", displayName = "Park") {
+        group(name = "Field", location = Location(gmaps = "", amaps = "")) {
+          field(csvName = "Soccer-01A", displayName = "West Half", sharedFields = setOf("a"))
+          field(csvName = "Soccer-01", displayName = "Whole Field", sharedFields = setOf("a", "b"))
+          field(csvName = "Soccer-01B", displayName = "East Half", sharedFields = setOf("b"))
+        }
+      }
+    }
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Park",
+          group = "Field",
+          fieldId = "Soccer-01A",
+          startHour = 18,
+          endHour = 20,
+        )
+      )
+
+    val field = computeAvailability(permits, areas, 18, 23).partiallyOpen.single()
+    assertThat(field.openTimeRange).isEqualTo("8–11pm")
+    assertThat(field.fieldOpenings).containsExactly(FieldOpening("East Half", "6–11pm"))
+  }
+
+  @Test
+  fun `halves that share a token block each other`() {
+    // Bushwick's halves share the "bushwick inlet field" token, like the grid's overlap model
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Bushwick Inlet Park",
+          group = "Bushwick Inlet Park",
+          fieldId = westHalfFieldId(),
+          startHour = 18,
+          endHour = 20,
+        )
+      )
+
+    val bushwick =
+      computeAvailability(permits, Areas.default, 18, 23).partiallyOpen.single {
+        it.group.name == "Bushwick Inlet Park"
+      }
+    assertThat(bushwick.openTimeRange).isEqualTo("8–11pm")
+    assertThat(bushwick.fieldOpenings).isEmpty()
+  }
+
+  @Test
+  fun `fields free only with the whole group add no openings`() {
+    val permits =
+      listOf(
+        permit(
+          recordId = 1,
+          area = "Baruch",
+          group = "Baruch",
+          fieldId = "Softball-01",
+          startHour = 18,
+          endHour = 20,
+        ),
+        permit(
+          recordId = 2,
+          area = "Baruch",
+          group = "Baruch",
+          fieldId = "Softball-02",
+          startHour = 18,
+          endHour = 20,
+        ),
+      )
+
+    val baruch =
+      computeAvailability(permits, Areas.default, 18, 23).partiallyOpen.single {
+        it.group.name == "Baruch"
+      }
+    assertThat(baruch.openTimeRange).isEqualTo("8–11pm")
+    assertThat(baruch.fieldOpenings).isEmpty()
+  }
+
+  private fun westHalfFieldId(): String {
+    return Areas.default.groups
+      .getValue("Bushwick Inlet Park")
+      .fields
+      .single {
+        it.displayName == "West Half"
+      }
+      .name
   }
 
   @Test
