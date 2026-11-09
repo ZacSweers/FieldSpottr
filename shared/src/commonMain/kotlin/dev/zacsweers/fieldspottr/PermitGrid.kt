@@ -811,9 +811,9 @@ fun PermitEvent(
   val containerColor = kind.containerColor()
   val isClickable = onEventClick != null && !isOverlap && !event.isBlocked && !event.isUnavailable
   var orgVisible by remember { mutableStateOf(false) }
-  // In the left pane, details open beside the grid and the block stays visible, so it doesn't grow
-  // into them
-  val sharesElements = isClickable && LocalPaneRole.current != PaneRole.PRIMARY
+  // Only the phone layout grows the block into its details. With panes side by side the block stays
+  // visible, and swapping details in a pane has no real hero to follow.
+  val sharesElements = isClickable && LocalPaneRole.current == PaneRole.SINGLE
   val sharedBoundsModifier =
     if (sharesElements) {
       val sharedBoundsKey =

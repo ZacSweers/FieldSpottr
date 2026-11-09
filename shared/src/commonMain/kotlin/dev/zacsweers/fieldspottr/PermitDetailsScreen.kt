@@ -196,14 +196,16 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
     val animatedScope = requireAnimatedScope(Navigation)
     val headerTextColor = MaterialTheme.colorScheme.onSecondaryContainer
     val role = LocalPaneRole.current
-    // Beside the Areas grid, where the tapped block stays visible, so the card doesn't grow out of
-    // it and closing replaces going back
+    // Beside the Areas grid, closing replaces going back
     val isBesideGrid = role == PaneRole.DETAIL_ROOT
+    // Only the phone layout grows the card out of the tapped block. With panes side by side the
+    // block stays visible, and swapping details in a pane has no real hero to follow.
+    val sharesElements = role == PaneRole.SINGLE
     val reflowKey =
-      if (isBesideGrid) {
-        null
-      } else {
+      if (sharesElements) {
         "permit-${state.fieldName}-${state.index}"
+      } else {
+        null
       }
 
     DragToDismiss(onDismiss = state.onBack, enabled = role == PaneRole.SINGLE) {
@@ -266,7 +268,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
               modifier =
                 Modifier.fillMaxWidth()
                   .then(
-                    if (isBesideGrid) {
+                    if (!sharesElements) {
                       Modifier
                     } else {
                       Modifier.sharedBounds(

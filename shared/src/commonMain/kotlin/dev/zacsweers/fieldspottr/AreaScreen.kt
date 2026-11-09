@@ -306,7 +306,8 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
   // Beside the list in the split layout. The list stays visible, so there's nothing to go back to
   // and the list row doesn't grow into this screen.
   val isBesideList = LocalPaneRole.current == PaneRole.DETAIL_ROOT
-  val sharesElements = isDetail && !isBesideList
+  // Only the phone layout grows the list row into this screen
+  val sharesElements = isDetail && LocalPaneRole.current == PaneRole.SINGLE
   val reflowKey = if (sharesElements) "area-${state.selectedGroup}" else null
   Box(modifier.fillMaxSize()) {
     if (isBesideList) {
