@@ -124,6 +124,7 @@ kotlin {
       dependencies {
         implementation(kotlin("test"))
         implementation(libs.assertk)
+        implementation(libs.compose.ui.test)
         implementation(libs.coroutines.test)
         implementation(libs.ktor.client.mock)
         implementation(libs.okio.fakefilesystem)
