@@ -115,7 +115,6 @@ kotlin {
     jvmMain {
       dependencies {
         implementation(compose.desktop.currentOs)
-        implementation(libs.compose.navigationevent)
         implementation(libs.appDirs)
         implementation(libs.ktor.client.engine.okhttp)
         implementation(libs.slf4jNop)

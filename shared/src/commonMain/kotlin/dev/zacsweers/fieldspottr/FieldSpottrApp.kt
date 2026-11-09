@@ -7,6 +7,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.slack.circuit.backstack.rememberSaveableBackStack
@@ -29,6 +30,8 @@ import dev.zacsweers.fieldspottr.panes.PaneNavDecoration
 import dev.zacsweers.fieldspottr.theme.FSTheme
 import dev.zacsweers.metro.Assisted
 import dev.zacsweers.metro.Inject
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 @OptIn(
   ExperimentalSharedTransitionApi::class,
@@ -41,6 +44,11 @@ fun FieldSpottrApp(
   circuit: Circuit,
   @Assisted modifier: Modifier = Modifier,
   @Assisted onRootPop: () -> Unit,
+  /**
+   * Back requests from platforms with no system back, such as Escape on desktop. Each closes an
+   * open overlay or pops a screen, and never leaves the root screen.
+   */
+  @Assisted backRequests: Flow<Unit> = emptyFlow(),
 ) {
   // Temporary until Compose Multiplatform supplies a retained-values store.
   // https://issuetracker.google.com/issues/467397537
@@ -68,6 +76,15 @@ fun FieldSpottrApp(
               remember(navigator, paneHost) {
                 PaneAwareNavigator(navigator) { paneHost.layout.isSplit }
               }
+            LaunchedEffect(backRequests, paneNavigator) {
+              backRequests.collect {
+                val overlay = overlayHost.currentOverlayData
+                when {
+                  overlay != null -> overlay.finish(DatePickerResult(null))
+                  backStack.size > 1 -> paneNavigator.pop()
+                }
+              }
+            }
             val decoration =
               remember(circuit, paneHost) {
                 PaneNavDecoration(
