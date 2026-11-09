@@ -51,7 +51,6 @@ import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
-import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import com.slack.circuit.sharedelements.SharedElementTransitionScope
 import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedScope.Navigation
@@ -62,6 +61,10 @@ import dev.zacsweers.fieldspottr.data.LiveGroupAvailability
 import dev.zacsweers.fieldspottr.data.PermitRepository
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneRole
+import dev.zacsweers.fieldspottr.panes.PaneRole
+import dev.zacsweers.fieldspottr.panes.PaneScreen
+import dev.zacsweers.fieldspottr.panes.PaneStyle
 import dev.zacsweers.fieldspottr.ui.DataNote
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
@@ -84,7 +87,11 @@ data class AreaScreen(
   val fixedTitle: String? = null,
   val fixedSubtitle: String? = null,
   val selectedDate: Long? = null,
-) : Screen {
+) : PaneScreen {
+  // Wide windows open a field's grid beside the Find a Field list
+  override val paneStyle: PaneStyle
+    get() = PaneStyle.LIST_DETAIL
+
   data class State(
     val date: LocalDate,
     val areas: Areas,
@@ -293,8 +300,15 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     }
 
   val isDetail = state.fixedTitle != null
+  // Beside the list in the split layout. The list stays visible, so there's nothing to go back to
+  // and the list row doesn't grow into this screen.
+  val isBesideList = LocalPaneRole.current == PaneRole.DETAIL_ROOT
+  val sharesElements = isDetail && !isBesideList
+  val reflowKey = if (sharesElements) "area-${state.selectedGroup}" else null
   Box(modifier.fillMaxSize()) {
-    if (isDetail) {
+    if (isBesideList) {
+      Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface))
+    } else if (isDetail) {
       // Background - sharedElement, always opaque
       val containerKey = AreaContainerSharedElementKey(state.selectedGroup)
       Spacer(
@@ -311,7 +325,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
     }
     // Content - sharedBounds when detail (cross-fades inside animated bounds)
     val contentModifier =
-      if (isDetail) {
+      if (sharesElements) {
         val contentKey = AreaContentSharedElementKey(state.selectedGroup)
         // Exit: fully gone by 30%. Enter: appears in the last 15%.
         val earlyEasing = Easing { (it / 0.3f).coerceAtMost(1f) }
@@ -334,8 +348,10 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
       topBar = {
         TopAppBar(
           navigationIcon = {
-            IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
-              Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            if (!isBesideList) {
+              IconButton(onClick = { state.eventSink(AreaScreen.Event.NavigateBack) }) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+              }
             }
           },
           title = {
@@ -343,7 +359,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
               Column(horizontalAlignment = Alignment.Start) {
                 ReflowText(
                   text = state.fixedTitle,
-                  sharedElementKey = "area-${state.selectedGroup}",
+                  sharedElementKey = reflowKey,
                   sharedElementKeySuffix = "title",
                   style = MaterialTheme.typography.titleLarge,
                   fontWeight = FontWeight.Bold,
@@ -351,7 +367,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
                 if (state.fixedSubtitle != null) {
                   ReflowText(
                     text = state.fixedSubtitle,
-                    sharedElementKey = "area-${state.selectedGroup}",
+                    sharedElementKey = reflowKey,
                     sharedElementKeySuffix = "subtitle",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

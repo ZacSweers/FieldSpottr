@@ -74,6 +74,8 @@ import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
+import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
+import dev.zacsweers.fieldspottr.panes.ReserveEmptyDetailPane
 import dev.zacsweers.fieldspottr.ui.DataNote
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
@@ -304,6 +306,11 @@ fun FindFieldPresenter(
 @Composable
 fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()
+  // Wide windows open a field's grid beside this list. Until then, keep the pane with a hint so
+  // the list doesn't change width on the first pick.
+  ReserveEmptyDetailPane("Pick a field to see its schedule")
+  val paneLayout = LocalPaneLayout.current
+  val openGroup = (paneLayout.detailRoot as? AreaScreen)?.initialGroup
 
   Column(
     modifier.fillMaxSize().daySwipeable(daySwipe, state.selectedDate) { newDate ->
@@ -484,6 +491,8 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
               FieldAvailabilityRow(
                 field = field,
                 dotColor = MaterialTheme.colorScheme.primary,
+                isSelected = field.group.name == openGroup,
+                sharesElements = !paneLayout.isSplit,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -497,6 +506,8 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
               FieldAvailabilityRow(
                 field = field,
                 dotColor = MaterialTheme.colorScheme.tertiary,
+                isSelected = field.group.name == openGroup,
+                sharesElements = !paneLayout.isSplit,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -510,6 +521,8 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
               FieldAvailabilityRow(
                 field = field,
                 dotColor = MaterialTheme.colorScheme.error,
+                isSelected = field.group.name == openGroup,
+                sharesElements = !paneLayout.isSplit,
                 onClick = {
                   state.eventSink(FindFieldScreen.Event.NavigateToArea(field.group.name))
                 },
@@ -541,19 +554,39 @@ private fun FieldAvailabilityRow(
   dotColor: androidx.compose.ui.graphics.Color,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  /** The row's group is open in the pane beside the list. */
+  isSelected: Boolean = false,
+  /**
+   * The row grows into the area screen when tapped. Off in the split layout, where the row stays
+   * visible beside the grid it opens.
+   */
+  sharesElements: Boolean = true,
 ) = SharedElementTransitionScope {
   val containerKey = AreaContainerSharedElementKey(field.group.name)
   val contentKey = AreaContentSharedElementKey(field.group.name)
   val navScope = requireAnimatedScope(Navigation)
+  val reflowKey = if (sharesElements) "area-${field.group.name}" else null
   Box(modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable(onClick = onClick)) {
     // Background — sharedElement, always opaque, no cross-fade
     Spacer(
       Modifier.matchParentSize()
-        .sharedElement(
-          sharedContentState = rememberSharedContentState(containerKey),
-          animatedVisibilityScope = navScope,
+        .then(
+          if (sharesElements) {
+            Modifier.sharedElement(
+              sharedContentState = rememberSharedContentState(containerKey),
+              animatedVisibilityScope = navScope,
+            )
+          } else {
+            Modifier
+          }
         )
-        .background(MaterialTheme.colorScheme.surface)
+        .background(
+          if (isSelected) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+          } else {
+            MaterialTheme.colorScheme.surface
+          }
+        )
     )
     // Content cross-fades quickly inside the animated bounds.
     // Exit: fully gone by 30%. Enter: appears in the last 50%.
@@ -562,12 +595,18 @@ private fun FieldAvailabilityRow(
     Row(
       modifier =
         Modifier.fillMaxWidth()
-          .sharedBounds(
-            sharedContentState = rememberSharedContentState(contentKey),
-            animatedVisibilityScope = navScope,
-            enter = fadeIn(tween(easing = lateEasing)),
-            exit = fadeOut(tween(easing = earlyEasing)),
-            zIndexInOverlay = 1f,
+          .then(
+            if (sharesElements) {
+              Modifier.sharedBounds(
+                sharedContentState = rememberSharedContentState(contentKey),
+                animatedVisibilityScope = navScope,
+                enter = fadeIn(tween(easing = lateEasing)),
+                exit = fadeOut(tween(easing = earlyEasing)),
+                zIndexInOverlay = 1f,
+              )
+            } else {
+              Modifier
+            }
           )
           .padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
@@ -580,7 +619,7 @@ private fun FieldAvailabilityRow(
       Column(modifier = Modifier.weight(1f)) {
         ReflowText(
           text = field.group.name,
-          sharedElementKey = "area-${field.group.name}",
+          sharedElementKey = reflowKey,
           sharedElementKeySuffix = "title",
           style = MaterialTheme.typography.bodyLarge,
           fontWeight = FontWeight.Bold,
@@ -589,7 +628,7 @@ private fun FieldAvailabilityRow(
         if (field.areaDisplayName != field.group.name) {
           ReflowText(
             text = field.areaDisplayName,
-            sharedElementKey = "area-${field.group.name}",
+            sharedElementKey = reflowKey,
             sharedElementKeySuffix = "subtitle",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
