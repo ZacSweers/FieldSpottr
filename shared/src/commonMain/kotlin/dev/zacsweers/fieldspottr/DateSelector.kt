@@ -35,14 +35,12 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
 import com.slack.circuit.sharedelements.SharedTransitionKey
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
-import kotlin.time.Clock
+import dev.zacsweers.fieldspottr.util.produceNyHour
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
-import kotlinx.datetime.TimeZone.Companion.UTC
 import kotlinx.datetime.format.MonthNames
-import kotlinx.datetime.toLocalDateTime
 
 /** Shared element key for a specific DateSelector button ↔ its DatePickerOverlay card. */
 data class DateSelectorSharedKey(val id: String) : SharedTransitionKey
@@ -61,7 +59,8 @@ fun DateSelector(
   val overlayHost = LocalOverlayHost.current
   val scope = rememberCoroutineScope()
   val sharedKey = remember(id) { DateSelectorSharedKey(id) }
-  val today = remember { Clock.System.now().toLocalDateTime(UTC).date }
+  // New York's date, which UTC passes hours early every evening
+  val today = produceNyHour().value.date
 
   val yearRange =
     if (permitDateRange != null) {
