@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.panes
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -20,7 +21,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -71,7 +74,8 @@ class PaneNavDecorationTest {
   private val phone = DpSize(411.dp, 900.dp)
   /** An iPad mini in portrait, which keeps the phone layout. */
   private val portraitTablet = DpSize(744.dp, 1133.dp)
-  private val tablet = DpSize(1200.dp, 800.dp)
+  // The test window is 1024px wide at density 1, so wider sizes would clamp
+  private val tablet = DpSize(1000.dp, 700.dp)
 
   private val circuit =
     Circuit.Builder()
@@ -169,8 +173,41 @@ class PaneNavDecorationTest {
   fun rootWithoutReservationFillsWideWindow() = runComposeUiTest {
     windowSize = tablet
     setNavContent(Root)
-    assertLabel("root", PaneRole.SINGLE, taps = 0)
-    onAllNodesWithTag("root").assertCountEquals(1)
+    assertLabel("root", PaneRole.PRIMARY, taps = 0)
+    onNodeWithTag("root-container").assertWidthIsEqualTo(tablet.width)
+  }
+
+  @Test
+  fun reservationSizesTheListPane() = runComposeUiTest {
+    windowSize = tablet
+    setNavContent(ReservingRoot)
+    // Rail plus the list pane, with no window insets in tests
+    onNodeWithTag("root-container").assertWidthIsEqualTo(expectedListPaneWidth())
+  }
+
+  @Test
+  fun reservationAppliesOnTheFirstFrame() = runComposeUiTest {
+    windowSize = tablet
+    mainClock.autoAdvance = false
+    setNavContent(ReservingRoot)
+    mainClock.advanceTimeByFrame()
+    onNodeWithTag("root-container").assertWidthIsEqualTo(expectedListPaneWidth())
+  }
+
+  @Test
+  fun replacedDetailKeepsItsRoleWhileLeaving() = runComposeUiTest {
+    windowSize = tablet
+    setNavContent(ReservingRoot)
+    runOnIdle { navigator.goTo(Detail(1)) }
+    assertLabel("detail1", PaneRole.DETAIL_ROOT, taps = 0)
+
+    mainClock.autoAdvance = false
+    runOnIdle { navigator.goTo(Detail(2)) }
+    mainClock.advanceTimeByFrame()
+    mainClock.advanceTimeByFrame()
+    // Both are composed mid-transition, and the leaving one hasn't become a stacked screen
+    onNodeWithTag("detail1").assertTextContains("role=DETAIL_ROOT", substring = true)
+    onNodeWithTag("detail2").assertTextContains("role=DETAIL_ROOT", substring = true)
   }
 
   @Test
@@ -215,6 +252,9 @@ class PaneNavDecorationTest {
     onNodeWithText("Pick one").assertExists()
   }
 
+  private fun expectedListPaneWidth() =
+    NavigationRailWidth + paneLayout(tablet, firstAboveRoot = null).listPaneWidth
+
   @Composable
   private fun TestUi(screen: Screen, modifier: Modifier) {
     val tag =
@@ -232,7 +272,7 @@ class PaneNavDecorationTest {
     var taps by rememberSaveable { mutableIntStateOf(0) }
     val role = LocalPaneRole.current
     val active = LocalRecordLifecycle.current.isActive
-    Column(modifier) {
+    Column(modifier.fillMaxSize().testTag("$tag-container")) {
       Text("$tag role=$role active=$active taps=$taps", Modifier.testTag(tag))
       Button(onClick = { taps++ }, modifier = Modifier.testTag("$tag-tap")) { Text("Tap") }
     }

@@ -69,6 +69,8 @@ kotlin {
         implementation(libs.sqldelight.async)
         implementation(libs.sqldelight.coroutines)
         implementation(libs.compose.material.material3)
+        implementation(libs.compose.material3.adaptive)
+        implementation(libs.androidx.window.core)
         implementation(libs.compose.material.icons)
         implementation(libs.ktor.client)
         implementation(libs.aboutLicenses)

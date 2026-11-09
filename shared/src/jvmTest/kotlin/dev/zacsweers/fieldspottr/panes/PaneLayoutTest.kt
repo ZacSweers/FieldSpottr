@@ -52,7 +52,7 @@ class PaneLayoutTest {
         iPadPortrait,
       )
     for (size in sizes) {
-      val layout = paneLayout(size, Detail(1), wantsEmptyDetail = true)
+      val layout = paneLayout(size, Detail(1))
       assertThat(layout).isEqualTo(PaneLayout.Single)
     }
   }
@@ -60,7 +60,7 @@ class PaneLayoutTest {
   @Test
   fun wideWindowsSplitListDetail() {
     for (size in listOf(duoOpenLandscape, pixelFoldOpen, desktop)) {
-      val layout = paneLayout(size, Detail(1), wantsEmptyDetail = false)
+      val layout = paneLayout(size, Detail(1))
       assertThat(layout.isWide).isTrue()
       assertThat(layout.detailStyle).isEqualTo(PaneStyle.LIST_DETAIL)
       assertThat(layout.detailRoot).isEqualTo(Detail(1))
@@ -70,39 +70,55 @@ class PaneLayoutTest {
   @Test
   fun wideWindowsSplitSupporting() {
     for (size in listOf(duoOpenLandscape, pixelFoldOpen, desktop)) {
-      assertThat(paneLayout(size, Supporting(1), false).detailStyle).isEqualTo(PaneStyle.SUPPORTING)
+      assertThat(paneLayout(size, Supporting(1)).detailStyle).isEqualTo(PaneStyle.SUPPORTING)
     }
   }
 
   @Test
   fun wideWindowWithNoPaneScreenFillsTheWidth() {
-    val layout = paneLayout(desktop, Plain, wantsEmptyDetail = true)
+    val layout = paneLayout(desktop, Plain)
     assertThat(layout.isWide).isTrue()
     assertThat(layout.isSplit).isFalse()
     assertThat(layout.detailRoot).isNull()
   }
 
   @Test
-  fun rootAloneReservesThePaneOnlyWhenAsked() {
-    assertThat(paneLayout(desktop, null, wantsEmptyDetail = true).detailStyle)
-      .isEqualTo(PaneStyle.LIST_DETAIL)
-    assertThat(paneLayout(desktop, null, wantsEmptyDetail = false).isSplit).isFalse()
+  fun rootAloneKeepsThePanesWithNothingOpen() {
+    val layout = paneLayout(desktop, null)
+    assertThat(layout.detailStyle).isEqualTo(PaneStyle.LIST_DETAIL)
+    assertThat(layout.detailRoot).isNull()
+  }
+
+  @Test
+  fun separatingHingeSplitsThePanes() {
+    val hinge = PaneHinge(425.dp, 426.dp)
+    assertThat(paneLayout(pixelFoldOpen, Detail(1), hinge).hinge).isEqualTo(hinge)
+    assertThat(paneLayout(pixelFoldOpen, Supporting(1), hinge).hinge).isEqualTo(hinge)
+  }
+
+  @Test
+  fun hingeIgnoredWithoutPanesOrRoom() {
+    val middle = PaneHinge(425.dp, 426.dp)
+    // Folded or medium windows keep the phone layout
+    assertThat(paneLayout(duoOpenPortrait, Detail(1), PaneHinge(334.dp, 335.dp)).hinge).isNull()
+    // A plain screen fills the window
+    assertThat(paneLayout(pixelFoldOpen, Plain, middle).hinge).isNull()
+    // Too close to either edge for a pane
+    assertThat(paneLayout(pixelFoldOpen, Detail(1), PaneHinge(200.dp, 201.dp)).hinge).isNull()
+    assertThat(paneLayout(pixelFoldOpen, Detail(1), PaneHinge(700.dp, 701.dp)).hinge).isNull()
   }
 
   @Test
   fun paneWidthsScaleWithinBounds() {
-    assertThat(paneLayout(pixelFoldOpen, Detail(1), false).listPaneWidth.value)
-      .isCloseTo(308.4f, 0.01f)
-    assertThat(paneLayout(duoOpenLandscape, Detail(1), false).listPaneWidth.value)
-      .isCloseTo(348.4f, 0.01f)
-    assertThat(paneLayout(desktop, Detail(1), false).listPaneWidth).isEqualTo(400.dp)
-    assertThat(paneLayout(duoOpenLandscape, Detail(1), false).supportingPaneWidth).isEqualTo(320.dp)
-    assertThat(paneLayout(desktop, Detail(1), false).supportingPaneWidth.value)
-      .isCloseTo(396f, 0.01f)
+    assertThat(paneLayout(pixelFoldOpen, Detail(1)).listPaneWidth.value).isCloseTo(308.4f, 0.01f)
+    assertThat(paneLayout(duoOpenLandscape, Detail(1)).listPaneWidth.value).isCloseTo(348.4f, 0.01f)
+    assertThat(paneLayout(desktop, Detail(1)).listPaneWidth).isEqualTo(400.dp)
+    assertThat(paneLayout(duoOpenLandscape, Detail(1)).supportingPaneWidth).isEqualTo(320.dp)
+    assertThat(paneLayout(desktop, Detail(1)).supportingPaneWidth.value).isCloseTo(396f, 0.01f)
   }
 
   @Test
   fun rootIsNeverAPane() {
-    assertThat(paneLayout(desktop, Root, wantsEmptyDetail = false).isSplit).isFalse()
+    assertThat(paneLayout(desktop, Root).isSplit).isFalse()
   }
 }

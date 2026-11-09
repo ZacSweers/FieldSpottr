@@ -8,27 +8,30 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.separatingVerticalHingeBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.DpSize
 import com.slack.circuit.foundation.NavDecoration
 import com.slack.circuit.foundation.ProvideRecordLifecycle
@@ -58,6 +61,10 @@ import com.slack.circuit.sharedelements.SharedElementTransitionScope.AnimatedSco
  * the open detail. Circuit wraps each record's content in movable content, so the root keeps its
  * state when it moves between the left pane and [delegate]. Each record renders in one place only,
  * because two calls would reuse the same saved state keys.
+ *
+ * Pane widths are decided at layout time. The root's content can reserve the right pane with
+ * [ReserveEmptyDetailPane] from an effect, and the frame that composes it already lays out with the
+ * reservation.
  */
 @Stable
 class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDecoration) :
@@ -75,19 +82,25 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
       // Top first, root last. Forward items stay hidden, as Circuit shows the active record.
       val visible = remember(args) { listOf(args.active) + args.backwardItems }
       val firstAboveRoot = visible.getOrNull(visible.lastIndex - 1)
-      val layout =
+      val density = LocalDensity.current
+      // Hinge bounds are in window coordinates. This decoration fills the window.
+      val hinge =
+        currentWindowAdaptiveInfo().windowPosture.separatingVerticalHingeBounds.firstOrNull()?.let {
+          with(density) { PaneHinge(it.left.toDp(), it.right.toDp()) }
+        }
+      val panes =
         paneLayout(
           windowSize = DpSize(maxWidth, maxHeight),
           firstAboveRoot = firstAboveRoot?.screen,
-          wantsEmptyDetail = host.emptyDetailMessage != null,
+          separatingHinge = hinge,
         )
-      SideEffect { host.layout = layout }
+      SideEffect { host.layout = panes }
       val paneArgs =
-        remember(args, layout.isSplit) {
-          if (layout.isSplit) {
+        remember(args, panes.isSplit) {
+          if (panes.isSplit) {
             rightPaneStack(args, visible)
           } else {
-            args.transform<T, PaneArg<T>> { PaneArg.Record(it) }
+            args.transform<T, PaneArg<T>> { PaneArg.Record(it, PaneRole.SINGLE) }
           }
         }
 
@@ -104,69 +117,95 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
           .asPaddingValues()
           .calculateEndPadding(layoutDirection)
 
-      CompositionLocalProvider(LocalPaneLayout provides layout) {
-        Row(Modifier.fillMaxSize()) {
-          val style = layout.detailStyle
-          if (style != null) {
-            val primaryWidth =
-              when (style) {
-                PaneStyle.LIST_DETAIL ->
-                  Modifier.width(startInset + NavigationRailWidth + layout.listPaneWidth)
-                PaneStyle.SUPPORTING -> Modifier.weight(1f)
-              }
-            Box(
-              primaryWidth
-                .fillMaxHeight()
-                .consumeWindowInsets(safeDrawing.only(WindowInsetsSides.End))
-            ) {
-              // Circuit marks only the top record active and pauses the rest. The root stays
-              // visible here, so it stays active.
-              ProvideRecordLifecycle(isActive = true) {
-                StaticNavigationScope {
-                  CompositionLocalProvider(LocalPaneRole provides PaneRole.PRIMARY) {
-                    content(root)
-                  }
-                }
-              }
-            }
-            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-          }
-          val detailWidth =
-            if (style == PaneStyle.SUPPORTING) {
-              Modifier.width(layout.supportingPaneWidth + endInset)
-            } else {
-              Modifier.weight(1f)
-            }
-          val detailInsets =
-            if (style != null) {
-              Modifier.consumeWindowInsets(safeDrawing.only(WindowInsetsSides.Start))
-            } else {
-              Modifier
-            }
-          Box(detailWidth.fillMaxHeight().then(detailInsets)) {
-            delegate.DecoratedContent(paneArgs, navigator, Modifier.fillMaxSize()) { arg ->
-              when (arg) {
-                is PaneArg.Record -> {
-                  val record = arg.record
-                  when {
-                    !layout.isSplit -> content(record)
-                    // The left pane shows the root. The delegate can still ask for it while it
-                    // animates out after a layout switch.
-                    record.key == root.key -> Unit
-                    else -> {
-                      val role =
-                        if (record.key == firstAboveRoot?.key) {
-                          PaneRole.DETAIL_ROOT
-                        } else {
-                          PaneRole.DETAIL_STACKED
-                        }
-                      CompositionLocalProvider(LocalPaneRole provides role) { content(record) }
+      CompositionLocalProvider(LocalPaneLayout provides panes) {
+        Layout(
+          modifier = Modifier.fillMaxSize(),
+          content = {
+            if (panes.isSplit) {
+              Box(
+                Modifier.layoutId(PrimaryPaneId)
+                  .consumeWindowInsets(safeDrawing.only(WindowInsetsSides.End))
+              ) {
+                // Circuit marks only the top record active and pauses the rest. The root stays
+                // visible here, so it stays active.
+                ProvideRecordLifecycle(isActive = true) {
+                  StaticNavigationScope {
+                    CompositionLocalProvider(LocalPaneRole provides PaneRole.PRIMARY) {
+                      content(root)
                     }
                   }
                 }
-                PaneArg.Placeholder -> DetailPlaceholder(host.emptyDetailMessage)
+              }
+              VerticalDivider(
+                Modifier.layoutId(DividerId),
+                color = MaterialTheme.colorScheme.outlineVariant,
+              )
+            }
+            val detailInsets =
+              if (panes.isSplit) {
+                Modifier.consumeWindowInsets(safeDrawing.only(WindowInsetsSides.Start))
+              } else {
+                Modifier
+              }
+            Box(Modifier.layoutId(DetailPaneId).then(detailInsets)) {
+              delegate.DecoratedContent(paneArgs, navigator, Modifier.fillMaxSize()) { arg ->
+                when (arg) {
+                  is PaneArg.Record -> {
+                    // The left pane shows the root. The delegate can still ask for it while it
+                    // animates out after a layout switch.
+                    if (!(panes.isSplit && arg.record.key == root.key)) {
+                      // Each entry keeps the role it had in its own stack, so a detail animating
+                      // out keeps its chrome while a replacement animates in
+                      CompositionLocalProvider(LocalPaneRole provides arg.role) {
+                        content(arg.record)
+                      }
+                    }
+                  }
+                  PaneArg.Placeholder -> DetailPlaceholder(host.emptyDetailMessage)
+                }
               }
             }
+          },
+        ) { measurables, constraints ->
+          val width = constraints.maxWidth
+          val height = constraints.maxHeight
+          val detail = measurables.first { it.layoutId == DetailPaneId }
+          val primary = measurables.firstOrNull { it.layoutId == PrimaryPaneId }
+          val divider = measurables.firstOrNull { it.layoutId == DividerId }
+          // Read here so a reservation made during this frame's composition applies to this frame
+          val showsDetail = panes.detailRoot != null || host.emptyDetailMessage != null
+          if (primary == null || divider == null || !showsDetail) {
+            val only = (primary ?: detail).measure(Constraints.fixed(width, height))
+            return@Layout layout(width, height) { only.placeRelative(0, 0) }
+          }
+          val dividerPlaceable = divider.measure(Constraints(maxWidth = width, minHeight = height))
+          val dividerWidth = dividerPlaceable.width
+          val hingeSplit = panes.hinge
+          val primaryWidth: Int
+          val detailStart: Int
+          when {
+            hingeSplit != null -> {
+              primaryWidth = hingeSplit.start.roundToPx()
+              detailStart = maxOf(hingeSplit.end.roundToPx(), primaryWidth + dividerWidth)
+            }
+            panes.detailStyle == PaneStyle.SUPPORTING -> {
+              val detailWidth = (panes.supportingPaneWidth + endInset).roundToPx()
+              primaryWidth = width - detailWidth - dividerWidth
+              detailStart = primaryWidth + dividerWidth
+            }
+            else -> {
+              primaryWidth = (startInset + NavigationRailWidth + panes.listPaneWidth).roundToPx()
+              detailStart = primaryWidth + dividerWidth
+            }
+          }
+          val primaryPlaceable =
+            primary.measure(Constraints.fixed(primaryWidth.coerceIn(0, width), height))
+          val detailPlaceable =
+            detail.measure(Constraints.fixed((width - detailStart).coerceAtLeast(0), height))
+          layout(width, height) {
+            primaryPlaceable.placeRelative(0, 0)
+            dividerPlaceable.placeRelative(primaryWidth, 0)
+            detailPlaceable.placeRelative(detailStart, 0)
           }
         }
       }
@@ -174,9 +213,14 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
   }
 }
 
+private const val PrimaryPaneId = "primary"
+private const val DividerId = "divider"
+private const val DetailPaneId = "detail"
+
 /** An entry in the delegate's stack: a back stack record, or the placeholder below the details. */
 internal sealed interface PaneArg<out T : NavArgument> : NavArgument {
-  data class Record<T : NavArgument>(val record: T) : PaneArg<T> {
+  /** A back stack [record], with the [role] it has in the stack it belongs to. */
+  data class Record<T : NavArgument>(val record: T, val role: PaneRole) : PaneArg<T> {
     override val key: String
       get() = record.key
 
@@ -199,15 +243,25 @@ private fun <T : NavArgument> rightPaneStack(
   visible: List<T>,
 ): NavStackList<PaneArg<T>> {
   val aboveRoot = visible.dropLast(1)
+  val firstAboveRootKey = aboveRoot.lastOrNull()?.key
   val placeholder: PaneArg<T> = PaneArg.Placeholder
-  val forward = args.forwardItems.map<T, PaneArg<T>> { PaneArg.Record(it) }
+  val toArg: (T) -> PaneArg<T> = { record ->
+    val role =
+      if (record.key == firstAboveRootKey) {
+        PaneRole.DETAIL_ROOT
+      } else {
+        PaneRole.DETAIL_STACKED
+      }
+    PaneArg.Record(record, role)
+  }
+  val forward = args.forwardItems.map(toArg)
   if (aboveRoot.isEmpty()) {
     return navStackListOf(forwardItems = forward, activeItem = placeholder)
   }
   return navStackListOf(
     forwardItems = forward,
-    activeItem = PaneArg.Record(aboveRoot.first()),
-    backwardItems = aboveRoot.drop(1).map<T, PaneArg<T>> { PaneArg.Record(it) } + placeholder,
+    activeItem = toArg(aboveRoot.first()),
+    backwardItems = aboveRoot.drop(1).map(toArg) + placeholder,
   )
 }
 

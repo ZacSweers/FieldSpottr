@@ -7,6 +7,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
+import androidx.window.core.layout.WindowSizeClass
+import androidx.window.core.layout.WindowSizeClass.Companion.HEIGHT_DP_MEDIUM_LOWER_BOUND
+import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
+import androidx.window.core.layout.computeWindowSizeClass
 import com.slack.circuit.runtime.screen.Screen
 
 /*
@@ -18,17 +22,11 @@ import com.slack.circuit.runtime.screen.Screen
  * phone layout because two panes there leave each one too narrow for the grid.
  */
 
-/**
- * The narrowest window that shows a navigation rail and side-by-side panes. It matches Material's
- * expanded width class, which on most tablets means landscape.
- */
-val WideMinWidth: Dp = 840.dp
-
-/** The shortest window that shows a rail and panes. Phones in landscape stay below it. */
-val WideMinHeight: Dp = 480.dp
-
 /** Width of the Material 3 navigation rail, before window insets. */
 val NavigationRailWidth: Dp = 80.dp
+
+/** The narrowest pane worth showing on either side of a hinge. */
+private val MinHingePaneWidth: Dp = 280.dp
 
 /** How a [PaneScreen] shares a wide window with the root screen. */
 enum class PaneStyle {
@@ -59,11 +57,21 @@ enum class PaneRole {
   DETAIL_STACKED,
 }
 
+/**
+ * The span of a vertical hinge that separates the display, such as a foldable held half open like a
+ * book. Panes split at the hinge so neither one folds across it.
+ */
+@Immutable data class PaneHinge(val start: Dp, val end: Dp)
+
 @Immutable
 data class PaneLayout(
   /** The window fits a navigation rail and side-by-side panes. */
   val isWide: Boolean,
-  /** The right pane's style, or null when one screen fills the window. */
+  /**
+   * The right pane's style, or null when one screen fills the window. With only the root on the
+   * back stack, the right pane takes space only while the root's content reserves it through
+   * [ReserveEmptyDetailPane].
+   */
   val detailStyle: PaneStyle?,
   /** Width of the list beside the rail in the left pane, for [PaneStyle.LIST_DETAIL]. */
   val listPaneWidth: Dp,
@@ -71,43 +79,60 @@ data class PaneLayout(
   val supportingPaneWidth: Dp,
   /** The screen at the bottom of the right pane. Lists use it to highlight the open item. */
   val detailRoot: Screen?,
+  /** A hinge to split the panes at in place of [listPaneWidth] or [supportingPaneWidth]. */
+  val hinge: PaneHinge?,
 ) {
-  /** The root screen and a right pane share the window. */
+  /** The window uses side-by-side panes. */
   val isSplit: Boolean
     get() = detailStyle != null
 
   companion object {
     /** The phone layout. */
-    val Single = PaneLayout(false, null, 0.dp, 0.dp, null)
+    val Single = PaneLayout(false, null, 0.dp, 0.dp, null, null)
   }
 }
 
 /**
  * Picks the layout for a window of [windowSize].
  *
+ * Wide means Material's expanded width (840dp and up) with at least medium height (480dp and up),
+ * using the window size class breakpoints from androidx.window. On most tablets that means
+ * landscape.
+ *
  * @param firstAboveRoot the screen directly above the root on the back stack, or null when the root
  *   is the only visible screen. When it's a [PaneScreen], it and everything above it open in the
  *   right pane.
- * @param wantsEmptyDetail the root screen reserves the right pane while nothing is open there, so
- *   its list keeps the same width before and after a pick.
+ * @param separatingHinge a vertical hinge that separates the display, if any. The panes split at it
+ *   when both sides have room for a pane.
  */
-fun paneLayout(windowSize: DpSize, firstAboveRoot: Screen?, wantsEmptyDetail: Boolean): PaneLayout {
-  val isWide = windowSize.width >= WideMinWidth && windowSize.height >= WideMinHeight
+fun paneLayout(
+  windowSize: DpSize,
+  firstAboveRoot: Screen?,
+  separatingHinge: PaneHinge? = null,
+): PaneLayout {
+  val sizeClass =
+    WindowSizeClass.BREAKPOINTS_V1.computeWindowSizeClass(
+      widthDp = windowSize.width.value,
+      heightDp = windowSize.height.value,
+    )
+  val isWide =
+    sizeClass.isAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND, HEIGHT_DP_MEDIUM_LOWER_BOUND)
   if (!isWide) {
     return PaneLayout.Single
   }
   val detailStyle =
     when (firstAboveRoot) {
-      null -> {
-        if (wantsEmptyDetail) {
-          PaneStyle.LIST_DETAIL
-        } else {
-          null
-        }
-      }
+      // The panes stay in place so the root's content can reserve the right pane without a
+      // layout switch
+      null -> PaneStyle.LIST_DETAIL
       is PaneScreen -> firstAboveRoot.paneStyle
       else -> null
     }
+  val hinge = separatingHinge?.takeIf {
+    detailStyle != null &&
+      it.start >= MinHingePaneWidth &&
+      windowSize.width - it.end >= MinHingePaneWidth
+  }
   return PaneLayout(
     isWide = true,
     detailStyle = detailStyle,
@@ -115,5 +140,6 @@ fun paneLayout(windowSize: DpSize, firstAboveRoot: Screen?, wantsEmptyDetail: Bo
     listPaneWidth = ((windowSize.width - NavigationRailWidth) * 0.4f).coerceIn(280.dp, 400.dp),
     supportingPaneWidth = (windowSize.width * 0.33f).coerceIn(320.dp, 400.dp),
     detailRoot = firstAboveRoot.takeIf { detailStyle != null },
+    hinge = hinge,
   )
 }
