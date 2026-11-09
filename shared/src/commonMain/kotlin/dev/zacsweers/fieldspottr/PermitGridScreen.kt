@@ -232,7 +232,13 @@ fun PermitGridPresenter(
     retain(gridDate, selectedGroup, viewMode, areas) {
       if (viewMode == GridViewMode.WEEK) {
         repository.permitsFlow(gridDate, days = 7, group = selectedGroup).map { permits ->
-          computeWeekAvailability(permits, areas, selectedGroup, gridDate)
+          computeWeekAvailability(
+            permits,
+            areas,
+            selectedGroup,
+            gridDate,
+            today = System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
+          )
         }
       } else {
         flowOf(null)
@@ -460,7 +466,8 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
           modifier = Modifier.padding(horizontal = 16.dp),
         )
       }
-      if (state.isMissingPendingData) {
+      // The week view marks each day instead
+      if (state.isMissingPendingData && state.viewMode == GridViewMode.DAY) {
         DataNote(PENDING_DATA_NOTE, modifier = Modifier.padding(horizontal = 16.dp))
       }
       if (state.favorite.unsynced > 0) {

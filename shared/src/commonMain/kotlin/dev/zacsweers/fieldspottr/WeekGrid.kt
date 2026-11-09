@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -27,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.zacsweers.fieldspottr.data.WeatherForecast
+import dev.zacsweers.fieldspottr.ui.DataNote
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.format.MonthNames
@@ -67,11 +71,14 @@ fun WeekGrid(
       }
     }
 
+    // Only reserve room for the marks when some day needs one
+    val marksPendingData = week.days.any { it.isMissingPendingData }
     Row(horizontalArrangement = spacedBy(6.dp)) {
       for (day in week.days) {
         DayColumn(
           day = day,
           isSelected = day.date == selectedDate,
+          marksPendingData = marksPendingData,
           weather = weather,
           onClick = { onDayClick(day.date) },
           modifier = Modifier.weight(1f),
@@ -90,13 +97,23 @@ fun WeekGrid(
       LegendItem(WeekSlotState.CLOSED.color(), "Closed")
       LegendItem(WeekSlotState.UNKNOWN.color(), "Unknown")
     }
+    if (marksPendingData) {
+      DataNote(
+        "Pending permit requests aren't shown for marked days",
+        modifier = Modifier.align(Alignment.CenterHorizontally),
+      )
+    }
   }
 }
+
+/** The info mark under days without pending permit data, and the room other days keep for it. */
+private val PendingMarkSize = 12.dp
 
 @Composable
 private fun DayColumn(
   day: WeekDayAvailability,
   isSelected: Boolean,
+  marksPendingData: Boolean,
   weather: WeatherForecast?,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -124,6 +141,18 @@ private fun DayColumn(
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
       )
+      if (marksPendingData) {
+        if (day.isMissingPendingData) {
+          Icon(
+            Icons.Outlined.Info,
+            contentDescription = "No pending permit data",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(PendingMarkSize),
+          )
+        } else {
+          Spacer(Modifier.height(PendingMarkSize))
+        }
+      }
       Column(Modifier.fillMaxWidth().height(220.dp).clip(MaterialTheme.shapes.small)) {
         for (hourState in day.hourStates) {
           val cellColor by

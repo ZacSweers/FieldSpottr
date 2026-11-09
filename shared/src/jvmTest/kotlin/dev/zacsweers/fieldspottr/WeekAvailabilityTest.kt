@@ -3,15 +3,19 @@
 package dev.zacsweers.fieldspottr
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.Areas
 import dev.zacsweers.fieldspottr.data.BbpAvailability
+import dev.zacsweers.fieldspottr.data.NycLiveAvailability
 import dev.zacsweers.fieldspottr.util.toNyInstant
 import kotlin.test.Test
+import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
+import kotlinx.datetime.plus
 
 class WeekAvailabilityTest {
 
@@ -27,6 +31,36 @@ class WeekAvailabilityTest {
       assertThat(day.hourStates.size).isEqualTo(hoursShown)
       assertThat(day.hourStates.all { it == WeekSlotState.ALL_FREE }).isTrue()
     }
+  }
+
+  @Test
+  fun `days from today without live coverage are marked`() {
+    // Live coverage on the first three days only
+    val coverage =
+      (0 until 3).map { offset ->
+        permit(
+            recordId = offset.toLong(),
+            date = startDate.plus(offset, DateTimeUnit.DAY),
+            fieldId = "Softball-01",
+            startHour = 0,
+            endHour = 23,
+          )
+          .copy(type = NycLiveAvailability.COVERAGE_KIND)
+      }
+    val today = startDate.plus(1, DateTimeUnit.DAY)
+    val week = computeWeekAvailability(coverage, Areas.default, "Baruch", startDate, today)
+
+    assertThat(week.days.map { it.isMissingPendingData })
+      .containsExactly(false, false, false, true, true, true, true)
+    // Coverage markers never book a field
+    assertThat(week.days.first().hourStates.all { it == WeekSlotState.ALL_FREE }).isTrue()
+    // Without today, nothing is marked
+    assertThat(
+        computeWeekAvailability(emptyList(), Areas.default, "Baruch", startDate).days.none {
+          it.isMissingPendingData
+        }
+      )
+      .isTrue()
   }
 
   @Test
