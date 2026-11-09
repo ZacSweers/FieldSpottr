@@ -43,9 +43,12 @@ private suspend fun SqlDriver.ensureDbPermitOverlayColumns() {
 }
 
 /**
- * Settings for a file database, where the driver opens one connection per thread. IMMEDIATE takes
- * the write lock when a transaction begins, so a second writer waits up to the busy timeout. With
- * the default DEFERRED, two writers can deadlock, and SQLite fails one with SQLITE_BUSY at once.
+ * Settings for a file database, where the driver opens one connection per thread. A connection
+ * waits up to the busy timeout for a lock. IMMEDIATE applies only to transactions that JDBC begins.
+ * SQLDelight's driver begins its own with a plain BEGIN, which takes no lock until the first
+ * statement. So two SQLDelight transactions that both read before they write can still deadlock,
+ * and SQLite fails one with SQLITE_BUSY at once. Such a transaction runs through
+ * [dev.zacsweers.fieldspottr.data.transactionRetryingConflicts].
  */
 internal fun sqliteDriverProperties(): Properties =
   Properties().apply {

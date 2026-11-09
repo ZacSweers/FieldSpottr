@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data
 
 import dev.zacsweers.fieldspottr.DbAreaFeed
+import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.QueryStoreContract
 import kotlin.time.Instant
@@ -21,39 +22,44 @@ class SqlDelightQueryStoreContractTest : QueryStoreContract() {
   override fun TestScope.newStore(): QueryStore<String> {
     // The contract builds its store without suspending, and the database opens at once
     val db = runBlocking { temporaryDatabase.db() }
-    val queries = db.fsdbQueries
-    return queries
-      .getAreaFeed(NAME)
-      .asQueryStore(
-        database = db,
-        // Real threads, the way the app's stores run their blocking calls
-        dispatcher = Dispatchers.IO,
-        value = { it.hash },
-        fetchedAt = { Instant.fromEpochMilliseconds(it.feedFetchedAt) },
-        write = { value, fetchedAt ->
-          queries.upsertAreaFeed(
-            DbAreaFeed(
-              name = NAME,
-              areaName = NAME,
-              feedGeneratedAt = null,
-              feedFetchedAt = fetchedAt.toEpochMilliseconds(),
-              hash = value,
-            )
-          )
-        },
-        clear = { queries.deleteAreaFeed(NAME) },
-        invalidate = {
-          db.transaction {
-            val row = queries.getAreaFeed(NAME).executeAsOneOrNull() ?: return@transaction
-            queries.upsertAreaFeed(
-              row.copy(feedFetchedAt = QueryStore.INVALIDATED.toEpochMilliseconds())
-            )
-          }
-        },
-      )
+    return db.areaFeedQueryStore(NAME)
   }
 
   private companion object {
     const val NAME = "contract"
   }
+}
+
+/** A store through [asQueryStore] over the area feed row called [name], whose hash is the value. */
+internal fun FSDatabase.areaFeedQueryStore(name: String): QueryStore<String> {
+  val queries = fsdbQueries
+  return queries
+    .getAreaFeed(name)
+    .asQueryStore(
+      database = this,
+      // Real threads, the way the app's stores run their blocking calls
+      dispatcher = Dispatchers.IO,
+      value = { it.hash },
+      fetchedAt = { Instant.fromEpochMilliseconds(it.feedFetchedAt) },
+      write = { value, fetchedAt ->
+        queries.upsertAreaFeed(
+          DbAreaFeed(
+            name = name,
+            areaName = name,
+            feedGeneratedAt = null,
+            feedFetchedAt = fetchedAt.toEpochMilliseconds(),
+            hash = value,
+          )
+        )
+      },
+      clear = { queries.deleteAreaFeed(name) },
+      invalidate = {
+        transaction {
+          val row = queries.getAreaFeed(name).executeAsOneOrNull() ?: return@transaction
+          queries.upsertAreaFeed(
+            row.copy(feedFetchedAt = QueryStore.INVALIDATED.toEpochMilliseconds())
+          )
+        }
+      },
+    )
 }

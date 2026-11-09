@@ -23,8 +23,10 @@ import kotlinx.coroutines.withContext
  * [write], [clear] and [invalidate] change the row. Every read and every call runs on [dispatcher],
  * since a driver's calls block. A fetch's write runs in a transaction on [database] that reads the
  * row first, so it checks the stored fetch time and stores in one step, as
- * [QueryStore.writeFetched] requires, and [write] runs inside that transaction. Keep [invalidate]
- * to one update, like an UPDATE that sets the fetch time to [QueryStore.INVALIDATED], so it never
+ * [QueryStore.writeFetched] requires, and [write] runs inside that transaction. When another
+ * connection writes between that read and the write, the transaction runs again, as
+ * [transactionRetryingConflicts] describes, so [write] may run more than once. Keep [invalidate] to
+ * one update, like an UPDATE that sets the fetch time to [QueryStore.INVALIDATED], so it never
  * loses a write that lands between a read and a write.
  *
  * Like [SqlDelightOutboxStores], this depends on SQLDelight and the core API only, so it can move
@@ -49,7 +51,7 @@ fun <Row : Any, T> Query<Row>.asQueryStore(
     invalidate = { withContext(dispatcher) { invalidate() } },
   ) { newValue, newFetchedAt, keepsStored ->
     withContext(dispatcher) {
-      database.transaction {
+      database.transactionRetryingConflicts {
         val stored = query.awaitAsOneOrNull()
         if (stored == null || !keepsStored(fetchedAt(stored))) {
           write(newValue, newFetchedAt)
