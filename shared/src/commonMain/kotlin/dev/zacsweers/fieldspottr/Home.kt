@@ -115,9 +115,9 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   }
 
   // Wide windows put the tabs in a rail on the start edge, which leaves the full height for content
-  val isWide = LocalPaneLayout.current.isWide
+  val showsRail = LocalPaneLayout.current.isWide
   Row(modifier.fillMaxSize()) {
-    if (isWide) {
+    if (showsRail) {
       NavigationRail(
         windowInsets =
           WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)
@@ -134,7 +134,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
     Scaffold(
       modifier =
-        if (isWide) {
+        if (showsRail) {
           Modifier.weight(1f)
             .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
         } else {
@@ -146,7 +146,7 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
         }
       },
       bottomBar = {
-        if (!isWide) {
+        if (!showsRail) {
           NavigationBar {
             Tab.entries.forEachIndexed { index, tab ->
               NavigationBarItem(

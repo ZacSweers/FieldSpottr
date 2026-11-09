@@ -69,7 +69,8 @@ class PaneNavDecorationTest {
   private data class TestState(val screen: Screen) : CircuitUiState
 
   private val phone = DpSize(411.dp, 900.dp)
-  private val foldable = DpSize(700.dp, 840.dp)
+  /** An iPad mini in portrait, which keeps the phone layout. */
+  private val portraitTablet = DpSize(744.dp, 1133.dp)
   private val tablet = DpSize(1200.dp, 800.dp)
 
   private val circuit =
@@ -122,7 +123,7 @@ class PaneNavDecorationTest {
 
   @Test
   fun wideWindowShowsRootBesideDetail() = runComposeUiTest {
-    windowSize = foldable
+    windowSize = tablet
     setNavContent(Root)
     runOnIdle { navigator.goTo(Detail(1)) }
 
@@ -135,9 +136,12 @@ class PaneNavDecorationTest {
   }
 
   @Test
-  fun supportingPaneWaitsForExpandedWidth() = runComposeUiTest {
-    windowSize = foldable
-    setNavContent(Root)
+  fun mediumWindowKeepsThePhoneLayoutUntilRotated() = runComposeUiTest {
+    windowSize = portraitTablet
+    setNavContent(ReservingRoot)
+    assertLabel("root", PaneRole.SINGLE, taps = 0)
+    onAllNodesWithText("Pick one").assertCountEquals(0)
+
     runOnIdle { navigator.goTo(Supporting(1)) }
     assertLabel("supporting1", PaneRole.SINGLE, taps = 0)
     onAllNodesWithTag("root").assertCountEquals(0)

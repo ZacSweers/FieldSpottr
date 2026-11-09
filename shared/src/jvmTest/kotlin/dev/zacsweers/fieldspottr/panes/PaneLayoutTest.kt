@@ -34,20 +34,32 @@ class PaneLayoutTest {
   private val duoFoldedLandscape = DpSize(678.dp, 466.dp)
   private val duoOpenPortrait = DpSize(669.dp, 951.dp)
   private val duoOpenLandscape = DpSize(951.dp, 669.dp)
+  private val iPadMiniPortrait = DpSize(744.dp, 1133.dp)
   private val iPadPortrait = DpSize(820.dp, 1180.dp)
+  private val pixelFoldOpen = DpSize(851.dp, 883.dp)
   private val desktop = DpSize(1200.dp, 800.dp)
 
   @Test
-  fun phonesKeepTheSingleLayout() {
-    for (size in listOf(phonePortrait, phoneLandscape, duoFoldedPortrait, duoFoldedLandscape)) {
+  fun phonesAndMediumWindowsKeepTheSingleLayout() {
+    val sizes =
+      listOf(
+        phonePortrait,
+        phoneLandscape,
+        duoFoldedPortrait,
+        duoFoldedLandscape,
+        duoOpenPortrait,
+        iPadMiniPortrait,
+        iPadPortrait,
+      )
+    for (size in sizes) {
       val layout = paneLayout(size, Detail(1), wantsEmptyDetail = true)
       assertThat(layout).isEqualTo(PaneLayout.Single)
     }
   }
 
   @Test
-  fun openFoldablesSplitListDetail() {
-    for (size in listOf(duoOpenPortrait, duoOpenLandscape, iPadPortrait, desktop)) {
+  fun wideWindowsSplitListDetail() {
+    for (size in listOf(duoOpenLandscape, pixelFoldOpen, desktop)) {
       val layout = paneLayout(size, Detail(1), wantsEmptyDetail = false)
       assertThat(layout.isWide).isTrue()
       assertThat(layout.detailStyle).isEqualTo(PaneStyle.LIST_DETAIL)
@@ -56,13 +68,10 @@ class PaneLayoutTest {
   }
 
   @Test
-  fun supportingPanesNeedExpandedWidth() {
-    assertThat(paneLayout(duoOpenPortrait, Supporting(1), false).detailStyle).isNull()
-    assertThat(paneLayout(iPadPortrait, Supporting(1), false).detailStyle).isNull()
-    assertThat(paneLayout(duoOpenLandscape, Supporting(1), false).detailStyle)
-      .isEqualTo(PaneStyle.SUPPORTING)
-    assertThat(paneLayout(desktop, Supporting(1), false).detailStyle)
-      .isEqualTo(PaneStyle.SUPPORTING)
+  fun wideWindowsSplitSupporting() {
+    for (size in listOf(duoOpenLandscape, pixelFoldOpen, desktop)) {
+      assertThat(paneLayout(size, Supporting(1), false).detailStyle).isEqualTo(PaneStyle.SUPPORTING)
+    }
   }
 
   @Test
@@ -82,8 +91,10 @@ class PaneLayoutTest {
 
   @Test
   fun paneWidthsScaleWithinBounds() {
-    assertThat(paneLayout(duoOpenPortrait, Detail(1), false).listPaneWidth).isEqualTo(280.dp)
-    assertThat(paneLayout(iPadPortrait, Detail(1), false).listPaneWidth).isEqualTo(296.dp)
+    assertThat(paneLayout(pixelFoldOpen, Detail(1), false).listPaneWidth.value)
+      .isCloseTo(308.4f, 0.01f)
+    assertThat(paneLayout(duoOpenLandscape, Detail(1), false).listPaneWidth.value)
+      .isCloseTo(348.4f, 0.01f)
     assertThat(paneLayout(desktop, Detail(1), false).listPaneWidth).isEqualTo(400.dp)
     assertThat(paneLayout(duoOpenLandscape, Detail(1), false).supportingPaneWidth).isEqualTo(320.dp)
     assertThat(paneLayout(desktop, Detail(1), false).supportingPaneWidth.value)
