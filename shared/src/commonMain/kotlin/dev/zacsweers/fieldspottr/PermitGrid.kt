@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment.Companion.TopEnd
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -53,7 +54,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -76,6 +79,7 @@ import dev.zacsweers.fieldspottr.data.withOverlapsFrom
 import dev.zacsweers.fieldspottr.panes.LocalPaneRole
 import dev.zacsweers.fieldspottr.panes.PaneRole
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
+import dev.zacsweers.fieldspottr.ui.formatTime12
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.ReflowText
 import dev.zacsweers.fieldspottr.util.nycSunset
@@ -303,8 +307,9 @@ fun PermitGrid(
             Row(
               Modifier.width(fieldAreaWidth)
                 .height(contentHeight)
-                .sunsetLine(sunset, itemHeight)
+                // Outer draws last, so the now line stays on top of the sunset line
                 .nowIndicator(selectedDate, itemHeight)
+                .sunsetLine(sunset, itemHeight)
             ) {
               for (field in group.fields) {
                 val fieldStates = fields[field] ?: FieldState.EMPTY
@@ -732,15 +737,27 @@ private inline fun <T> withDensity(block: Density.() -> T): T {
 }
 
 /**
- * Draws a dotted line across the grid at [sunset], over the columns like the "now" line, so it
- * shows across booked blocks too. Dots keep it apart from the dashed "now" line.
+ * Draws a muted dotted line across the grid at [sunset], labeled with the time at its start. It
+ * draws over the columns so it shows across booked blocks too. The label explains the line, and the
+ * dots and muted color keep it apart from the solid "now" line.
  */
 @Composable
 private fun Modifier.sunsetLine(sunset: LocalTime, itemHeight: Dp): Modifier {
   val sunsetOffsetPx = withDensity { ((sunset.hour + sunset.minute / 60f) * itemHeight).toPx() }
   val lineColor = MaterialTheme.colorScheme.outline
-  val strokePx = withDensity { 2.dp.toPx() }
+  val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+  val labelBackground = MaterialTheme.colorScheme.surface
+  val strokePx = withDensity { 1.5.dp.toPx() }
   val gapPx = withDensity { 5.dp.toPx() }
+  val marginPx = withDensity { 4.dp.toPx() }
+  val paddingPx = withDensity { 4.dp.toPx() }
+  val cornerPx = withDensity { 4.dp.toPx() }
+  val textMeasurer = rememberTextMeasurer()
+  val labelStyle = MaterialTheme.typography.labelSmall
+  val label =
+    remember(sunset, labelStyle, textMeasurer) {
+      textMeasurer.measure("Sunset ${formatTime12(sunset)}", labelStyle)
+    }
   return drawWithContent {
     drawContent()
     drawLine(
@@ -752,10 +769,27 @@ private fun Modifier.sunsetLine(sunset: LocalTime, itemHeight: Dp): Modifier {
       cap = StrokeCap.Round,
       pathEffect = PathEffect.dashPathEffect(floatArrayOf(0.01f, gapPx)),
     )
+    // The label sits just above the line on a background, so it reads over booked blocks
+    val labelHeight = label.size.height + paddingPx
+    val labelTop = sunsetOffsetPx - labelHeight - strokePx
+    drawRoundRect(
+      color = labelBackground,
+      topLeft = Offset(marginPx, labelTop),
+      size = Size(label.size.width + paddingPx * 2, labelHeight),
+      cornerRadius = CornerRadius(cornerPx),
+    )
+    drawText(
+      label,
+      color = labelColor,
+      topLeft = Offset(marginPx + paddingPx, labelTop + paddingPx / 2),
+    )
   }
 }
 
-/** Draws a dashed "now" indicator line at the current time, animated in left-to-right. */
+/**
+ * Draws a solid "now" line at the current time with a dot at its start, like a calendar, animated
+ * in left to right.
+ */
 @Composable
 private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modifier {
   val now = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()) }
@@ -765,8 +799,7 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
   val nowOffsetPx = withDensity { ((now.hour + now.minute / 60f) * itemHeight).toPx() }
   val lineColor = MaterialTheme.colorScheme.primary
   val strokePx = withDensity { 2.dp.toPx() }
-  val dashPx = withDensity { 6.dp.toPx() }
-  val gapPx = withDensity { 4.dp.toPx() }
+  val dotRadiusPx = withDensity { 5.dp.toPx() }
 
   var previousDate by remember { mutableStateOf(selectedDate) }
   val progress = remember { Animatable(if (isToday) 1f else 0f) }
@@ -790,8 +823,10 @@ private fun Modifier.nowIndicator(selectedDate: LocalDate, itemHeight: Dp): Modi
       start = Offset(0f, nowOffsetPx),
       end = Offset(endX, nowOffsetPx),
       strokeWidth = strokePx,
-      pathEffect = PathEffect.dashPathEffect(floatArrayOf(dashPx, gapPx)),
     )
+    if (progress.value > 0f) {
+      drawCircle(color = lineColor, radius = dotRadiusPx, center = Offset(dotRadiusPx, nowOffsetPx))
+    }
   }
 }
 
