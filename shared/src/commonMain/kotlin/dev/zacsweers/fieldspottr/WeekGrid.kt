@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -160,18 +159,6 @@ internal fun WeekSlotState.color(): Color {
     WeekSlotState.SOME_FREE -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
     WeekSlotState.BOOKED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
     WeekSlotState.CLOSED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
-  }
-}
-
-@Composable
-private fun LegendItem(color: Color, label: String) {
-  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = spacedBy(4.dp)) {
-    Box(Modifier.size(8.dp).background(color, CircleShape))
-    Text(
-      label,
-      style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
   }
 }
 

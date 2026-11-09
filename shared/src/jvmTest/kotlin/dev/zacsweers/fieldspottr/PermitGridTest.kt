@@ -3,7 +3,9 @@
 package dev.zacsweers.fieldspottr
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.PermitState.FieldState.Reserved
 import dev.zacsweers.fieldspottr.data.Areas
@@ -172,6 +174,30 @@ class PermitGridTest {
           )
           .toImmutableMap(),
     )
+  }
+
+  @Test
+  fun `legend lists only the block kinds on the grid, in order`() {
+    val permits =
+      PermitState(
+        mapOf(
+          softball1 to listOf(reserved(start = 8, end = 10).copy(isBlocked = true)),
+          soccer1 to listOf(reserved(start = 8, end = 10), reserved(start = 12, end = 14)),
+        )
+      )
+
+    assertThat(gridLegendKinds(permits, liveAvailability = null))
+      .containsExactly(GridBlockKind.PERMIT, GridBlockKind.CLOSED)
+    assertThat(
+        gridLegendKinds(permits, liveAvailabilityForGrid(group, rawSoccerPendingAvailability()))
+      )
+      .containsExactly(
+        GridBlockKind.PERMIT,
+        GridBlockKind.PENDING_APPROVAL,
+        GridBlockKind.SHARED,
+        GridBlockKind.CLOSED,
+      )
+    assertThat(gridLegendKinds(PermitState(emptyMap()), liveAvailability = null)).isEmpty()
   }
 
   private fun reserved(start: Int, end: Int): Reserved {

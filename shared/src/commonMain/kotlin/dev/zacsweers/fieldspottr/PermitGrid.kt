@@ -72,7 +72,6 @@ import dev.zacsweers.fieldspottr.data.LivePermitAdvisory
 import dev.zacsweers.fieldspottr.data.LivePermitBlock
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.withOverlapsFrom
-import dev.zacsweers.fieldspottr.theme.fsColorScheme
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.util.AutoMeasureText
 import dev.zacsweers.fieldspottr.util.ReflowText
@@ -131,175 +130,184 @@ fun PermitGrid(
       density.run { (initialEarliestPermit * itemHeight).roundToPx() }
     }
 
-  BoxWithConstraints(modifier) {
-    val availableFieldWidth =
-      (maxWidth - GridHorizontalPadding * 2 - TimeColumnWidth).coerceAtLeast(0.dp)
-    // Wide screens should stretch columns to fill the viewport; narrow screens keep a useful
-    // minimum column width and let the field area scroll horizontally.
-    val fieldAreaWidth = maxOf(FieldColumnMinWidth * numColumns, availableFieldWidth)
-    val fieldColumnWidth = fieldAreaWidth / numColumns.toFloat()
-    val contentHeight = itemHeight * 24
-
-    // The grid owns retained scroll states, so only auto-jump to the first permit once for a
-    // fresh group/date. Returning to a screen should preserve the user's scroll position.
-    LaunchedEffect(
-      permits,
-      autoScrollToFirstPermit,
-      initialScrollPx,
-      verticalScrollState.maxValue,
-    ) {
-      if (permits == null) return@LaunchedEffect
-      if (!autoScrollToFirstPermit) return@LaunchedEffect
-      val earliestPermit =
-        permits.fields.values
-          .flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
-          .minOrNull() ?: 8
-      val target = density.run { (earliestPermit * itemHeight).roundToPx() }
-      verticalScrollState.scrollTo(target.coerceAtMost(verticalScrollState.maxValue))
-      onAutoScrolledToFirstPermit()
+  val legendKinds =
+    remember(permits, resolvedLiveAvailability) {
+      gridLegendKinds(permits, resolvedLiveAvailability)
     }
-    val isScrolled by remember { derivedStateOf { verticalScrollState.value > 0 } }
-    val showPreviousFields by remember { derivedStateOf { horizontalScrollState.value > 0 } }
-    val showMoreFields by remember {
-      derivedStateOf { horizontalScrollState.value < horizontalScrollState.maxValue }
+  Column(modifier) {
+    if (legendKinds.isNotEmpty()) {
+      GridLegend(legendKinds, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
     }
+    BoxWithConstraints(Modifier.weight(1f)) {
+      val availableFieldWidth =
+        (maxWidth - GridHorizontalPadding * 2 - TimeColumnWidth).coerceAtLeast(0.dp)
+      // Wide screens should stretch columns to fill the viewport; narrow screens keep a useful
+      // minimum column width and let the field area scroll horizontally.
+      val fieldAreaWidth = maxOf(FieldColumnMinWidth * numColumns, availableFieldWidth)
+      val fieldColumnWidth = fieldAreaWidth / numColumns.toFloat()
+      val contentHeight = itemHeight * 24
 
-    Column(Modifier.fillMaxSize()) {
-      // Names of the fields as a header
-      Surface {
-        Box {
-          Row(
-            modifier =
-              Modifier.fillMaxWidth()
-                .padding(horizontal = GridHorizontalPadding)
-                .padding(bottom = 8.dp),
-            verticalAlignment = CenterVertically,
-          ) {
-            if (cornerSlot == null) {
-              Spacer(Modifier.width(TimeColumnWidth))
-            } else {
-              Box(Modifier.width(TimeColumnWidth)) { cornerSlot() }
-            }
-            Box(
-              Modifier.weight(1f)
-                .clipToBounds()
-                .horizontalOverflowCue(showPreviousFields, showMoreFields)
-                // Share horizontal scroll with the body so field titles stay aligned.
-                .horizontalScroll(horizontalScrollState)
-            ) {
-              Row(Modifier.width(fieldAreaWidth)) {
-                for (columnNumber in 0..<numColumns) {
-                  val defaultTextStyle = MaterialTheme.typography.titleMedium
-                  val textAlign = TextAlign.Center
-                  AutoMeasureText(
-                    modifier = Modifier.width(fieldColumnWidth),
-                    minSize = 12.sp,
-                    maxSize = defaultTextStyle.fontSize,
-                    textAlign = textAlign,
-                  ) { fontSize ->
-                    Text(
-                      group.fields[columnNumber].displayName,
-                      textAlign = textAlign,
-                      fontWeight = FontWeight.Bold,
-                      maxLines = 1,
-                      softWrap = false,
-                      style = defaultTextStyle,
-                      fontSize = fontSize,
-                    )
-                  }
-                }
-              }
-            }
-          }
-          androidx.compose.animation.AnimatedVisibility(
-            visible = isScrolled,
-            modifier = Modifier.align(BottomCenter),
-          ) {
-            HorizontalDivider()
-          }
-        }
+      // The grid owns retained scroll states, so only auto-jump to the first permit once for a
+      // fresh group/date. Returning to a screen should preserve the user's scroll position.
+      LaunchedEffect(
+        permits,
+        autoScrollToFirstPermit,
+        initialScrollPx,
+        verticalScrollState.maxValue,
+      ) {
+        if (permits == null) return@LaunchedEffect
+        if (!autoScrollToFirstPermit) return@LaunchedEffect
+        val earliestPermit =
+          permits.fields.values
+            .flatMap { it.filterIsInstance<Reserved>().map(Reserved::start) }
+            .minOrNull() ?: 8
+        val target = density.run { (earliestPermit * itemHeight).roundToPx() }
+        verticalScrollState.scrollTo(target.coerceAtMost(verticalScrollState.maxValue))
+        onAutoScrolledToFirstPermit()
+      }
+      val isScrolled by remember { derivedStateOf { verticalScrollState.value > 0 } }
+      val showPreviousFields by remember { derivedStateOf { horizontalScrollState.value > 0 } }
+      val showMoreFields by remember {
+        derivedStateOf { horizontalScrollState.value < horizontalScrollState.maxValue }
       }
 
-      Row(
-        modifier =
-          Modifier.weight(1f)
-            .fillMaxWidth()
-            .padding(start = GridHorizontalPadding, end = GridHorizontalPadding, bottom = 16.dp)
-      ) {
-        // Time column
-        val hourlyWeather =
-          remember(weather, selectedDate) {
-            weather?.hourly(selectedDate)?.associateBy { it.hour }
-          }
-        Box(
-          Modifier.width(TimeColumnWidth)
-            .fillMaxHeight()
-            .clipToBounds()
-            // Share vertical scroll with the field body so time labels stay aligned.
-            .verticalScroll(verticalScrollState)
-        ) {
-          Column(Modifier.height(contentHeight)) {
-            for (rowNumber in 0..<24) {
-              Box(Modifier.height(itemHeight)) {
-                // Time marker
-                val adjustedTime = ((rowNumber) % 12).let { if (it == 0) 12 else it }
-                val amPm = if (rowNumber < 12) "AM" else "PM"
-                val hourForecast = hourlyWeather?.get(rowNumber)
-                val isRainyHour = hourForecast?.isRainy == true
-                Row(
-                  modifier = Modifier.align(TopEnd).padding(4.dp),
-                  verticalAlignment = CenterVertically,
-                  horizontalArrangement = spacedBy(2.dp),
-                ) {
-                  if (hourForecast != null && hourForecast.condition.isPrecipitation) {
-                    WeatherGlyph(
-                      hourForecast.condition,
-                      size = 11.dp,
-                      tint =
-                        if (isRainyHour) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+      Column(Modifier.fillMaxSize()) {
+        // Names of the fields as a header
+        Surface {
+          Box {
+            Row(
+              modifier =
+                Modifier.fillMaxWidth()
+                  .padding(horizontal = GridHorizontalPadding)
+                  .padding(bottom = 8.dp),
+              verticalAlignment = CenterVertically,
+            ) {
+              if (cornerSlot == null) {
+                Spacer(Modifier.width(TimeColumnWidth))
+              } else {
+                Box(Modifier.width(TimeColumnWidth)) { cornerSlot() }
+              }
+              Box(
+                Modifier.weight(1f)
+                  .clipToBounds()
+                  .horizontalOverflowCue(showPreviousFields, showMoreFields)
+                  // Share horizontal scroll with the body so field titles stay aligned.
+                  .horizontalScroll(horizontalScrollState)
+              ) {
+                Row(Modifier.width(fieldAreaWidth)) {
+                  for (columnNumber in 0..<numColumns) {
+                    val defaultTextStyle = MaterialTheme.typography.titleMedium
+                    val textAlign = TextAlign.Center
+                    AutoMeasureText(
+                      modifier = Modifier.width(fieldColumnWidth),
+                      minSize = 12.sp,
+                      maxSize = defaultTextStyle.fontSize,
+                      textAlign = textAlign,
+                    ) { fontSize ->
+                      Text(
+                        group.fields[columnNumber].displayName,
+                        textAlign = textAlign,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        style = defaultTextStyle,
+                        fontSize = fontSize,
+                      )
+                    }
                   }
-                  Text(
-                    "$adjustedTime $amPm",
-                    textAlign = TextAlign.Center,
-                    fontWeight = FontWeight.Bold,
-                    color =
-                      if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                  )
                 }
               }
+            }
+            androidx.compose.animation.AnimatedVisibility(
+              visible = isScrolled,
+              modifier = Modifier.align(BottomCenter),
+            ) {
+              HorizontalDivider()
             }
           }
         }
 
-        val fields = permits?.fields ?: PermitState.EMPTY.fields
-        Box(
-          Modifier.weight(1f)
-            .fillMaxHeight()
-            .clipToBounds()
-            // Vertical and horizontal scrolling live on the body viewport, not the whole screen.
-            .verticalScroll(verticalScrollState)
-            .horizontalScroll(horizontalScrollState)
+        Row(
+          modifier =
+            Modifier.weight(1f)
+              .fillMaxWidth()
+              .padding(start = GridHorizontalPadding, end = GridHorizontalPadding, bottom = 16.dp)
         ) {
-          Row(
-            Modifier.width(fieldAreaWidth)
-              .height(contentHeight)
-              .nowIndicator(selectedDate, itemHeight)
+          // Time column
+          val hourlyWeather =
+            remember(weather, selectedDate) {
+              weather?.hourly(selectedDate)?.associateBy { it.hour }
+            }
+          Box(
+            Modifier.width(TimeColumnWidth)
+              .fillMaxHeight()
+              .clipToBounds()
+              // Share vertical scroll with the field body so time labels stay aligned.
+              .verticalScroll(verticalScrollState)
           ) {
-            for (field in group.fields) {
-              val fieldStates = fields[field] ?: FieldState.EMPTY
-              PermitGridColumn(
-                fieldName = field.displayName,
-                fieldStates = fieldStates,
-                liveField = resolvedLiveAvailability?.fields?.get(field),
-                itemHeight = itemHeight,
-                modifier = Modifier.width(fieldColumnWidth),
-                permits = permits,
-                onEventClick = onEventClick,
-              )
+            Column(Modifier.height(contentHeight)) {
+              for (rowNumber in 0..<24) {
+                Box(Modifier.height(itemHeight)) {
+                  // Time marker
+                  val adjustedTime = ((rowNumber) % 12).let { if (it == 0) 12 else it }
+                  val amPm = if (rowNumber < 12) "AM" else "PM"
+                  val hourForecast = hourlyWeather?.get(rowNumber)
+                  val isRainyHour = hourForecast?.isRainy == true
+                  Row(
+                    modifier = Modifier.align(TopEnd).padding(4.dp),
+                    verticalAlignment = CenterVertically,
+                    horizontalArrangement = spacedBy(2.dp),
+                  ) {
+                    if (hourForecast != null && hourForecast.condition.isPrecipitation) {
+                      WeatherGlyph(
+                        hourForecast.condition,
+                        size = 11.dp,
+                        tint =
+                          if (isRainyHour) MaterialTheme.colorScheme.tertiary
+                          else MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                    }
+                    Text(
+                      "$adjustedTime $amPm",
+                      textAlign = TextAlign.Center,
+                      fontWeight = FontWeight.Bold,
+                      color =
+                        if (isRainyHour) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
+                      style = MaterialTheme.typography.labelSmall,
+                      maxLines = 1,
+                    )
+                  }
+                }
+              }
+            }
+          }
+
+          val fields = permits?.fields ?: PermitState.EMPTY.fields
+          Box(
+            Modifier.weight(1f)
+              .fillMaxHeight()
+              .clipToBounds()
+              // Vertical and horizontal scrolling live on the body viewport, not the whole screen.
+              .verticalScroll(verticalScrollState)
+              .horizontalScroll(horizontalScrollState)
+          ) {
+            Row(
+              Modifier.width(fieldAreaWidth)
+                .height(contentHeight)
+                .nowIndicator(selectedDate, itemHeight)
+            ) {
+              for (field in group.fields) {
+                val fieldStates = fields[field] ?: FieldState.EMPTY
+                PermitGridColumn(
+                  fieldName = field.displayName,
+                  fieldStates = fieldStates,
+                  liveField = resolvedLiveAvailability?.fields?.get(field),
+                  itemHeight = itemHeight,
+                  modifier = Modifier.width(fieldColumnWidth),
+                  permits = permits,
+                  onEventClick = onEventClick,
+                )
+              }
             }
           }
         }
@@ -557,33 +565,21 @@ private fun Modifier.gridBottomDivider(): Modifier {
 
 @Composable
 private fun LivePermitBlock(block: LivePermitBlock) {
-  if (block.isOverlap) {
+  val kind = block.gridKind
+  if (kind == GridBlockKind.SHARED) {
     val shape = MaterialTheme.shapes.medium
     Surface(
       modifier =
         Modifier.fillMaxSize().padding(4.dp).background(MaterialTheme.colorScheme.surface, shape),
-      color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+      color = kind.containerColor(),
       shape = shape,
     ) {}
     return
   }
 
-  val isPendingApproval = block.title == "Pending approval"
-  val isIssuedPermit = block.status.startsWith("Issued permit")
-  val fsColors = MaterialTheme.fsColorScheme
   val shape = MaterialTheme.shapes.medium
-  val containerColor =
-    when {
-      isPendingApproval -> fsColors.pendingContainer
-      isIssuedPermit -> MaterialTheme.colorScheme.secondaryContainer
-      else -> MaterialTheme.colorScheme.errorContainer
-    }
-  val textColor =
-    when {
-      isPendingApproval -> fsColors.onPendingContainer
-      isIssuedPermit -> MaterialTheme.colorScheme.onSecondaryContainer
-      else -> MaterialTheme.colorScheme.onErrorContainer
-    }
+  val containerColor = kind.containerColor()
+  val textColor = kind.contentColor()
   Surface(
     modifier =
       Modifier.fillMaxSize().padding(4.dp).background(MaterialTheme.colorScheme.surface, shape),
@@ -628,17 +624,18 @@ private fun LivePermitAdvisory(advisory: LivePermitAdvisory) {
   Surface(
     modifier =
       Modifier.fillMaxSize().padding(4.dp).background(MaterialTheme.colorScheme.surface, shape),
-    color = MaterialTheme.colorScheme.tertiaryContainer,
+    color = GridBlockKind.PENDING_REQUEST.containerColor(),
     shape = shape,
   ) {
+    val textColor = GridBlockKind.PENDING_REQUEST.contentColor()
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
       ReflowText(
-        text = "Pending request",
+        text = GridBlockKind.PENDING_REQUEST.label,
         sharedElementKey = null,
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.Bold,
         overflow = TextOverflow.Ellipsis,
-        color = MaterialTheme.colorScheme.onTertiaryContainer,
+        color = textColor,
       )
       ReflowText(
         text = advisory.message,
@@ -646,7 +643,7 @@ private fun LivePermitAdvisory(advisory: LivePermitAdvisory) {
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Medium,
         overflow = TextOverflow.Ellipsis,
-        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.65f),
+        color = textColor.copy(alpha = 0.65f),
       )
     }
   }
@@ -774,16 +771,8 @@ fun PermitEvent(
   onEventClick: ((Reserved, orgVisible: Boolean) -> Unit)? = null,
 ) = SharedElementTransitionScope {
   val isOverlap = event.isOverlap
-  val containerColor =
-    if (event.isUnavailable) {
-      MaterialTheme.colorScheme.surfaceVariant
-    } else if (event.isBlocked) {
-      MaterialTheme.colorScheme.errorContainer
-    } else if (isOverlap) {
-      MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
-    } else {
-      MaterialTheme.colorScheme.secondaryContainer
-    }
+  val kind = event.gridKind
+  val containerColor = kind.containerColor()
   val isClickable = onEventClick != null && !isOverlap && !event.isBlocked && !event.isUnavailable
   var orgVisible by remember { mutableStateOf(false) }
   val sharedBoundsModifier =
@@ -818,14 +807,7 @@ fun PermitEvent(
   ) {
     if (isOverlap) return@Surface
     Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
-      val textColor =
-        if (event.isUnavailable) {
-          MaterialTheme.colorScheme.onSurfaceVariant
-        } else if (event.isBlocked) {
-          MaterialTheme.colorScheme.onErrorContainer
-        } else {
-          MaterialTheme.colorScheme.onSecondaryContainer
-        }
+      val textColor = kind.contentColor()
 
       ReflowText(
         text = event.title,
