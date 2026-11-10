@@ -38,3 +38,24 @@ interface ActionRunner {
 
   companion object
 }
+
+/**
+ * Runs commands where each new one cancels the one before it, like a search field's queries. Every
+ * command runs on one key with [OnPrevious.Cancel], so a queued command never starts and the next
+ * one waits until a running one finishes its cleanup. Build one per field with
+ * [newConflatedActionRunner], since commands on one runner cancel each other.
+ */
+fun interface ConflatedActionRunner {
+  /** Runs [block] as one command that cancels the one before it. The handle follows it. */
+  fun run(block: suspend () -> Unit): Operation
+}
+
+/**
+ * A new [ConflatedActionRunner] in this data scope. Its commands cancel only each other, so one
+ * runner never cancels or waits on another.
+ */
+fun DataScope.newConflatedActionRunner(): ConflatedActionRunner {
+  val actions = newActionRunner()
+  val ordering = Ordering.Keyed(Unit, OnPrevious.Cancel)
+  return ConflatedActionRunner { block -> actions.run(ordering, block) }
+}
