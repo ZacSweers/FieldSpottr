@@ -125,14 +125,17 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
   override fun invoke(key: K): OptimisticQueryStore<T, M> = KeyStore(key, baseFor(key))
 
-  /** [key]'s base store, built on first use. The copy that loses a race was never written to. */
+  /**
+   * [key]'s base store, built on first use. The entry goes into [bases] before its store opens, so
+   * only the entry that wins a race calls [base], and a caller that loses waits for that one open.
+   */
   private fun baseFor(key: K): Base<T> {
     while (true) {
       val current = bases.load()
       current[key]?.let {
         return it
       }
-      val created = Base(base(key))
+      val created = Base { base(key) }
       if (bases.compareAndSet(current, current.putting(key, created))) {
         return created
       }
@@ -552,8 +555,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     fun isExpired(now: Instant): Boolean = now - sentAt >= RECORD_LIFETIME
   }
 
-  /** A key's base store and the lock its two writers, fetch and commit, take turns on. */
-  private class Base<T>(val store: QueryStore<T>) {
+  /**
+   * A key's base store and the lock its two writers, fetch and commit, take turns on. [open] runs
+   * on the first read of [store], once, and a caller on another thread waits for it.
+   */
+  private class Base<T>(open: () -> QueryStore<T>) {
+    val store: QueryStore<T> by lazy(open)
     val lock = Mutex()
   }
 
