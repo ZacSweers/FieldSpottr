@@ -30,8 +30,15 @@ class SqlDelightQueryStoreContractTest : QueryStoreContract() {
   }
 }
 
-/** A store through [asQueryStore] over the area feed row called [name], whose hash is the value. */
-internal fun FSDatabase.areaFeedQueryStore(name: String): QueryStore<String> {
+/**
+ * A store through [asQueryStore] over the area feed row called [name], whose hash is the value.
+ * [afterWrite] runs inside each write's transaction once the row has changed, like a later
+ * statement that fails.
+ */
+internal fun FSDatabase.areaFeedQueryStore(
+  name: String,
+  afterWrite: () -> Unit = {},
+): QueryStore<String> {
   val queries = fsdbQueries
   return queries
     .getAreaFeed(name)
@@ -51,6 +58,7 @@ internal fun FSDatabase.areaFeedQueryStore(name: String): QueryStore<String> {
             hash = value,
           )
         )
+        afterWrite()
       },
       clear = { queries.deleteAreaFeed(name) },
       invalidate = {
