@@ -184,7 +184,7 @@ private class ResponseException(val response: ByteArray) : Exception("Rejected")
  * and atomic references. JDK fields that reflection cannot open are read through those interfaces
  * instead.
  */
-private fun Any.reaches(target: Any): Boolean {
+internal fun Any.reaches(target: Any): Boolean {
   val seen = IdentityHashMap<Any, Unit>()
   val queue = ArrayDeque<Any>()
   queue += this

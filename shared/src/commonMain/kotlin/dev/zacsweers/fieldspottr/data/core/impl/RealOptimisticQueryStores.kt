@@ -57,14 +57,15 @@ import kotlinx.coroutines.withContext
  * fetch from after the send says what the server holds. A fetch that overlapped the send is written
  * with the change folded in, so a restart, which has no records, keeps it too.
  *
- * At most two of a key's records keep a copy of the value. The newest keeps its own, which is
- * enough to tell that the truth holds that change and every change before it. The newest one the
- * server answered with a value keeps that answer, since a slow fetch gets the answer back with the
- * later changes applied on top. The others keep just the change and its send time, which is all a
- * slow fetch needs. Once its row has left, a record goes when a fetch from after its send lands, or
- * once it is old enough that no fetch from before its send should still be running, so a key that
- * is never fetched again does not keep it for good. Only a commit or a fetch write looks for old
- * records, on every key, so a set that sits idle keeps them until its next one.
+ * At most two of a key's records keep a copy of the value. The newest keeps its own, and the value
+ * the newest fetch that overlapped its send was written as, which is enough to tell that the truth
+ * holds that change and every change before it. The newest one the server answered with a value
+ * keeps that answer, since a slow fetch gets the answer back with the later changes applied on top.
+ * The others keep just the change and its send time, which is all a slow fetch needs. Once its row
+ * has left, a record goes when a fetch from after its send lands, or once it is old enough that no
+ * fetch from before its send should still be running, so a key that is never fetched again does not
+ * keep it for good. Only a commit or a fetch write looks for old records, on every key, so a set
+ * that sits idle keeps them until its next one.
  *
  * Two cases stay outside what the records can tell. A fetch that overlapped the send may have read
  * the server after it took the change, and a process that dies between the truth write and the
@@ -538,8 +539,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * A sent change: its row, what the truth held once its commit landed, and when the send finished.
    * A truth fetched after [sentAt] holds the change. One fetched before may not, so a view puts the
    * change back on top of it: [truth] itself when the server answered with that value, and
-   * [replaced] says so, else the change applied again. [foldedInto] holds the values a fetch that
-   * overlapped the send was written as, with this change and the ones before it folded in.
+   * [replaced] says so, else the change applied again. [folded] holds the value the newest fetch
+   * that overlapped the send was written as, with this change and the ones before it folded in.
+   * Each such write replaces the one before it on the key's lock, so the record lets an older one
+   * go, like a large response body. A view that still sees an older one, from a store whose
+   * emissions run late, applies the change to it again, which an idempotent apply leaves as it is.
    */
   private class Committed<K, T, M>(
     val id: EntryId,
@@ -548,19 +552,21 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     val sentAt: Instant,
     val truth: Fetched<T>?,
     val replaced: Boolean,
-    val foldedInto: List<T?> = emptyList(),
+    val folded: Fold<T>? = null,
     val hasValue: Boolean = true,
   ) {
     /**
-     * Whether [stored] already holds this change: its commit wrote it, or a fetch folded it in. A
-     * record without its value cannot tell, and a newer record answers in its place.
+     * Whether [stored] already holds this change: its commit wrote it, or the newest fetch folded
+     * it in. A record without its value cannot tell, and a newer record answers in its place.
      */
-    fun isHeldBy(stored: Fetched<T>?): Boolean =
-      hasValue && (truth?.value == stored?.value || stored?.value in foldedInto)
+    fun isHeldBy(stored: Fetched<T>?): Boolean {
+      val value = stored?.value
+      return hasValue && (truth?.value == value || (folded != null && folded.value == value))
+    }
 
-    /** This record, also held by [folded], a fetch's value with this change folded in. */
-    fun alsoHeldBy(folded: Fetched<T>?): Committed<K, T, M> =
-      Committed(id, key, mutation, sentAt, truth, replaced, foldedInto + folded?.value, hasValue)
+    /** This record, held by [next], a fetch's value with this change folded in, from now on. */
+    fun alsoHeldBy(next: Fetched<T>?): Committed<K, T, M> =
+      Committed(id, key, mutation, sentAt, truth, replaced, Fold(next?.value), hasValue)
 
     /**
      * This record without its copies of the value, once a newer commit on its key is in the store.
@@ -590,6 +596,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
   /** A change requested for [key], and whether its row is in the store yet. */
   private class Storing<K>(val key: K, val stored: Operation)
+
+  /** A value a fetch was written as, which may be null when the folded changes removed it. */
+  private class Fold<T>(val value: T?)
 }
 
 /**
