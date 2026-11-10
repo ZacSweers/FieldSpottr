@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.separatingVerticalHingeBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -84,9 +84,13 @@ class PaneNavDecoration(private val host: PaneHost, private val delegate: NavDec
       val density = LocalDensity.current
       // Hinge bounds are in window coordinates. This decoration fills the window.
       val hinge =
-        currentWindowAdaptiveInfo().windowPosture.separatingVerticalHingeBounds.firstOrNull()?.let {
-          with(density) { PaneHinge(it.left.toDp(), it.right.toDp()) }
-        }
+        currentWindowAdaptiveInfoV2()
+          .windowPosture
+          .separatingVerticalHingeBounds
+          .firstOrNull()
+          ?.let {
+            with(density) { PaneHinge(it.left.toDp(), it.right.toDp()) }
+          }
       val panes =
         paneLayout(
           windowSize = DpSize(maxWidth, maxHeight),
