@@ -26,3 +26,17 @@ fun <T> MutableStateFlow<Fetched<T>?>.writeFetched(
     }
   }
 }
+
+/**
+ * The clear a store from [QueryStore.of] makes over a state flow in a test: removes the value
+ * unless [keepsStored] says it should stay, in one update, as [QueryStore.clearFetched] requires.
+ */
+fun <T> MutableStateFlow<Fetched<T>?>.clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
+  update { current ->
+    if (current != null && keepsStored(current.fetchedAt)) {
+      current
+    } else {
+      null
+    }
+  }
+}

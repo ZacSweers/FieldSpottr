@@ -13,6 +13,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -46,7 +47,7 @@ class DataQueryTest {
   private val stored = MutableStateFlow<Fetched<Int>?>(null)
   // No invalidate, so these tests cover the default that rewrites the value with a stale time
   private val store =
-    QueryStore.of(stored, clear = { stored.value = null }) { value, fetchedAt, keepsStored ->
+    QueryStore.of(stored, clear = stored::clearFetched) { value, fetchedAt, keepsStored ->
       stored.writeFetched(value, fetchedAt, keepsStored)
     }
   // One more than what is stored, so each fetch stores a value of its own
@@ -258,7 +259,7 @@ class DataQueryTest {
     val releaseOld = CompletableDeferred<Unit>()
     // Pauses the older fetch inside the write, after the query has handed over its rule
     val shared =
-      QueryStore.of(row, clear = { row.value = null }) { value, fetchedAt, keepsStored ->
+      QueryStore.of(row, clear = row::clearFetched) { value, fetchedAt, keepsStored ->
         if (value == 1) {
           writingOld.complete(Unit)
           releaseOld.await()
@@ -343,7 +344,7 @@ class DataQueryTest {
     val state = MutableStateFlow<Fetched<Int>?>(null)
     val writes = mutableListOf<Int>()
     val store =
-      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
         writes += value
         state.writeFetched(value, fetchedAt, keepsStored)
       }
@@ -416,7 +417,7 @@ class DataQueryTest {
       emitAll(state)
     }
     val store =
-      QueryStore.of(slowReads, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+      QueryStore.of(slowReads, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
         state.writeFetched(value, fetchedAt, keepsStored)
       }
     val query =
@@ -454,8 +455,7 @@ class DataQueryTest {
       }
     }
     val store =
-      QueryStore.of(pausedFirstRead, clear = { state.value = null }) { value, fetchedAt, keepsStored
-        ->
+      QueryStore.of(pausedFirstRead, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
         state.writeFetched(value, fetchedAt, keepsStored)
       }
     val fetchTwo = TestFetch { 2 }
@@ -496,7 +496,15 @@ class DataQueryTest {
     val values = MutableSharedFlow<Fetched<Int>?>(replay = 1, extraBufferCapacity = 16)
     values.emit(Fetched(1, START))
     val store =
-      QueryStore.of(values, clear = { values.emit(null) }) { value, fetchedAt, keepsStored ->
+      QueryStore.of(
+        values,
+        clear = { keepsStored ->
+          val current = values.replayCache.lastOrNull()
+          if (current == null || !keepsStored(current.fetchedAt)) {
+            values.emit(null)
+          }
+        },
+      ) { value, fetchedAt, keepsStored ->
         // Only this test's collector emits too, and it never writes, so the check needs no lock
         val current = values.replayCache.lastOrNull()
         if (current == null || !keepsStored(current.fetchedAt)) {
@@ -647,7 +655,7 @@ class DataQueryTest {
     val published = CompletableDeferred<Unit>()
     val finishWrite = CompletableDeferred<Unit>()
     val store =
-      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
         // Visible before the write returns, like a database that notifies inside its transaction
         state.writeFetched(value, fetchedAt, keepsStored)
         published.complete(Unit)
@@ -697,10 +705,11 @@ class DataQueryTest {
     val notMarked = IllegalStateException("Could not mark stale")
     val backing = QueryStore.inMemory(Fetched(1, START))
     val failingInvalidate =
-      QueryStore.of(backing.data, clear = backing::clear, invalidate = { throw notMarked }) {
-        value,
-        fetchedAt,
-        keepsStored ->
+      QueryStore.of(
+        backing.data,
+        clear = backing::clearFetched,
+        invalidate = { throw notMarked },
+      ) { value, fetchedAt, keepsStored ->
         backing.writeFetched(value, fetchedAt, keepsStored)
       }
     val query = data.query(failingInvalidate, fetch, Freshness.staleAfter(1.hours))

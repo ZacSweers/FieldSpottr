@@ -22,6 +22,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -52,6 +53,9 @@ import kotlinx.serialization.builtins.serializer
 class OptimisticQueryStoreTest {
   /** Adds one tag. */
   @Serializable data class Add(val tag: String)
+
+  /** Sets a note's text, or deletes the note when [text] is null. */
+  @Serializable data class SetText(val text: String?)
 
   private val send = TestSend<Add>()
   // The row ids each send attempt was given, in attempt order
@@ -742,7 +746,7 @@ class OptimisticQueryStoreTest {
     val gate = CompletableDeferred<Unit>()
     // A base whose write of the fetched value stalls, like a slow file
     val base =
-      QueryStore.of(truth.data, clear = { truth.clear() }, invalidate = { truth.invalidate() }) {
+      QueryStore.of(truth.data, clear = truth::clearFetched, invalidate = { truth.invalidate() }) {
         value,
         fetchedAt,
         keepsStored ->
@@ -851,7 +855,7 @@ class OptimisticQueryStoreTest {
     val base =
       QueryStore.of(
         state,
-        clear = { state.value = null },
+        clear = state::clearFetched,
         invalidate = { state.update { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
       ) { value, fetchedAt, keepsStored ->
         // Pauses the commit's write, which comes after its read of the truth
@@ -940,7 +944,7 @@ class OptimisticQueryStoreTest {
     val backing = QueryStore.inMemory(Fetched(listOf("a"), START))
     val diskFull = IllegalStateException("Disk full")
     val failingWrites =
-      QueryStore.of(backing.data, clear = backing::clear) { _, _, _ -> throw diskFull }
+      QueryStore.of(backing.data, clear = backing::clearFetched) { _, _, _ -> throw diskFull }
     val store =
       data.optimisticStore<List<String>, Add>(
         name = "tags",
@@ -1008,6 +1012,114 @@ class OptimisticQueryStoreTest {
       assertThat(server.count).isEqualTo(1)
       data.assertNoFailures()
     }
+
+  @Test
+  fun `a fetch that folds in a delete keeps a row another writer recreated meanwhile`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    // One row that another writer shares, like a table a second query also fills
+    val row = MutableStateFlow<Fetched<String>?>(Fetched("draft", START))
+    val removing = CompletableDeferred<Unit>()
+    val finishRemove = CompletableDeferred<Unit>()
+    var removals = 0
+    val base =
+      QueryStore.of(
+        row,
+        clear = { keepsStored ->
+          // The commit removes the row first, and the fetch that folds the delete in removes it
+          // again
+          removals++
+          if (removals == 2) {
+            removing.complete(Unit)
+            finishRemove.await()
+          }
+          row.clearFetched(keepsStored)
+        },
+      ) { value, fetchedAt, keepsStored ->
+        row.writeFetched(value, fetchedAt, keepsStored)
+      }
+    val store =
+      data.optimisticStore<String, SetText>(
+        name = "note",
+        base = base,
+        apply = { _, edit -> edit.text },
+        send = { _, _ -> },
+      )
+    val fetch = TestFetch { "draft" }
+    val query = data.query(store, fetch, Freshness.staleAfter(1.hours))
+
+    // The refresh reads the server before the delete reaches it
+    fetch.hold()
+    val refresh = query.requestFetch(force = true)
+    runCurrent()
+    advanceTimeBy(1.seconds)
+    store.mutate(SetText(null)).awaitSucceeded()
+    assertThat(row.value).isNull()
+
+    fetch.release()
+    removing.await()
+    advanceTimeBy(1.seconds)
+    row.value = Fetched("recreated", START + 2.seconds)
+    finishRemove.complete(Unit)
+    refresh.awaitSucceeded()
+
+    assertThat(row.value).isEqualTo(Fetched("recreated", START + 2.seconds))
+    assertThat(store.data.first()?.value).isEqualTo("recreated")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an exchange answer keeps a newer value another writer stored during its commit`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val row = MutableStateFlow<Fetched<String>?>(Fetched("draft", START))
+    val commitWriting = CompletableDeferred<Unit>()
+    val finishCommit = CompletableDeferred<Unit>()
+    val base =
+      QueryStore.of(row, clear = row::clearFetched) { value, fetchedAt, keepsStored ->
+        // Pauses the commit's write, which comes after its read of the truth
+        if (value == "SAVED") {
+          commitWriting.complete(Unit)
+          finishCommit.await()
+        }
+        row.writeFetched(value, fetchedAt, keepsStored)
+      }
+    val store =
+      data.optimisticStore<String, SetText>(
+        name = "note",
+        base = base,
+        apply = { _, edit -> edit.text },
+        // The server normalizes what it stores
+        exchange = { edit, _ -> checkNotNull(edit.text).uppercase() },
+      )
+
+    advanceTimeBy(1.seconds)
+    val handle = store.mutate(SetText("saved"))
+    commitWriting.await()
+    advanceTimeBy(1.seconds)
+    row.value = Fetched("newer", START + 2.seconds)
+    finishCommit.complete(Unit)
+    handle.awaitSucceeded()
+
+    assertThat(row.value).isEqualTo(Fetched("newer", START + 2.seconds))
+    assertThat(store.data.first()?.value).isEqualTo("newer")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a write through the store still replaces a newer value`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START + 1.hours))
+    val store =
+      data.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+
+    store.write(listOf("seed"), START)
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("seed"), START))
+    data.assertNoFailures()
+  }
 }
 
 /**

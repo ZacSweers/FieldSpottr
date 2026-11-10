@@ -198,8 +198,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * truth keeps its old fetch time. The one exception is a fetch that started after the send
    * finished: it read the server with the change already in it, so the truth is left as it is.
    *
-   * Runs on the key's lock, so no fetch write lands between the read and the write here. A row that
-   * a clear discarded while the send ran has no truth to land in, so its change is dropped.
+   * Runs on the key's lock, so no fetch write through a view lands between the read and the write
+   * here. Another writer that shares the base store can, so the write is one that keeps a value
+   * fetched after the send, by the same rule. A row that a clear discarded while the send ran has
+   * no truth to land in, so its change is dropped.
    */
   private suspend fun commit(
     id: EntryId,
@@ -215,7 +217,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
       val current = base.store.data.first()
       val sent = committed.value.filter { it.key == key }
-      val alreadyFetched = current != null && current.fetchedAt > sentAt
+      // A truth fetched after the send read the server with the change in it
+      val fetchedSinceSend = { storedAt: Instant -> storedAt > sentAt }
+      val alreadyFetched = current != null && fetchedSinceSend(current.fetchedAt)
       val replaced = result is Delivery.Replaced
       val next =
         when {
@@ -239,9 +243,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
       if (!alreadyFetched) {
         if (next == null) {
-          base.store.clear()
+          base.store.clearFetched(fetchedSinceSend)
         } else {
-          base.store.write(next.value, next.fetchedAt)
+          base.store.writeFetched(next.value, next.fetchedAt, fetchedSinceSend)
         }
       }
       // The store holds this record's value now, which tells views that it holds every change
@@ -447,12 +451,33 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       fetchedAt: Instant,
       keepsStored: (storedAt: Instant) -> Boolean,
     ) {
+      land(Fetched(value, fetchedAt), keepsStored)
+      prune(key, fetchedAt)
+    }
+
+    /**
+     * [writeFetched] for a value that is gone. It has no fetch time to tell which sends it may have
+     * missed, so it counts as older than all of them, and every change on record goes back on top.
+     */
+    override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
+      land(null, keepsStored)
+    }
+
+    /**
+     * Stores [fetched], or removes the truth when it is null, with the sent changes it may lack
+     * folded in, unless [keepsStored] says the truth should stay. The truth's own conditional write
+     * or removal checks again, for a writer that shares the base store without this lock.
+     */
+    private suspend fun land(fetched: Fetched<T>?, keepsStored: (storedAt: Instant) -> Boolean) {
       awaitStored(key)
       base.lock.withLock {
         val storedAt = truth.data.first()?.fetchedAt
         if (storedAt == null || !keepsStored(storedAt)) {
-          val sentSince = committed.value.filter { it.key == key && it.sentAt >= fetchedAt }
-          val next = withSent(Fetched(value, fetchedAt), sentSince)
+          val sentSince =
+            committed.value.filter {
+              it.key == key && (fetched == null || it.sentAt >= fetched.fetchedAt)
+            }
+          val next = withSent(fetched, sentSince)
           // Before the write, so views count every change on record as in the folded truth both
           // before and after it lands, and never apply one twice
           sentSince.lastOrNull()?.let { newest ->
@@ -469,13 +494,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             }
           }
           if (next == null) {
-            truth.clear()
+            truth.clearFetched(keepsStored)
           } else {
             truth.writeFetched(next.value, next.fetchedAt, keepsStored)
           }
         }
       }
-      prune(key, fetchedAt)
     }
 
     /** [writeFetched] over whatever the truth holds, with the sent changes it lacks folded in. */

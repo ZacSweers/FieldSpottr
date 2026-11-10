@@ -12,6 +12,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
@@ -109,7 +110,7 @@ class HandleRetentionTest {
   fun `a query does not keep a failed automatic check after a later refresh`() = runTest {
     val state = MutableStateFlow<Fetched<String>?>(Fetched("old", TestClock.DEFAULT_START))
     val store =
-      QueryStore.of(state, clear = { state.value = null }) { value, fetchedAt, keepsStored ->
+      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
         state.writeFetched(value, fetchedAt, keepsStored)
       }
     var thrown: ResponseException? = null
