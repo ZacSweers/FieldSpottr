@@ -271,6 +271,45 @@ class TestFixturesTest {
   }
 
   @Test
+  fun `a recording store logs a fetch write that its store retried`() = runTest {
+    val backing = QueryStore.inMemory(Fetched("old", TestClock.DEFAULT_START))
+    val store = RecordingQueryStore(backing)
+    val fetched = Fetched("new", TestClock.DEFAULT_START + 1.minutes)
+
+    store.writeFetched(fetched.value, fetched.fetchedAt) {
+      // Empties the store under the first attempt, so the update retries and stores without asking
+      backing.update { null }
+      true
+    }
+
+    assertThat(backing.data.value).isEqualTo(fetched)
+    assertThat(store.writes).containsExactly(fetched)
+  }
+
+  @Test
+  fun `a recording store logs a fetch write that kept the stored value`() = runTest {
+    val stored = Fetched("old", TestClock.DEFAULT_START + 1.minutes)
+    val store = RecordingQueryStore(QueryStore.inMemory(stored))
+    val requested = Fetched("new", TestClock.DEFAULT_START)
+
+    store.writeFetched(requested.value, requested.fetchedAt) { true }
+
+    assertThat(store.data.first()).isEqualTo(stored)
+    assertThat(store.writes).containsExactly(requested)
+  }
+
+  @Test
+  fun `a recording store leaves out a fetch write that threw`() = runTest {
+    val store = RecordingQueryStore(QueryStore.inMemory(Fetched("old", TestClock.DEFAULT_START)))
+
+    assertFailsWith<IllegalStateException> {
+      store.writeFetched("new", TestClock.DEFAULT_START + 1.minutes) { error("Store failed") }
+    }
+
+    assertThat(store.calls).isEmpty()
+  }
+
+  @Test
   fun `a test send holds a payload until released`() = runTest {
     val send = TestSend<String>()
     val outbox = testDataScope(eager = true).outbox<String>("notes", send, send::revert)

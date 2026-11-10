@@ -139,6 +139,32 @@ class HandleRetentionTest {
   }
 
   @Test
+  fun `a query does not keep its first failed check after a refresh under the same collector`() =
+    runTest {
+      val error = ResponseException(ByteArray(1 shl 20))
+      val fetch = TestFetch<String> { throw error }
+      val store = QueryStore.inMemory<String>()
+      val query =
+        DataScope.Factory(onFailure = {}, clock = testClock())
+          .create(backgroundScope)
+          .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+      // Stays subscribed throughout, so its watcher outlives the failed check it started with
+      val collector = backgroundScope.launch { query.data.collect {} }
+      testScheduler.runCurrent()
+      assertThat(query.status.value).isEqualTo(FetchStatus.Failed(error))
+
+      fetch.respond = { "fresh" }
+      val refresh = query.requestFetch(force = true)
+      testScheduler.runCurrent()
+
+      refresh.assertSucceeded()
+      assertThat(store.data.value?.value).isEqualTo("fresh")
+      assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+      assertThat(collector.isActive).isTrue()
+      assertThat(query.reaches(error.response)).isFalse()
+    }
+
+  @Test
   fun `a settled handle does not keep its key`() = runTest {
     val key = ByteArray(1 shl 20)
     val handle = testDataScope().newActionRunner().run(Ordering.Keyed(key)) {}

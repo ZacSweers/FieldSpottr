@@ -86,7 +86,8 @@ internal class RealDataQuery<T>(
         }
         continue
       }
-      val watcher = scope.launch(start = CoroutineStart.LAZY) { watch(check) }
+      // The job takes the block itself, which can drop check, as [watch] describes
+      val watcher = scope.launch(start = CoroutineStart.LAZY, block = watch(check))
       if (watching.compareAndSet(current, Watching(observers = 1, watcher))) {
         // The watcher takes a hold on the owner, which also covers the requests the watcher makes
         if (holds.tryAcquire()) {
@@ -133,22 +134,32 @@ internal class RealDataQuery<T>(
    * read a value before a clear, so it never fetched. So the watcher waits for it, and when it
    * succeeded and the store is still empty, checks once more. A check that failed, like a fetch
    * while offline, already made its attempt, so the watcher leaves it to the next request.
+   *
+   * Returns the watcher's block, which drops [check] once it has read the first value. A failed
+   * check keeps its error, so the watcher must not keep the check for as long as observers stay.
+   * Pass the block to `launch` as is, since a lambda that calls this would keep [check] itself.
    */
-  private suspend fun watch(check: Operation) {
-    var previous: Fetched<T>? = null
-    var first = true
-    store.data.collect { current ->
-      if (first) {
-        first = false
-        val emptyAfterCheck =
-          current == null && check.await() == OperationState.Succeeded && store.data.first() == null
-        if (emptyAfterCheck) {
+  private fun watch(check: Operation): suspend CoroutineScope.() -> Unit {
+    // Read for the first value only, then cleared
+    var firstCheck: Operation? = check
+    return {
+      var previous: Fetched<T>? = null
+      store.data.collect { current ->
+        val initial = firstCheck
+        if (initial != null) {
+          firstCheck = null
+          val emptyAfterCheck =
+            current == null &&
+              initial.await() == OperationState.Succeeded &&
+              store.data.first() == null
+          if (emptyAfterCheck) {
+            holds.holdUntilSettled(recheck())
+          }
+        } else if (lostFetch(previous, current)) {
           holds.holdUntilSettled(recheck())
         }
-      } else if (lostFetch(previous, current)) {
-        holds.holdUntilSettled(recheck())
+        previous = current
       }
-      previous = current
     }
   }
 

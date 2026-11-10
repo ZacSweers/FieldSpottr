@@ -562,12 +562,13 @@ internal constructor(
     val rows = checkNotNull(feed.rows) { "Only a downloaded feed has rows" }
     val areaName = area.resolvedAreaName
     feedWrites.withLock {
-      transaction {
+      // Another writer, like an invalidate, can still land between the read and the writes
+      transactionRetryingConflicts {
         val stored = fsdbQueries.getAreaFeed(areaName).executeAsOneOrNull()
         if (
           stored != null && stored.hash == area.hash && keepsStored(stored.toFetched().fetchedAt)
         ) {
-          return@transaction
+          return@transactionRetryingConflicts
         }
         fsdbQueries.deleteAreaPermits(areaName)
         rows.forEach { row ->
@@ -627,8 +628,9 @@ internal constructor(
   }
 
   private suspend fun FSDatabase.invalidateAreaFeed(name: String) {
-    transaction {
-      val row = fsdbQueries.getAreaFeed(name).executeAsOneOrNull() ?: return@transaction
+    transactionRetryingConflicts {
+      val row =
+        fsdbQueries.getAreaFeed(name).executeAsOneOrNull() ?: return@transactionRetryingConflicts
       val stale = row.copy(feedFetchedAt = QueryStore.INVALIDATED.toEpochMilliseconds())
       fsdbQueries.upsertAreaFeed(stale)
     }

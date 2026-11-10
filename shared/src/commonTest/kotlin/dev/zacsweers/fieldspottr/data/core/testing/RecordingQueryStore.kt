@@ -34,11 +34,17 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val recorded = AtomicReference(persistentListOf<Call<T>>())
 
-  /** Every call, oldest first. */
+  /**
+   * Every call that returned, oldest first. Both [write] and [writeFetched] record a [Write] of the
+   * value they were asked to store.
+   */
   val calls: List<Call<T>>
     get() = recorded.load()
 
-  /** What each write stored, oldest first. */
+  /**
+   * The value and fetch time of each write request, oldest first. A fetch's write that kept the
+   * stored value is here too, so read [data] to check what the store holds.
+   */
   val writes: List<Fetched<T>>
     get() = calls.mapNotNull { call ->
       when (call) {
@@ -55,20 +61,16 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
   }
 
   /**
-   * Recorded as a [Write] only when the delegate stored [value], so a kept value shows no write.
+   * Recorded as a [Write] of [value] once the delegate returns, whatever [keepsStored] answered.
+   * The delegate may ask it more than once, so no single answer tells what the store kept.
    */
   override suspend fun writeFetched(
     value: T,
     fetchedAt: Instant,
     keepsStored: (storedAt: Instant) -> Boolean,
   ) {
-    var kept = false
-    delegate.writeFetched(value, fetchedAt) { storedAt ->
-      keepsStored(storedAt).also { kept = it }
-    }
-    if (!kept) {
-      recorded.update { it.adding(Write(value, fetchedAt)) }
-    }
+    delegate.writeFetched(value, fetchedAt, keepsStored)
+    recorded.update { it.adding(Write(value, fetchedAt)) }
   }
 
   override suspend fun invalidate() {
