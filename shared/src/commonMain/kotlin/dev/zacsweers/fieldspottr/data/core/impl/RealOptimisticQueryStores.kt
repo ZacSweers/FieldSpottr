@@ -284,9 +284,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       onFailure(
         IllegalStateException(
           "apply is not idempotent for $mutation: applied to a value that already holds the " +
-            "change, it changed the value again. Make apply return such a value unchanged, like " +
-            "an append that skips an item already there, or build the store with exchange so the " +
-            "server's value replaces the truth."
+            "change, it changed the value again. A store built with send needs a change that is " +
+            "safe to apply again, so make apply return such a value unchanged, like an append " +
+            "that skips an item already there. Or build the store with exchange, where the " +
+            "value is an estimate until the server's answer corrects it."
         )
       )
     }

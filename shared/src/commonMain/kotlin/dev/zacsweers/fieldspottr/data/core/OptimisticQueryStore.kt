@@ -143,8 +143,9 @@ sealed interface Delivery<out T> {
  *   idempotent: applied to a value that already holds the change, it returns that value unchanged,
  *   as setting a field does, and as an append does once it skips an item already there. A fetch
  *   that overlapped the send, or a resend after a restart, can hand it such a value, and the store
- *   cannot tell. A change that cannot be made idempotent, like a counter, takes the `exchange` form
- *   instead, so the server's value replaces the truth once it answers.
+ *   cannot tell. So `send` needs a change that is safe to apply again. A change that is not, like a
+ *   counter's increment, takes the `exchange` form, where the value is an estimate that the
+ *   server's answer corrects.
  * @param send delivers one change, with the row's id, the same id `pending` shows and a restart
  *   keeps. Pass it to the server as the request's idempotency key, since a row still sending when
  *   the process dies is sent again. Once it returns, the change is applied to the truth with
@@ -180,12 +181,14 @@ inline fun <T, reified M> DataScope.optimisticStore(
  * [base] as fresh data in place of applying the change locally. For a change that cannot be made
  * idempotent, like a counter, or a server whose answer carries fields the client cannot compute.
  *
- * The value is exact once the server answers. Until then, the store cannot tell whether a value
- * fetched meanwhile already holds the waiting change, so it applies the change on top. A counter
- * refreshed while its change sends shows the change twice. So does one reopened after the process
- * stopped between storing the answer and marking the row sent, until the resend answers. Pass the
- * id to the server as the request's idempotency key, as with `send`, so the resend is not counted
- * again.
+ * Until the server answers, the value is an estimate. The store applies the waiting change on top
+ * of what was fetched meanwhile, and cannot tell whether that value already holds it. A counter
+ * refreshed while its change sends shows the change twice until the answer corrects it. So does one
+ * reopened after the process stopped between storing the answer and marking the row sent, until the
+ * resend answers. To keep a count exact meanwhile, give each change an id of its own, have the
+ * server return the ids its count holds beside the count, and make [apply] skip a change whose id
+ * is there. Pass the row's id to the server as the request's idempotency key on every attempt, as
+ * with `send`, so a resend is not counted again.
  */
 @JvmName("optimisticStoreExchanging")
 inline fun <T, reified M> DataScope.optimisticStore(
