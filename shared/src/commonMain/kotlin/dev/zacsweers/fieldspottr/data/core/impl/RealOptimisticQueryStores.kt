@@ -46,42 +46,34 @@ import kotlinx.coroutines.withContext
 
 /**
  * [OptimisticQueryStores] over one outbox, whose rows live in [rows]. Each key's store is a view:
- * the key's base store, its truth, with that key's rows in flight applied on top.
+ * the key's base store, its truth, with the key's rows in flight applied on top.
  *
- * A sent change reaches the truth in two writes, the base store's and the row's status, which no
- * store makes atomic, and a fetch that started before the send finished can land after both with a
- * server state that lacks the change. So the set keeps a record of each sent change in [committed]:
- * what the truth held once its commit landed, and when the send finished. A view shows the record
- * in place of its row while the row is still there, and applies the change again on top of any
- * truth fetched before the send, so the value never shows the change twice or loses it until a
- * fetch from after the send says what the server holds. A fetch that overlapped the send is written
- * with the change folded in, so a restart, which has no records, keeps it too.
+ * A sent change reaches the truth in two writes, the base store's and the row's status, and no
+ * store makes them atomic. Meanwhile a fetch that started before the send can land with a value
+ * that lacks the change. So the set keeps a record of each sent change in [committed]: what the
+ * truth held after its commit, and when the send finished. A view shows the record in place of its
+ * row, and applies the change again on top of a truth fetched before the send. So the value never
+ * shows the change twice or loses it. A fetch that overlapped the send is written with the change
+ * folded in, so a restart, which has no records, keeps it too.
  *
- * At most two of a key's records keep a copy of the value. The newest keeps its own, and the value
- * the newest fetch that overlapped its send was written as, which is enough to tell that the truth
- * holds that change and every change before it. The newest one the server answered with a value
- * keeps that answer, since a slow fetch gets the answer back with the later changes applied on top.
- * The others keep just the change and its send time, which is all a slow fetch needs. Once its row
- * has left, a record goes when a fetch from after its send lands, or once it is old enough that no
- * fetch from before its send should still be running, so a key that is never fetched again does not
- * keep it for good. Only a commit or a fetch write looks for old records, on every key, so a set
- * that sits idle keeps them until its next one.
+ * Records stay small. The newest record on a key keeps the value it wrote and the newest fetch
+ * value it was folded into. The newest server answer keeps its value too, since a slow fetch gets
+ * it back. The rest keep only the change and its send time. A record goes once its row is gone and
+ * a fetch from after its send lands, or once it is too old for an earlier fetch to still run. Only
+ * a commit or a fetch write prunes, so an idle set keeps old records until its next one.
  *
- * Two cases stay outside what the records can tell. A fetch that overlapped the send may have read
- * the server after it took the change, and a process that dies between the truth write and the
- * row's status relaunches with the row still sending and the change already in the truth. In both,
- * [apply] gets a value that already holds the change, so [apply] must be idempotent, as
- * [dev.zacsweers.fieldspottr.data.core.optimisticStore] requires. Each commit checks this on the
- * value it folded, and the first change found not to be idempotent is reported to [onFailure],
- * once. A change that [deliver] answers with a value is never folded, so nothing checks it, and a
- * counter shows twice in both cases until a server answer replaces the truth.
+ * Two cases fall outside the records: a fetch that overlapped the send but read the server after it
+ * took the change, and a restart between the truth write and the row's status. In both, [apply]
+ * gets a value that already holds the change, so it must be idempotent. Each commit checks this on
+ * the value it folded and reports the first failure to [onFailure], once. A change that [deliver]
+ * answers with a value is never folded, so nothing checks it, and a counter shows twice until a
+ * server answer replaces the truth.
  *
- * Each key's truth has two writers, the query's fetch and the outbox's commit, and they take turns
- * on the key's lock. A fetch write is dropped when the truth's fetch time has moved past the fetch
- * meanwhile, by the rule the query passes to [QueryStore.writeFetched], applied here where the
- * writers meet, so a commit from a later time is never written over. A write or clear also waits
- * for the rows requested before it to be in the store, so the value it publishes never lacks a
- * change already made.
+ * The query's fetch and the outbox's commit both write a key's truth, and they take turns on the
+ * key's lock. A fetch write is dropped when the truth's fetch time moved past it, by the rule the
+ * query passes to [QueryStore.writeFetched], so a later commit is never overwritten. A write or
+ * clear also waits until the rows requested before it are stored, so it never publishes a value
+ * that lacks them.
  */
 @OptIn(DelicateDataLayerApi::class, ExperimentalAtomicApi::class)
 internal class RealOptimisticQueryStores<K : Any, T, M>(
@@ -176,11 +168,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   override fun discard(id: EntryId): Operation = outbox.discard(id)
 
   /**
-   * The outbox's send: the remote call through [deliver], with the row's id as the request's
-   * idempotency key, then the change's move into the truth. A commit that fails, like a base store
-   * whose disk is full, is reported to [onFailure] and the send still succeeds, since the server
-   * has the change and another attempt would only send it again. The change's record keeps it in
-   * the view until a fetch from after the send replaces the truth, or until the record expires.
+   * The outbox's send: [deliver] with the row's id as the idempotency key, then [commit]. A commit
+   * that fails, like on a full disk, goes to [onFailure], and the send still succeeds, since the
+   * server has the change. The change's record keeps it in the view until a later fetch replaces
+   * the truth or the record expires.
    */
   private suspend fun send(payload: KeyedMutation<K, M>, id: EntryId) {
     val result = deliver(payload.key, payload.mutation, id)
@@ -192,17 +183,16 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Moves the change in [payload], row [id], into the truth after a successful send. When the
-   * server answered with a value, that is what it holds now, and it replaces the truth as fresh
-   * data. When it answered with nothing, the change is applied to the truth as the view currently
-   * shows it, which already includes earlier sent changes that a fetch may have left out, and the
-   * truth keeps its old fetch time. The one exception is a fetch that started after the send
-   * finished: it read the server with the change already in it, so the truth is left as it is.
+   * Moves the change in [payload], row [id], into the truth after a successful send.
    *
-   * Runs on the key's lock, so no fetch write through a view lands between the read and the write
-   * here. Another writer that shares the base store can, so the write is one that keeps a value
-   * fetched after the send, by the same rule. A row that a clear discarded while the send ran has
-   * no truth to land in, so its change is dropped.
+   * A server answer replaces the truth as fresh data. Otherwise the change is applied to the view's
+   * current value, which already holds earlier sent changes that a fetch may have dropped, and the
+   * truth keeps its fetch time. A truth fetched after the send already holds the change, so it
+   * stays as it is.
+   *
+   * This runs on the key's lock, so no fetch through a view lands between the read and the write.
+   * Another writer that shares the base store can, so the write keeps a value fetched after the
+   * send, by the same rule. A row that a clear discarded during the send is dropped.
    */
   private suspend fun commit(
     id: EntryId,
@@ -266,11 +256,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Reports [mutation] once if applying it to [folded], which already holds it, changes the value.
-   * That is the value a fetch that overlapped the send, or a resend after a restart, can hand
-   * [apply], and the store cannot tell it from one that lacks the change, so such a change would
-   * show twice until a fetch from after the send replaced it. The check costs one more [apply] per
-   * commit, which the contract keeps cheap.
+   * Reports [mutation] once if applying it again to [folded], which already holds it, changes the
+   * value. A fetch that overlapped the send, or a resend after a restart, can pass [apply] such a
+   * value, and the store cannot tell. So a change that fails this would show twice. The check costs
+   * one more [apply] per commit.
    */
   private fun checkIdempotent(folded: Fetched<T>?, mutation: M) {
     if (reportedApply.load()) {
@@ -329,15 +318,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Discards [key]'s rows the server has not confirmed, sending ones included, by writing their
-   * status, so they drop out whether or not the outbox still runs, like after its scope was
-   * cancelled for a logout. Handles that follow them settle Cancelled through the row, and the
-   * outbox's watcher moves the key on. A row left sending by an owner that stopped would send again
-   * under the next owner, so it goes too. A drain still sending it finds the row gone when it
-   * reports the result, and [commit] drops the change. The drainer can move a row meanwhile, by
-   * claiming it, backing it off or requeueing it for a retry, so each compare-and-set goes round
-   * until it wins or the row is settled. A row cannot become Sent meanwhile, since that waits for
-   * [commit], which waits for the key's lock that the caller holds.
+   * Discards [key]'s unconfirmed rows, sending ones included, by writing their status. That works
+   * whether or not the outbox still runs, like after a logout cancelled its scope. Handles settle
+   * Cancelled through the row, and the outbox moves the key on.
+   *
+   * A row left sending by a stopped owner would send again under the next owner, so it goes too. A
+   * drain still sending it finds the row gone, and [commit] drops the change. The drainer can move
+   * a row meanwhile, so each compare-and-set retries until it wins or the row is settled. A row
+   * cannot become Sent meanwhile, since that waits for [commit], which needs the caller's lock.
    */
   private suspend fun discardPending(key: K) {
     for (row in rows.entries().first()) {
@@ -356,15 +344,13 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * [stored] with every sent change it may be missing put back, oldest first. A sent change is
-   * already in [stored] in two cases. Either [stored] is the value that the change's own commit, or
-   * a later one, wrote, since each commit folds onto the view and so carries the earlier changes
-   * with it. Or [stored] was fetched after the change was sent, so the server already included it.
-   * Every other sent change is missing, because [stored] came from a fetch that read the server too
-   * early or from a commit whose write has not landed in the store yet. A missing change the server
-   * answered with a value is put back as that value, which holds everything sent before it, since
-   * applying the change again could only rebuild the client's version of it. So the newest such
-   * answer replaces [stored], and only the changes after it are applied again.
+   * [stored] with every sent change it may lack put back, oldest first.
+   *
+   * [stored] holds a sent change when that change's commit or a later one wrote it, since each
+   * commit carries the earlier changes, or when it was fetched after the send. Any other sent
+   * change is missing: [stored] came from a fetch that read the server too early, or from a commit
+   * whose write has not landed. A missing server answer holds everything sent before it, so the
+   * newest one replaces [stored], and only the changes after it are applied again.
    */
   private fun withSent(stored: Fetched<T>?, sent: List<Committed<K, T, M>>): Fetched<T>? {
     // The newest record whose change the store holds. Every record up to it is in the truth.
@@ -438,15 +424,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         .flowOn(context)
 
     /**
-     * The query's fetch write, once the changes requested before it are in the store, so the value
-     * it publishes carries them. On the key's lock, a value is dropped when [keepsStored] says the
-     * truth should stay, like one older than what a commit wrote meanwhile, as the query would have
-     * dropped it had it seen the commit first. The truth's own [QueryStore.writeFetched] checks
+     * The query's fetch write. It waits until the changes requested before it are stored, so the
+     * value it publishes carries them. On the key's lock it drops a value that [keepsStored] says
+     * to drop, like one older than a commit. The truth's own [QueryStore.writeFetched] checks
      * again, for a writer that shares the base store without this lock.
      *
-     * A send that finished after the fetch started may be missing from the value, and only its
-     * in-memory record would show it. So the truth takes those changes too, as [withSent] puts them
-     * back, and a restart that has no records still shows them.
+     * The value may lack a send that finished after the fetch started, which only its in-memory
+     * record shows. So the truth takes those changes too, as [withSent] puts them back, and a
+     * restart still shows them.
      */
     override suspend fun writeFetched(
       value: T,
@@ -537,14 +522,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * A sent change: its row, what the truth held once its commit landed, and when the send finished.
-   * A truth fetched after [sentAt] holds the change. One fetched before may not, so a view puts the
-   * change back on top of it: [truth] itself when the server answered with that value, and
-   * [replaced] says so, else the change applied again. [folded] holds the value the newest fetch
-   * that overlapped the send was written as, with this change and the ones before it folded in.
-   * Each such write replaces the one before it on the key's lock, so the record lets an older one
-   * go, like a large response body. A view that still sees an older one, from a store whose
-   * emissions run late, applies the change to it again, which an idempotent apply leaves as it is.
+   * A sent change: its row, what the truth held after its commit, and when the send finished.
+   *
+   * A truth fetched after [sentAt] holds the change. On a truth fetched before, a view puts the
+   * change back: [truth] itself when [replaced] says the server answered with it, else the change
+   * applied again. [folded] is the value the newest overlapping fetch was written as. Each such
+   * write replaces the last, so older ones, like large response bodies, can go. A view that still
+   * sees an older one, from a store whose emissions run late, applies the change again, which an
+   * idempotent apply leaves as it is.
    */
   private class Committed<K, T, M>(
     val id: EntryId,

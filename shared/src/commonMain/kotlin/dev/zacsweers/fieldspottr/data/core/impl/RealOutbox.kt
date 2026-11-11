@@ -173,10 +173,9 @@ internal class RealOutbox<E>(
 
   /**
    * Requeues row [id] on its row key, where a drain also writes the row's final status and settles
-   * the handles that follow it. So the attempt that failed has settled its own handles before this
-   * reads the row, and this handle follows only the new attempt. It starts following once the
-   * lookup and the requeue have succeeded, before the key is released, so a store that throws fails
-   * this handle with that exception.
+   * its handles. So the failed attempt has settled its handles before this reads the row, and this
+   * handle follows only the new attempt. It starts following after the lookup and the requeue, so a
+   * store that throws fails this handle with that exception.
    */
   override fun retry(id: EntryId): Operation =
     tracked(Ordering.Keyed(Row(this, id))) { attempt ->
@@ -492,11 +491,11 @@ internal class RealOutbox<E>(
   ) : OutboxOperation
 
   /**
-   * [state], following [rowStates] in the outbox's scope until the first terminal state, then
-   * frozen. The attempt's outcome can settle it first, through [settleFollowers], when the view of
-   * the row is behind. A retried row gets a new handle. When the scope stops first, the handle
-   * settles Cancelled and the row stays for the next owner. When the store fails to report the row,
-   * the handle settles Failed. Either way no waiter is left waiting.
+   * [state], following [rowStates] in the outbox's scope until the first terminal state. The
+   * attempt's outcome can settle it first, through [settleFollowers], when the view of the row
+   * lags. A retried row gets a new handle. If the scope stops first, the handle settles Cancelled
+   * and the row stays for the next owner. If the store fails to report the row, it settles Failed.
+   * Either way no waiter is left waiting.
    */
   private fun latched(
     state: MutableStateFlow<OperationState>,

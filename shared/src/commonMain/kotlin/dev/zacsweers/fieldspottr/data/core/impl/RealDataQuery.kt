@@ -57,11 +57,10 @@ internal class RealDataQuery<T>(
   private val watching = AtomicReference(Watching(observers = 0, watcher = null))
 
   /**
-   * The store's values. Each observer checks the stored time when it subscribes, joining a check
-   * already queued, since the data can go stale between observers. The check is a command of its
-   * own, so an observer that takes the first value and leaves, like `first()`, still started it.
-   * The first observer also starts the watcher, which checks again whenever the fetched data goes
-   * away. The check starts first, so the watcher can wait for it, as [watch] describes.
+   * The store's values. Each observer checks the stored time when it subscribes, since the data can
+   * go stale between observers, and joins a check already queued. The check is a command of its
+   * own, so an observer that leaves after one value, like `first()`, still started it. The first
+   * observer then starts the watcher, which can wait for that check, as [watch] describes.
    */
   override val data: Flow<Fetched<T>?> = flow {
     val check = fetchIfStale()
@@ -124,20 +123,20 @@ internal class RealDataQuery<T>(
 
   /**
    * One ordered view of the store for every observer, so each change starts one check however many
-   * observers see it, and however late. A value that goes away, or keeps only local changes with
-   * [QueryStore.UNFETCHED], is checked again once the work already queued is done, so a value
-   * cleared while a fetch is still writing gets a check after that write. An invalidated value
-   * keeps its data and waits for the next collect, as [invalidate] promises.
+   * observers see it. A value that goes away, or keeps only local changes with
+   * [QueryStore.UNFETCHED], is checked again after the work already queued, so a clear during a
+   * fetch's write gets a check after that write. An invalidated value keeps its data and waits for
+   * the next collect, as [invalidate] promises.
    *
-   * The first value needs no check of its own, since the observer that started the watcher made
-   * [check], unless that value is nothing stored. [check] may be one this observer joined, which
-   * read a value before a clear, so it never fetched. So the watcher waits for it, and when it
-   * succeeded and the store is still empty, checks once more. A check that failed, like a fetch
-   * while offline, already made its attempt, so the watcher leaves it to the next request.
+   * The first value needs no check of its own, since the first observer made [check], unless that
+   * value is nothing stored. [check] may be one the observer joined, which read a value before a
+   * clear and so never fetched. So the watcher waits for it, and checks once more if it succeeded
+   * and the store is still empty. A failed check, like a fetch while offline, already made its
+   * attempt, so the watcher leaves it.
    *
-   * Returns the watcher's block, which drops [check] once it has read the first value. A failed
-   * check keeps its error, so the watcher must not keep the check for as long as observers stay.
-   * Pass the block to `launch` as is, since a lambda that calls this would keep [check] itself.
+   * Returns the watcher's block, which drops [check] after the first value, since a failed check
+   * keeps its error. Pass the block to `launch` as is, since a lambda that calls this would keep
+   * [check].
    */
   private fun watch(check: Operation): suspend CoroutineScope.() -> Unit {
     // Read for the first value only, then cleared

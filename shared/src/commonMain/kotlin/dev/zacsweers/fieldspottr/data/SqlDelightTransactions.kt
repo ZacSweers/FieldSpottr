@@ -9,15 +9,14 @@ import app.cash.sqldelight.SuspendingTransactionWithoutReturn
  * Runs [body] in a transaction, and runs it again from the start when SQLite refuses it because
  * another connection wrote after its first read.
  *
- * A transaction that reads before it writes works from what it read. When another connection
- * commits first, SQLite fails the transaction's first write at once: with SQLITE_BUSY_SNAPSHOT in
- * WAL mode, or with SQLITE_BUSY in rollback mode, where the two would otherwise wait on each other.
- * Waiting cannot help, since the read is stale. So the transaction rolls back and [body] runs again
- * over what the other connection wrote. [body] must be safe to run more than once. A refused
- * attempt's database writes roll back, and anything else it did stays.
+ * When another connection commits between this transaction's read and its first write, SQLite fails
+ * that write at once: SQLITE_BUSY_SNAPSHOT in WAL mode, or SQLITE_BUSY in rollback mode. Waiting
+ * cannot help, since the read is stale. So the transaction rolls back and [body] runs again. [body]
+ * must be safe to run more than once: its database writes roll back, but anything else it did
+ * stays.
  *
- * Each refusal means another connection committed, so a few attempts are enough. After the last
- * one, or for any other failure, the error reaches the caller.
+ * Each refusal means another connection committed, so a few attempts are enough. After the last, or
+ * for any other failure, the error reaches the caller.
  */
 internal suspend fun SuspendingTransacter.transactionRetryingConflicts(
   body: suspend SuspendingTransactionWithoutReturn.() -> Unit

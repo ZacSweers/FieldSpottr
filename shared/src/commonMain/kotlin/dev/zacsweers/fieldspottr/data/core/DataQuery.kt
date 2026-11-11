@@ -87,24 +87,24 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
  * ```
  *
  * Checks, fetches and invalidations run one at a time on the query's own key, so a check never
- * races a fetch. `fetchedAt` is the clock time just before the fetch, and a fetch never writes over
- * data with a newer fetch time, like a value another writer put in the store while it ran.
+ * races a fetch. `fetchedAt` is the clock time just before the fetch. A fetch never writes over
+ * data with a newer fetch time, like a value another writer stored while it ran.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface DataQuery<T> {
   /**
-   * The stored value and when it was fetched, or null before the first fetch. Collecting this may
-   * fetch: each collector checks freshness when it subscribes, joining a check already queued, and
-   * fetches when the data is stale. That holds for a collector that takes one value and leaves,
-   * like `first()`. One watcher checks again whenever a stored value goes away, so each change
-   * starts one check however many collectors see it. Use [stored] to watch the same values without
-   * starting any work.
+   * The stored value and when it was fetched, or null before the first fetch.
+   *
+   * Collecting this may fetch. Each collector checks freshness when it subscribes, even one that
+   * takes one value and leaves, like `first()`, and fetches when the data is stale. Collectors
+   * share one queued check. When a stored value goes away, one check runs however many collectors
+   * see it. Use [stored] to watch the same values without starting work.
    */
   val data: Flow<Fetched<T>?>
 
   /**
-   * The stored value and when it was fetched, as [data] shows it, without checking freshness or
-   * fetching. For readers that must not start work, like a background job that only reports.
+   * The values [data] shows, without checking freshness or fetching. For readers that must not
+   * start work, like a background job that only reports.
    */
   val stored: Flow<Fetched<T>?>
 
@@ -114,17 +114,16 @@ interface DataQuery<T> {
   /**
    * Fetches when [force] is true or the stored data is stale. Force it when the user asks for new
    * data, like a pull to refresh. Forced requests made at the same time share one fetch. An
-   * unforced request joins a fetch in flight, else fetches only if the data is stale, so collecting
-   * [data] and calling this with `force = false` never fetch fresh data twice. The handle follows
-   * the fetch this request ran or joined, and [status] shows `Fetching` while it runs.
+   * unforced request joins a fetch in flight, so it never fetches fresh data twice. The handle
+   * follows the fetch this request ran or joined, and [status] shows `Fetching` while it runs.
    */
   fun requestFetch(force: Boolean): Operation
 
   /**
-   * Marks the stored data stale without fetching, so the next collector fetches. Runs on this
-   * query's key after any fetch already in flight, so a fetch that started before a write cannot
-   * leave the old data marked fresh. Requests made after this returns run after it, so an unforced
-   * one fetches again. Use a forced [requestFetch] instead when the data is on screen.
+   * Marks the stored data stale without fetching, so the next collector fetches. It runs after any
+   * fetch in flight, so a fetch that started before a write cannot leave old data marked fresh. An
+   * unforced request made after this returns fetches again. When the data is on screen, use a
+   * forced [requestFetch] instead.
    */
   fun invalidate(): Operation
 }

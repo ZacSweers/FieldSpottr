@@ -17,19 +17,18 @@ package dev.zacsweers.fieldspottr.data.core
  *   C is Cancel     cancels A and B where they are Cancel too, then runs
  * ```
  *
- * A command replaces or cancels only predecessors that chose its own mode, and waits for the rest.
- * This happens when the command is submitted, so a replaced block never starts, even if it was
- * dispatched before the command that replaced it. Keys never wait on each other. [Ordering.Serial]
- * is one key of its own, and [Ordering.Concurrent] has none.
+ * A command replaces or cancels only predecessors in its own mode, and waits for the rest. This
+ * happens on submit, so a replaced block never starts, even one dispatched first. Keys never wait
+ * on each other. [Ordering.Serial] is one key of its own, and [Ordering.Concurrent] has none.
  *
- * A command settles once its block returns and every coroutine the block started in its own context
- * has finished. When one of those coroutines fails, the command fails with it and the runner's
- * failure handler hears it. The runner's scope keeps running.
+ * A command settles once its block returns and every coroutine it started in its own context has
+ * finished. If one of those fails, the command fails with it and the runner's failure handler hears
+ * it. The runner's scope keeps running.
  *
- * Commands run on the dispatcher of the runner's scope, the way `launch` runs on its scope's. So
- * build a runner on a scope on `Dispatchers.Default`, not on Main: a Main scope, like Android's
- * process lifecycle scope, would run every command on the main thread. Blocking work inside a
- * command moves itself with `withContext`, as [QueryStore] describes.
+ * Commands run on the dispatcher of the runner's scope, like `launch`. So build the runner on a
+ * `Dispatchers.Default` scope. A Main scope, like Android's process lifecycle scope, would run
+ * every command on the main thread. A command moves blocking work with `withContext`, as
+ * [QueryStore] describes.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface ActionRunner {

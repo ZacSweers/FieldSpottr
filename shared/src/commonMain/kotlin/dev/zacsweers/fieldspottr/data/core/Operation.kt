@@ -38,15 +38,13 @@ sealed interface OperationState {
 }
 
 /**
- * A handle on one unit of work, such as a command submitted to [ActionRunner] or a fetch a query
- * started. [state] reports where the work stands and [await] suspends until it settles. The handle
- * is only a window onto the work: observing it changes nothing, and dropping it never cancels the
- * work.
+ * A handle on one unit of work, like a command submitted to [ActionRunner] or a query's fetch.
+ * [state] says where the work stands, and [await] suspends until it settles. Observing the handle
+ * changes nothing, and dropping it never cancels the work.
  *
- * A handle settles as soon as its work returns, for example right after a store write. Collectors
- * of that store see the new value on their next dispatch, which can be a moment later. So a screen
- * should derive optimistic state from the data it observes, or keep that state in the store, and
- * should not clear it when the handle settles.
+ * A handle settles as soon as its work returns, like right after a store write. The store's
+ * collectors may see the new value a moment later. So a screen derives optimistic state from the
+ * data it observes, or keeps it in the store, and does not clear it when the handle settles.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface Operation {

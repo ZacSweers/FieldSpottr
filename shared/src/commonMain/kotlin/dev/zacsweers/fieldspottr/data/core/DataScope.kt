@@ -13,16 +13,17 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.serializer
 
 /**
- * The entry point for a repository's data work. It builds the repository's reads ([query] and
- * [keyed]), its command runner ([newActionRunner]) and its writes that must reach the server
- * ([outbox], [optimisticStore] and [optimisticStores]). Everything built here runs in [scope] and
- * stops when that scope is cancelled, so choosing the data scope chooses how long the work lives.
+ * The entry point for a repository's data work. It builds reads ([query] and [keyed]), a command
+ * runner ([newActionRunner]), and writes that must reach the server ([outbox], [optimisticStore]
+ * and [optimisticStores]). Everything built here runs in [scope] and stops when that scope is
+ * cancelled, so the data scope sets how long the work lives.
  *
- * A repository takes one from the graph, like an app-scoped binding, or builds one over its own
- * scope with [Factory.create]. The failure handlers, clock, outbox stores and network state come
- * from the factory. Three words recur in these docs: an action is a repository function like
- * `star(id)`, a command is the block that action submits to [ActionRunner.run], and an [Operation]
- * is the handle the caller gets back.
+ * A repository takes one from the graph, or builds one over its own scope with [Factory.create].
+ * The factory supplies the failure handlers, clock, outbox stores and network state.
+ *
+ * These docs use three words. An action is a repository function like `star(id)`. A command is the
+ * block that action submits to [ActionRunner.run]. An [Operation] is the handle the caller gets
+ * back.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface DataScope {
@@ -33,32 +34,27 @@ interface DataScope {
   val scope: CoroutineScope
 
   /**
-   * A new runner in this scope. Each call returns another runner, so build one per owner and keep
-   * it: commands on one runner share its [Ordering.Serial] line and its keys.
-   *
-   * Failed commands are reported to [onFailure], which lets a repository log them under its own
-   * name. When [onFailure] is null they go to the `onActionFailure` handler the factory was built
-   * with, which covers every failure other than a fetch.
+   * A new runner in this scope. Build one per owner and keep it, since commands on one runner share
+   * its [Ordering.Serial] line and its keys. Failed commands go to [onFailure], so a repository can
+   * log them under its own name, or to the factory's `onActionFailure` handler when it is null.
    */
   fun newActionRunner(onFailure: ((Throwable) -> Unit)? = null): ActionRunner
 
   /**
-   * A query over [store] that fills it with [fetch]. Its checks, fetches and store calls run on
-   * this scope's dispatcher, usually `Dispatchers.Default`, which suits decoding a response. A
-   * fetch that blocks a thread should wrap that part in `withContext` with an I/O dispatcher
-   * injected into its owner.
+   * A query over [store] that fills it with [fetch]. Its work runs on this scope's dispatcher,
+   * usually `Dispatchers.Default`, which suits decoding a response. A fetch that blocks a thread
+   * moves that part to an I/O dispatcher with `withContext`.
    */
   fun <T> query(store: QueryStore<T>, fetch: suspend () -> T, freshness: Freshness): DataQuery<T>
 
   /**
-   * One query per key, each over the [store] for that key, shared by every caller for the key so
-   * concurrent collectors share its fetches and its status. [freshness] can differ per key, like a
-   * shorter window for today than for later dates. [maxFetches] caps the fetches in flight across
-   * all keys. It does not cap store writes, which still run at the same time for different keys.
+   * One query per key over that key's [store]. Every caller for a key shares its query, so they
+   * share its fetches and its status. [freshness] can differ per key, like a shorter window for
+   * today than for later dates. [maxFetches] caps the fetches in flight across all keys, but not
+   * the store writes.
    *
-   * A key's query is dropped as soon as no caller uses it and none of its fetches, checks or
-   * invalidations is queued or running. Its data stays in its store, so the next query for the key
-   * picks up the stored value and fetch time.
+   * A key's query is dropped once no caller uses it and no work for it is queued or running. Its
+   * data stays in its store, so the next query for the key starts from it.
    */
   fun <K : Any, T> keyed(
     store: (key: K) -> QueryStore<T>,
@@ -77,19 +73,17 @@ interface DataScope {
 
   /**
    * An outbox called [name]: writes that must reach the server, kept as rows and sent in order per
-   * key, as [Outbox] describes. Its rows live in the store that the factory's store set opens for
-   * [name], and its drains run in this scope. Cancelling this scope stops the drains and keeps the
-   * rows, and the next outbox built for [name] sends them. The data scopes of one factory may run
-   * only one outbox per name at a time, so build it in the one owner that sends these writes.
+   * key, as [Outbox] describes. The factory's store set opens its rows, and it drains in this
+   * scope. Cancelling the scope stops the drains and keeps the rows for the next outbox built for
+   * [name]. One factory runs only one outbox per name at a time, so build it in the one owner that
+   * sends these writes.
    *
-   * [serializer] is required even when the stores are in memory, so changing the store set needs no
-   * change where outboxes are built.
+   * [serializer] is required even for in-memory stores, so switching the store set changes nothing
+   * here.
    *
-   * @param send delivers one payload, with its row's id, the same id the row keeps across a
-   *   restart. Pass it to the server as the request's idempotency key, since a row still sending
-   *   when the process dies is sent again. It runs on this scope's dispatcher, usually
-   *   `Dispatchers.Default`, so a send that blocks a thread should wrap that part in `withContext`
-   *   with an I/O dispatcher injected into its owner.
+   * @param send delivers one payload with its row's id. The id stays the same across attempts and
+   *   restarts, so pass it to the server as the idempotency key. It runs on this scope's
+   *   dispatcher, so move blocking work to an I/O dispatcher with `withContext`.
    * @param revert undoes the optimistic change when a row fails for good or is discarded. It reads
    *   only the payload, so it works after a restart too.
    */
@@ -102,9 +96,9 @@ interface DataScope {
   ): Outbox<E>
 
   /**
-   * An outbox over a [store] of its own, like rows in an app table, draining in this scope. Its
-   * [send] and [revert] work as in the outbox by name. This skips the one-outbox-per-name check, so
-   * build one outbox per store, in the one owner that sends these writes.
+   * An outbox over a [store] of its own, like rows in an app table. [send] and [revert] work as in
+   * the outbox by name. Nothing checks for a second outbox here, so build one per store, in the one
+   * owner that sends these writes.
    */
   fun <E> outbox(
     store: OutboxStore<E>,
@@ -114,23 +108,21 @@ interface DataScope {
   ): Outbox<E>
 
   /**
-   * The store under [optimisticStore] and [optimisticStores], which choose a [deliver] for a server
-   * that answers each change with nothing or with its value. Call one of those, and this only for a
-   * server that does both. It is a store for each key over the store [base] gives for it, whose
-   * values callers change before the server confirms them, as [OptimisticQueryStore] describes,
-   * with every waiting change kept as a row in the outbox called [name], opened from the factory's
-   * store set. Only one outbox per name may run at a time, so build the set once, in the one owner
-   * that changes this data, just as with [outbox]. [base] is called once per key, and the store it
-   * returns serves that key's views and its commits for as long as this set lives. Keys need a
-   * stable `toString`, which orders the rows, and [keySerializer], which stores them.
+   * The general form of [optimisticStore] and [optimisticStores]. Use one of those, and use this
+   * only for a server that answers some changes with nothing and others with a value.
    *
-   * @param apply the change [mutation] makes to the current value, with the contract
-   *   [optimisticStore] describes: cheap, pure and idempotent.
-   * @param deliver sends one change, with the row's id as the request's idempotency key, and
-   *   returns what the truth takes: [Delivery.Acknowledged] applies the change to it with [apply],
-   *   and [Delivery.Replaced] writes the server's value to it as fresh data. It runs on this
-   *   scope's dispatcher, as [outbox]'s send does, and throws [PermanentFailure] for a rejection
-   *   that retrying cannot fix.
+   * It builds an [OptimisticQueryStore] per key over the store [base] gives for it, with every
+   * waiting change kept as a row in the outbox called [name]. Build the set once, in the one owner
+   * of this data, as with [outbox]. [base] runs once per key, and its store serves that key for as
+   * long as this set lives. Keys need a stable `toString`, which orders the rows, and a
+   * [keySerializer], which stores them.
+   *
+   * @param apply returns the value with [mutation] applied. It must be cheap, pure and idempotent,
+   *   as [optimisticStore] describes.
+   * @param deliver sends one change with the row's id as the idempotency key. It returns
+   *   [Delivery.Acknowledged] to apply the change to the truth with [apply], or [Delivery.Replaced]
+   *   to replace the truth with the server's value. It runs on this scope's dispatcher. Throw
+   *   [PermanentFailure] for a rejection that retrying cannot fix.
    */
   fun <K : Any, T, M> optimisticStores(
     name: String,
@@ -152,12 +144,12 @@ interface DataScope {
     fun create(scope: CoroutineScope): DataScope
 
     /**
-     * What the outboxes running from this factory still have to send, combined:
-     * [OutboxBacklog.Ready] if any has a row that can send now, else the earliest
-     * [OutboxBacklog.BackingOff], else [OutboxBacklog.Empty]. A backoff whose deadline has passed
-     * can send now, so it reads as Ready. It emits once every running outbox has read its rows,
-     * then on each change. An outbox counts only while its scope runs, so rows left in a store no
-     * outbox has opened are not in it, and with no outbox running it is Empty. The factory's
+     * What this factory's running outboxes still have to send. It is [OutboxBacklog.Ready] if any
+     * row can send now, including a backoff whose deadline has passed. Otherwise it is the earliest
+     * [OutboxBacklog.BackingOff], or [OutboxBacklog.Empty].
+     *
+     * It emits once every running outbox has read its rows, then on each change. Only running
+     * outboxes count, so rows in a store that no outbox has opened are left out. The factory's
      * [OutboxScheduler] hears the same changes.
      */
     val backlog: Flow<OutboxBacklog>
@@ -169,17 +161,19 @@ interface DataScope {
 }
 
 /**
- * Builds the factory an app or a test hands its repositories. Failed fetches go to [onFailure].
- * Every other failure goes to [onActionFailure], which defaults to [onFailure]: commands on
- * runners, outbox drains, and query commands that fail without a fetch, like an invalidate() whose
- * store throws. Outboxes open their rows on [stores], drain while [online] is true, and tell
- * [scheduler] when rows wait, as [OutboxScheduler] describes. Pass scopes on `Dispatchers.Default`,
- * not on Main, as [ActionRunner] explains.
+ * Builds the factory an app or a test hands its repositories.
  *
- * [canRetrySend] tells whether a send that threw may succeed on a later attempt, like a timeout
- * against a 4xx response. False fails the row at once: it is marked failed, its undo runs, and the
- * next row on its delivery key sends. A [PermanentFailure] and the retry policy's attempt limit
- * stop retries too. A throw from [canRetrySend] is reported, and the send counts as retryable.
+ * Failed fetches go to [onFailure]. Every other failure goes to [onActionFailure], which defaults
+ * to [onFailure]: failed commands, outbox drains, and query work that fails without a fetch, like
+ * an `invalidate()` whose store throws.
+ *
+ * Outboxes open their rows on [stores], drain while [online] is true, and tell [scheduler] when
+ * rows wait. Create scopes on `Dispatchers.Default`, not Main, as [ActionRunner] explains.
+ *
+ * [canRetrySend] says whether a send that threw may succeed later, like a timeout, or never will,
+ * like a 4xx response. When it returns false, the row fails at once: its undo runs, and the next
+ * row on its key sends. A [PermanentFailure] and the retry policy's attempt limit also stop
+ * retries. A throw from [canRetrySend] is reported, and the send counts as retryable.
  */
 operator fun DataScope.Factory.Companion.invoke(
   onFailure: (Throwable) -> Unit,
