@@ -54,9 +54,10 @@ import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -124,12 +125,12 @@ internal fun TimeWindowsSheet(
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  // Opens straight to full height, with no half-open stop. Calf pulls a newer material3 into the
-  // iOS
-  // build, which deprecates this for rememberBottomSheetState. Android and desktop compile against
-  // the stable 1.9.0, which doesn't have the replacement, so this stays until that pin moves.
-  @Suppress("DEPRECATION")
-  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  // Opens straight to full height, with no half-open stop
+  val sheetState =
+    rememberBottomSheetState(
+      initialValue = SheetValue.Hidden,
+      enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
+    )
   var editing by remember { mutableStateOf<WindowDraft?>(null) }
   val save: (WindowDraft) -> Unit = { saved ->
     onSave(saved.id, saved.name, saved.startHour, saved.endHour)
