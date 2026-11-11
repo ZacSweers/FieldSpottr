@@ -124,6 +124,11 @@ internal fun TimeWindowsSheet(
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  // Opens straight to full height, with no half-open stop. Calf pulls a newer material3 into the
+  // iOS
+  // build, which deprecates this for rememberBottomSheetState. Android and desktop compile against
+  // the stable 1.9.0, which doesn't have the replacement, so this stays until that pin moves.
+  @Suppress("DEPRECATION")
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var editing by remember { mutableStateOf<WindowDraft?>(null) }
   val save: (WindowDraft) -> Unit = { saved ->
