@@ -82,4 +82,10 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
     delegate.clear()
     recorded.update { it.adding(Clear) }
   }
+
+  /** Recorded as a [Clear] once the delegate returns, whatever [keepsStored] answered. */
+  override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
+    delegate.clearFetched(keepsStored)
+    recorded.update { it.adding(Clear) }
+  }
 }

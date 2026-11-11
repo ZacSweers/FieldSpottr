@@ -22,6 +22,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -52,6 +53,15 @@ import kotlinx.serialization.builtins.serializer
 class OptimisticQueryStoreTest {
   /** Adds one tag. */
   @Serializable data class Add(val tag: String)
+
+  /** Sets a note's text, or deletes the note when [text] is null. */
+  @Serializable data class SetText(val text: String?)
+
+  /** Adds [delta] to a count once, with an [id] of its own that the server records. */
+  @Serializable data class Increment(val id: String, val delta: Int)
+
+  /** A count and the ids of the increments it holds, as the server reports them. */
+  data class Tally(val count: Int, val applied: Set<String> = emptySet())
 
   private val send = TestSend<Add>()
   // The row ids each send attempt was given, in attempt order
@@ -742,7 +752,7 @@ class OptimisticQueryStoreTest {
     val gate = CompletableDeferred<Unit>()
     // A base whose write of the fetched value stalls, like a slow file
     val base =
-      QueryStore.of(truth.data, clear = { truth.clear() }, invalidate = { truth.invalidate() }) {
+      QueryStore.of(truth.data, clear = truth::clearFetched, invalidate = { truth.invalidate() }) {
         value,
         fetchedAt,
         keepsStored ->
@@ -851,7 +861,7 @@ class OptimisticQueryStoreTest {
     val base =
       QueryStore.of(
         state,
-        clear = { state.value = null },
+        clear = state::clearFetched,
         invalidate = { state.update { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
       ) { value, fetchedAt, keepsStored ->
         // Pauses the commit's write, which comes after its read of the truth
@@ -940,7 +950,7 @@ class OptimisticQueryStoreTest {
     val backing = QueryStore.inMemory(Fetched(listOf("a"), START))
     val diskFull = IllegalStateException("Disk full")
     val failingWrites =
-      QueryStore.of(backing.data, clear = backing::clear) { _, _, _ -> throw diskFull }
+      QueryStore.of(backing.data, clear = backing::clearFetched) { _, _, _ -> throw diskFull }
     val store =
       data.optimisticStore<List<String>, Add>(
         name = "tags",
@@ -1008,6 +1018,188 @@ class OptimisticQueryStoreTest {
       assertThat(server.count).isEqualTo(1)
       data.assertNoFailures()
     }
+
+  @Test
+  fun `a tally stays exact through a refresh before the server takes the change`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val server = TallyServer(accept = CompletableDeferred())
+    val store = data.tallyStore(server, QueryStore.inMemory(Fetched(server.read(), START)))
+    val query = data.query(store, fetch = { server.read() }, Freshness.staleAfter(1.hours))
+
+    val handle = store.mutate(Increment("e1", 1))
+    store.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
+    assertThat(store.data.first()?.value?.count).isEqualTo(1)
+
+    // The refresh reads a count without the change, so the change goes on top
+    query.requestFetch(force = true).awaitSucceeded()
+    assertThat(store.data.first()?.value?.count).isEqualTo(1)
+
+    server.accept.complete(Unit)
+    handle.awaitSucceeded()
+    assertThat(store.data.first()?.value).isEqualTo(Tally(1, setOf("e1")))
+    assertThat(server.count).isEqualTo(1)
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a tally stays exact through a refresh after the server takes the change`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val server = TallyServer(answer = CompletableDeferred())
+    val store = data.tallyStore(server, QueryStore.inMemory(Fetched(server.read(), START)))
+    val query = data.query(store, fetch = { server.read() }, Freshness.staleAfter(1.hours))
+
+    val handle = store.mutate(Increment("e1", 1))
+    store.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
+
+    // The server counted the change and has not answered. The refresh reads a count that lists
+    // the change, so apply skips it, where a plain counter would show 2.
+    query.requestFetch(force = true).awaitSucceeded()
+    assertThat(store.data.first()?.value).isEqualTo(Tally(1, setOf("e1")))
+
+    server.answer.complete(Unit)
+    handle.awaitSucceeded()
+    assertThat(store.data.first()?.value).isEqualTo(Tally(1, setOf("e1")))
+    assertThat(server.count).isEqualTo(1)
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a tally stays exact when it reopens offline and sends the change again`() = runTest {
+    val scopes = testDataScopeFactory(clock = testClock(START))
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val server = TallyServer(answer = CompletableDeferred())
+    val base = QueryStore.inMemory(Fetched(server.read(), START))
+    val before = scopes.create(owner).tallyStore(server, base)
+
+    // The server counts the change, and the owner stops before the answer arrives
+    before.mutate(Increment("e1", 1))
+    before.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
+    assertThat(server.count).isEqualTo(1)
+    owner.cancel()
+    owner.coroutineContext.job.join()
+
+    // Reopened offline, the change shows once on top of the truth that lacks it
+    scopes.online.value = false
+    val after = scopes.create(backgroundScope).tallyStore(server, base)
+    assertThat(after.data.first()?.value).isEqualTo(Tally(1, setOf("e1")))
+
+    // The change sends again with its row id, so the server answers without counting it twice
+    server.answer.complete(Unit)
+    scopes.online.value = true
+    after.pending.first { it.isEmpty() }
+    assertThat(after.data.first()?.value).isEqualTo(Tally(1, setOf("e1")))
+    assertThat(server.count).isEqualTo(1)
+    scopes.assertNoFailures()
+  }
+
+  @Test
+  fun `a fetch that folds in a delete keeps a row another writer recreated meanwhile`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    // One row that another writer shares, like a table a second query also fills
+    val row = MutableStateFlow<Fetched<String>?>(Fetched("draft", START))
+    val removing = CompletableDeferred<Unit>()
+    val finishRemove = CompletableDeferred<Unit>()
+    var removals = 0
+    val base =
+      QueryStore.of(
+        row,
+        clear = { keepsStored ->
+          // The commit removes the row first, and the fetch that folds the delete in removes it
+          // again
+          removals++
+          if (removals == 2) {
+            removing.complete(Unit)
+            finishRemove.await()
+          }
+          row.clearFetched(keepsStored)
+        },
+      ) { value, fetchedAt, keepsStored ->
+        row.writeFetched(value, fetchedAt, keepsStored)
+      }
+    val store =
+      data.optimisticStore<String, SetText>(
+        name = "note",
+        base = base,
+        apply = { _, edit -> edit.text },
+        send = { _, _ -> },
+      )
+    val fetch = TestFetch { "draft" }
+    val query = data.query(store, fetch, Freshness.staleAfter(1.hours))
+
+    // The refresh reads the server before the delete reaches it
+    fetch.hold()
+    val refresh = query.requestFetch(force = true)
+    runCurrent()
+    advanceTimeBy(1.seconds)
+    store.mutate(SetText(null)).awaitSucceeded()
+    assertThat(row.value).isNull()
+
+    fetch.release()
+    removing.await()
+    advanceTimeBy(1.seconds)
+    row.value = Fetched("recreated", START + 2.seconds)
+    finishRemove.complete(Unit)
+    refresh.awaitSucceeded()
+
+    assertThat(row.value).isEqualTo(Fetched("recreated", START + 2.seconds))
+    assertThat(store.data.first()?.value).isEqualTo("recreated")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an exchange answer keeps a newer value another writer stored during its commit`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    val row = MutableStateFlow<Fetched<String>?>(Fetched("draft", START))
+    val commitWriting = CompletableDeferred<Unit>()
+    val finishCommit = CompletableDeferred<Unit>()
+    val base =
+      QueryStore.of(row, clear = row::clearFetched) { value, fetchedAt, keepsStored ->
+        // Pauses the commit's write, which comes after its read of the truth
+        if (value == "SAVED") {
+          commitWriting.complete(Unit)
+          finishCommit.await()
+        }
+        row.writeFetched(value, fetchedAt, keepsStored)
+      }
+    val store =
+      data.optimisticStore<String, SetText>(
+        name = "note",
+        base = base,
+        apply = { _, edit -> edit.text },
+        // The server normalizes what it stores
+        exchange = { edit, _ -> checkNotNull(edit.text).uppercase() },
+      )
+
+    advanceTimeBy(1.seconds)
+    val handle = store.mutate(SetText("saved"))
+    commitWriting.await()
+    advanceTimeBy(1.seconds)
+    row.value = Fetched("newer", START + 2.seconds)
+    finishCommit.complete(Unit)
+    handle.awaitSucceeded()
+
+    assertThat(row.value).isEqualTo(Fetched("newer", START + 2.seconds))
+    assertThat(store.data.first()?.value).isEqualTo("newer")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a write through the store still replaces a newer value`() = runTest {
+    data = testDataScope(clock = testClock(START))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START + 1.hours))
+    val store =
+      data.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+
+    store.write(listOf("seed"), START)
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("seed"), START))
+    data.assertNoFailures()
+  }
 }
 
 /**
@@ -1038,6 +1230,66 @@ private fun DataScope.counterStore(server: CounterServer, base: QueryStore<Int>)
     apply = { value, delta -> (value ?: 0) + delta },
     exchange = server::exchange,
   )
+
+/**
+ * A counter server that reports the ids of the increments its count holds. It counts each delivery
+ * once by its row id, as an idempotency key makes a real one do. Each change waits for [accept]
+ * before it is counted, and each answer waits for [answer] after.
+ */
+private class TallyServer(
+  val accept: CompletableDeferred<Unit> = CompletableDeferred(Unit),
+  val answer: CompletableDeferred<Unit> = CompletableDeferred(Unit),
+) {
+  var count = 0
+    private set
+
+  private val applied = mutableSetOf<String>()
+  private val delivered = mutableSetOf<EntryId>()
+
+  /** What a fetch reads. */
+  fun read() = OptimisticQueryStoreTest.Tally(count, applied.toSet())
+
+  suspend fun exchange(
+    edit: OptimisticQueryStoreTest.Increment,
+    id: EntryId,
+  ): OptimisticQueryStoreTest.Tally {
+    accept.await()
+    if (delivered.add(id)) {
+      count += edit.delta
+      applied += edit.id
+    }
+    answer.await()
+    return read()
+  }
+}
+
+/** A tally over [base] that [server] answers each change for, with an apply that skips repeats. */
+private fun DataScope.tallyStore(
+  server: TallyServer,
+  base: QueryStore<OptimisticQueryStoreTest.Tally>,
+) =
+  optimisticStore<OptimisticQueryStoreTest.Tally, OptimisticQueryStoreTest.Increment>(
+    name = "tally",
+    base = base,
+    apply = ::countOnce,
+    exchange = server::exchange,
+  )
+
+/**
+ * Adds the increment unless the tally already lists it, so a value fetched after the server took
+ * the change is left as it is.
+ */
+private fun countOnce(
+  current: OptimisticQueryStoreTest.Tally?,
+  edit: OptimisticQueryStoreTest.Increment,
+): OptimisticQueryStoreTest.Tally {
+  val tally = current ?: OptimisticQueryStoreTest.Tally(0)
+  return if (edit.id in tally.applied) {
+    tally
+  } else {
+    OptimisticQueryStoreTest.Tally(tally.count + edit.delta, tally.applied + edit.id)
+  }
+}
 
 /** Outbox stores whose inserts wait while held, like a database that is slow to write. */
 private class HoldingOutboxStores : OutboxStores {

@@ -49,11 +49,10 @@ internal class RealActionRunner(
     runOrJoin(ordering, tag = null, joins = { false }, block = block)
 
   /**
-   * Returns the handle of an unsettled command on [ordering]'s key that [joins] accepts, looking
-   * from the newest command back over the ones [passes] accepts. Otherwise runs [block] as a new
-   * command tagged [tag]. One compare-and-set on the key's newest command decides, so a command
-   * that joins the key later, like a query's invalidation, always lines up behind every handle
-   * returned before it.
+   * Returns the handle of an unsettled command on [ordering]'s key that [joins] accepts, walking
+   * back from the newest over the ones [passes] accepts. Otherwise runs [block] as a new command
+   * tagged [tag]. One compare-and-set on the key's newest command decides, so a later command, like
+   * a query's invalidation, lines up behind every handle returned before it.
    */
   internal fun runOrJoin(
     ordering: Ordering,
@@ -288,17 +287,15 @@ internal class RealActionRunner(
 }
 
 /**
- * Runs [block] in a scope of its own, so coroutines it starts in its context finish before the
- * command settles, and one that fails fails the command instead of the runner's scope. Returns
- * false when the block cancelled that scope itself, which settles the command Cancelled without a
- * report. A cancellation thrown by something the block called while its scope was still active,
- * like a timeout, is a failure like any other.
+ * Runs [block] in a scope of its own, so coroutines it starts finish before the command settles,
+ * and one that fails fails the command instead of the runner's scope. Returns false when the block
+ * cancelled that scope itself, which settles the command Cancelled without a report. A cancellation
+ * from something the block called, like a timeout, is a failure like any other.
  *
- * When the block itself throws, the same exception instance is rethrown: `coroutineScope` would
- * rethrow a copy of it when stack trace recovery is on, and the handle should settle with exactly
- * what the block threw. Its children are cancelled first and waited for, and one whose cleanup
- * throws something else has that attached to the block's exception as suppressed, so the cause that
- * ended the command is the one reported.
+ * When the block throws, this rethrows the same instance, since `coroutineScope` would rethrow a
+ * copy when stack trace recovery is on. Its children are cancelled and waited for first. A child
+ * whose cleanup throws something else adds it as suppressed, so the block's exception is the one
+ * reported.
  */
 private suspend fun runScoped(block: suspend () -> Unit): Boolean {
   var thrown: Throwable? = null
@@ -411,11 +408,10 @@ private class Holding(val entry: Entry) : AbstractCoroutineContextElement(Holdin
 }
 
 /**
- * Fails at once when the caller is a command waiting on its own handle, or on a command that can
- * only run after it on the same key. Such a wait never ends. Waits across keys or across runners
- * pass, since only a full wait-for graph could tell which of those never end. A handle from
- * [Operation.all] awaits each part in a child coroutine, which keeps the caller's [Holding], so
- * each part runs this check itself.
+ * Fails at once when a command waits on its own handle, or on a command that can only run after it
+ * on the same key, since such a wait never ends. Waits across keys or runners pass, since only a
+ * full wait-for graph could tell which of those never end. [Operation.all] awaits each part in a
+ * child coroutine that keeps the caller's [Holding], so each part runs this check too.
  */
 @OptIn(ExperimentalAtomicApi::class)
 private suspend fun requireNotWaitingOnItself(entry: Entry) {

@@ -31,24 +31,21 @@ sealed interface OutboxBacklog {
 }
 
 /**
- * A platform hook that learns when the outboxes running from one factory have rows to send, so the
- * platform can schedule a drain that runs even if the process dies first, like a WorkManager
- * request with a network constraint. The factory calls [rowsWaiting] once per change in the
- * combined [OutboxBacklog] of the outboxes running at the time. The call comes from the outbox that
- * changed, on a background dispatcher, so an implementation should return quickly, and it must
- * tolerate hearing the same state again after a restart.
+ * A platform hook that learns when a factory's outboxes have rows to send, so the platform can
+ * schedule a drain that runs even if the process dies, like a WorkManager request with a network
+ * constraint. The factory calls [rowsWaiting] on each change in the combined [OutboxBacklog] of its
+ * running outboxes. The call comes on a background dispatcher, so return quickly. After a restart
+ * the same state can arrive again.
  *
- * The scheduler is never told that the backlog is empty. The factory only knows about outboxes that
- * are running, so an empty backlog can still leave rows in the store of an outbox the app has not
- * built yet, and a drain cancelled because of it would strand them. A drain that runs and finds
- * nothing to send is cheap, so let it run.
+ * The scheduler never hears that the backlog is empty. The factory knows only the outboxes that
+ * run, so rows can still wait in the store of an outbox the app has not built yet. Cancelling the
+ * drain would strand them, and a drain that finds nothing is cheap, so let it run.
  */
 interface OutboxScheduler {
   /**
-   * Called when at least one row is waiting to be sent. [OutboxBacklog.Ready] means some row can be
-   * sent right now or is being sent. [OutboxBacklog.BackingOff] means every waiting row is backing
-   * off after a failed send and the earliest of them may be retried at its deadline, so a drain
-   * that runs before then will find nothing to send.
+   * Called when at least one row waits. [OutboxBacklog.Ready] means some row can send now or is
+   * sending. [OutboxBacklog.BackingOff] means every waiting row is backing off, and a drain before
+   * the deadline finds nothing to send.
    */
   fun rowsWaiting(backlog: OutboxBacklog.Waiting)
 
@@ -62,13 +59,14 @@ interface OutboxScheduler {
 }
 
 /**
- * Suspends until no outbox running from this factory has a row that could be sent right now. It
- * returns [OutboxBacklog.Empty] once every row has been sent, or an [OutboxBacklog.BackingOff]
- * whose deadline is when the remaining rows may be retried, so a worker can schedule itself again
- * for that time. Only running outboxes count, so a worker should build the repositories that own
- * them before calling this. A row whose backoff deadline has passed counts as ready, so a worker
- * that the deadline started waits for its send. While the network is down, queued rows still count
- * as ready and this keeps waiting, so give the worker a network constraint and a timeout.
+ * Suspends until no running outbox from this factory has a row that can send now. It returns
+ * [OutboxBacklog.Empty] once every row is sent, or an [OutboxBacklog.BackingOff] whose deadline is
+ * when the rest may retry, so a worker can schedule itself for that time.
+ *
+ * Only running outboxes count, so a worker builds the repositories that own them first. A row whose
+ * backoff deadline has passed counts as ready, so a worker that the deadline started waits for its
+ * send. While the network is down, queued rows still count as ready and this keeps waiting, so give
+ * the worker a network constraint and a timeout.
  */
 suspend fun DataScope.Factory.awaitDrained(): OutboxBacklog = backlog.first {
   it !is OutboxBacklog.Ready

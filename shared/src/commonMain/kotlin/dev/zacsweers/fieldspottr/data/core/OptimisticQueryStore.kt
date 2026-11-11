@@ -11,12 +11,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 
 /**
- * A [QueryStore] whose value callers change before the server confirms the change. The store keeps
- * the last fetched value as its truth and keeps each change as a durable row beside it. What it
- * shows is the truth with the waiting changes applied on top. A change shows at once, it stays on
- * top of a fetch that lands while it waits, and it drops out by itself when the server rejects it.
- * The query built over this store sees a plain [QueryStore], and nothing downstream knows that an
- * outbox is at work.
+ * A [QueryStore] that shows a change before the server confirms it.
+ *
+ * The store keeps the truth, which is the last value the server sent, and a durable row for each
+ * change that waits. It shows the truth with the waiting changes applied on top. A change shows at
+ * once, stays on top of a fetch that lands while it waits, and drops out when the server rejects
+ * it. A query over this store sees a plain [QueryStore].
  *
  * ```
  * mutate(m2)                 data = apply(apply(truth, m1), m2)
@@ -28,25 +28,26 @@ import kotlinx.serialization.builtins.serializer
  *                       rejected: the row fails, so data shows the truth without it
  * ```
  *
- * The row is the only write a change makes before the server confirms it. The truth changes only
- * when a fetch lands or a send succeeds, which means it always holds something the server said, and
- * a restart shows the truth plus the rows still waiting. The `apply` function runs on the data
- * scope's dispatcher, again on every change to the truth or the rows, so it must be cheap and pure.
- * It must also be idempotent, as [optimisticStore] explains. The store checks this on every commit,
- * and the first change found not to be idempotent is reported once to the factory's
- * `onActionFailure` handler. A commit that fails in the base store, like on a full disk, is
- * reported there too, and the change still counts as sent, since the server has it.
+ * Before the server confirms a change, its row is its only write. The truth changes only when a
+ * fetch lands or a send succeeds, so it always holds something the server said. After a restart,
+ * the store shows the truth plus the rows that still wait.
+ *
+ * `apply` runs on the data scope's dispatcher each time the truth or the rows change. Keep it
+ * cheap, pure and idempotent, as [optimisticStore] explains. Each commit checks idempotence, and
+ * the first failure goes once to the factory's `onActionFailure` handler. A commit that fails in
+ * the base store, like on a full disk, goes there too. The change still counts as sent, since the
+ * server has it.
  *
  * Built by [optimisticStore], or per key by [optimisticStores].
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStore<T, M> : QueryStore<T> {
   /**
-   * Shows [mutation] in [data] now, stores it as a row and sends it after the rows before it. The
-   * handle follows the row: Succeeded once sent, Failed once rejected for good or out of attempts,
-   * Cancelled once discarded. It survives a restart through the row, like [Outbox.enqueue]'s. Its
-   * [OutboxOperation.stored] settles once the row is written, for a caller that only needs the
-   * change kept, not yet delivered.
+   * Shows [mutation] in [data] now, stores it as a row, and sends it after the rows before it.
+   *
+   * The handle follows the row, and a restart keeps it. It succeeds once sent, fails once rejected
+   * for good or out of attempts, and settles Cancelled once discarded. Its [OutboxOperation.stored]
+   * settles once the row is written, for a caller that only needs the change kept.
    */
   fun mutate(mutation: M): OutboxOperation
 
@@ -60,10 +61,9 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
   fun discard(id: EntryId): Operation
 
   /**
-   * Removes the truth and drops every change of this store's that the server has not confirmed,
-   * waiting, sending or failed, so nothing sends for it later, as on logout. A change whose send is
-   * in flight may still reach the server, but its result no longer lands here, and its handle
-   * settles Cancelled. A change still being stored is dropped once it is in.
+   * Removes the truth and drops every change the server has not confirmed, so nothing sends later,
+   * as on logout. A send already in flight may still reach the server, but its result is ignored
+   * and its handle settles Cancelled. A change still being stored is dropped once it is in.
    */
   override suspend fun clear()
 }
@@ -85,10 +85,9 @@ data class PendingMutation<M>(
 )
 
 /**
- * One [OptimisticQueryStore] per key, over the stores [optimisticStores] was given, sharing one set
- * of rows. It is the store function a [DataScope.keyed] query takes, so build the queries with it
- * and call [mutate] with the key. Rows for one key send in order, and keys do not wait on each
- * other.
+ * One [OptimisticQueryStore] per key, all sharing one set of rows. Pass it as the store of a
+ * [DataScope.keyed] query, and call [mutate] with the key. Rows for one key send in order, and keys
+ * do not wait on each other.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, M> {
@@ -109,16 +108,14 @@ interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, 
 }
 
 /**
- * One row of an optimistic store's outbox: the key it changes and the change. The factory's store
- * set keeps the rows under the store's name with this payload, so a test reads them back as
+ * One row of an optimistic store's outbox: the key and the change. A test reads the rows back with
  * `outboxStore<KeyedMutation<K, M>>(name)`. A single store's key is `Unit`.
  */
 @Serializable data class KeyedMutation<K, M>(val key: K, val mutation: M)
 
 /**
- * What the server answered one change with, from the `deliver` function of
- * [DataScope.optimisticStores]. The `send` and `exchange` forms of [optimisticStore] and
- * [optimisticStores] build it, so only a store that mixes the two needs it.
+ * The server's answer to one change, from the `deliver` function of [DataScope.optimisticStores].
+ * The `send` and `exchange` forms build it, so only a store that mixes the two needs it.
  */
 sealed interface Delivery<out T> {
   /** Nothing. The change is applied to the truth with `apply`. */
@@ -129,27 +126,22 @@ sealed interface Delivery<out T> {
 }
 
 /**
- * A store over [base] whose value callers change before the server confirms it, as
- * [OptimisticQueryStore] describes, for a server that answers each change with nothing. [base]
- * holds the truth: the last fetched value, plus each change once it has been sent. Every waiting
- * change is kept as a row in the outbox called [name], opened from the factory's store set. Only
- * one outbox per name may run at a time, so build this store once, in the one owner that changes
- * this data, just as with [DataScope.outbox]. Calling `clear()` on the returned store clears the
- * truth in [base] and drops the waiting changes with it.
+ * An [OptimisticQueryStore] over [base], for a server that answers each change with nothing.
  *
- * @param apply the change [mutation] makes to the current value. Null in means nothing is stored
- *   yet, and null out means the change removes the value. It runs on the data scope's dispatcher,
- *   again on every change to the truth or the rows, so it must be cheap and pure. It must also be
- *   idempotent: applied to a value that already holds the change, it returns that value unchanged,
- *   as setting a field does, and as an append does once it skips an item already there. A fetch
- *   that overlapped the send, or a resend after a restart, can hand it such a value, and the store
- *   cannot tell. A change that cannot be made idempotent, like a counter, takes the `exchange` form
- *   instead, so the server's value replaces the truth once it answers.
- * @param send delivers one change, with the row's id, the same id `pending` shows and a restart
- *   keeps. Pass it to the server as the request's idempotency key, since a row still sending when
- *   the process dies is sent again. Once it returns, the change is applied to the truth with
- *   [apply]. It runs on the data scope's dispatcher, as [DataScope.outbox]'s send does, and throws
- *   [PermanentFailure] for a rejection that retrying cannot fix.
+ * [base] holds the truth, and each waiting change is a row in the outbox called [name]. Only one
+ * outbox per name may run at a time, so build this store once, in the one owner of this data, as
+ * with [DataScope.outbox]. `clear()` on the store clears [base] and drops the waiting changes.
+ *
+ * @param apply returns the value with [mutation] applied. A null input means nothing is stored, and
+ *   a null result removes the value. It runs on the data scope's dispatcher each time the truth or
+ *   the rows change, so keep it cheap and pure. It must also be idempotent: given a value that
+ *   already holds the change, it returns that value unchanged, as setting a field does. A fetch
+ *   that overlapped the send, or a resend after a restart, can pass it such a value. A change that
+ *   cannot be idempotent, like a counter's increment, takes the `exchange` form instead.
+ * @param send delivers one change with the row's id. The id stays the same across attempts and
+ *   restarts, so pass it to the server as the idempotency key. Once `send` returns, [apply] applies
+ *   the change to the truth. It runs on the data scope's dispatcher. Throw [PermanentFailure] for a
+ *   rejection that retrying cannot fix.
  * @param serializer stores each change as a row. The default serves a `@Serializable` mutation.
  */
 inline fun <T, reified M> DataScope.optimisticStore(
@@ -175,17 +167,18 @@ inline fun <T, reified M> DataScope.optimisticStore(
     .invoke(Unit)
 
 /**
- * [optimisticStore] for a server that answers each change with the value it holds now. [exchange]
- * delivers one change as `send` does there and returns that value, which replaces the truth in
- * [base] as fresh data in place of applying the change locally. For a change that cannot be made
- * idempotent, like a counter, or a server whose answer carries fields the client cannot compute.
+ * [optimisticStore] for a server that answers each change with the value it now holds. [exchange]
+ * returns that value, and it replaces the truth in [base]. Use this form for a change that cannot
+ * be idempotent, like a counter, or for an answer with fields the client cannot compute.
  *
- * The value is exact once the server answers. Until then, the store cannot tell whether a value
- * fetched meanwhile already holds the waiting change, so it applies the change on top. A counter
- * refreshed while its change sends shows the change twice. So does one reopened after the process
- * stopped between storing the answer and marking the row sent, until the resend answers. Pass the
- * id to the server as the request's idempotency key, as with `send`, so the resend is not counted
- * again.
+ * Until the server answers, the value is an estimate. The store applies the waiting change on top
+ * of each fetch, and cannot tell whether the fetch already holds it. So a counter can show a change
+ * twice until the answer arrives, after a refresh during the send or after a restart that left the
+ * row sending.
+ *
+ * To keep a count exact, give each change its own id, have the server return the ids its count
+ * holds, and make [apply] skip a change whose id is already there. As with `send`, pass the row's
+ * id as the idempotency key on every attempt.
  */
 @JvmName("optimisticStoreExchanging")
 inline fun <T, reified M> DataScope.optimisticStore(
@@ -208,15 +201,14 @@ inline fun <T, reified M> DataScope.optimisticStore(
     .invoke(Unit)
 
 /**
- * [optimisticStore] per key, for a [DataScope.keyed] query: a store for each key over the store
- * [base] gives for it, all sharing the outbox called [name]. [base] is called once per key, and the
- * store it returns serves that key's views and its commits for as long as this set lives. So the
- * set keeps one base store object per key it has seen, and nothing frees a key while the set lives.
- * What each one holds is up to [base]: for keys without bound, like thread ids, give it views over
- * one capped map, as [QueryStore.inMemoryByKey] returns, or over the database, so the object kept
- * per key is small and the values have a bound of their own. Keys need a stable `toString`, which
- * orders the rows, and [keySerializer], which stores them. [send] gets the key beside the change
- * and its id.
+ * [optimisticStore] per key, for a [DataScope.keyed] query. Every key shares the outbox called
+ * [name], and [send] gets the key with the change and its id.
+ *
+ * [base] runs once per key, and its store serves that key for as long as this set lives. So the set
+ * keeps one store object per key it has seen. For keys without bound, like thread ids, return small
+ * views over one bounded source, like [QueryStore.inMemoryByKey] or a database table.
+ *
+ * Keys need a stable `toString`, which orders the rows, and a [keySerializer], which stores them.
  */
 inline fun <reified K : Any, T, reified M> DataScope.optimisticStores(
   name: String,

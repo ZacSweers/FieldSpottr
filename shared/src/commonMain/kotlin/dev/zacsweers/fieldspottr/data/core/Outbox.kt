@@ -47,10 +47,10 @@ class PermanentFailure(message: String, cause: Throwable? = null) : Exception(me
  *                         permanent or out of attempts: Failed, then revert(payload)
  * ```
  *
- * Handles follow the row, so they survive a restart through [operation]. A handle settles with the
- * outcome of the attempt it follows, so after a retry an earlier handle keeps its own result. When
- * the outbox's scope stops, its unsettled handles settle Cancelled and the rows stay for the next
- * outbox. Drains start on enqueue, on reconnect and at startup.
+ * Handles follow the row, and [operation] finds one again after a restart. A handle settles with
+ * the attempt it follows, so after a retry an earlier handle keeps its own result. When the
+ * outbox's scope stops, unsettled handles settle Cancelled and the rows stay for the next outbox.
+ * Drains start on enqueue, on reconnect and at startup.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface Outbox<E> {
@@ -58,11 +58,12 @@ interface Outbox<E> {
   val entries: Flow<List<OutboxEntry<E>>>
 
   /**
-   * Runs [apply], the optimistic local change, then inserts a row, in one command. If apply throws,
-   * nothing is inserted and the handle fails. If the insert throws, revert undoes the change and
-   * the handle fails. Once apply returns, the insert runs to the end even if the outbox's scope
-   * stops. Without a [key], every row shares one order. The handle's [OutboxOperation.stored]
-   * settles once the row is in, before any send.
+   * Runs [apply], the optimistic local change, then inserts a row, in one command. Without a [key],
+   * every row shares one order.
+   *
+   * If apply throws, nothing is inserted and the handle fails. If the insert throws, revert undoes
+   * the change and the handle fails. Once apply returns, the insert finishes even if the outbox's
+   * scope stops. [OutboxOperation.stored] settles once the row is in, before any send.
    */
   fun enqueue(payload: E, key: String? = null, apply: suspend () -> Unit = {}): OutboxOperation
 
@@ -89,18 +90,16 @@ interface Outbox<E> {
 
 /**
  * The handle [Outbox.enqueue] and [OptimisticQueryStore.mutate] return. As an [Operation] it
- * follows the row's send, as [Outbox] describes: Succeeded once sent, Failed once rejected for good
- * or out of attempts, Cancelled once discarded. [stored] settles earlier, once the row is in the
- * store.
+ * follows the row's send: Succeeded once sent, Failed once rejected for good or out of attempts,
+ * Cancelled once discarded. [stored] settles earlier, once the row is in the store.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OutboxOperation : Operation {
   /**
-   * Whether the change reached the store. Succeeded once its row is written, so it sends when it
-   * can and, in a durable [OutboxStore], outlives a restart. Failed when the store rejected it, so
-   * nothing sends, and Cancelled when the owner stopped before the row was written. Await it when
-   * keeping the change is enough, like a composer that closes once the message is saved and shows
-   * its delivery in the list.
+   * Whether the change reached the store. It succeeds once the row is written, so the change will
+   * send, and in a durable [OutboxStore] it outlives a restart. It fails when the store rejects the
+   * row, and settles Cancelled when the owner stops first. Await it when keeping the change is
+   * enough, like a composer that closes once the message is saved.
    */
   val stored: Operation
 }

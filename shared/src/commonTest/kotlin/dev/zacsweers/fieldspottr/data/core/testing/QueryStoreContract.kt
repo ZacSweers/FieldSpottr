@@ -121,6 +121,38 @@ abstract class QueryStoreContract {
   }
 
   @Test
+  fun `a fetch clear leaves an empty store empty without asking`() = runTest {
+    val store = newStore()
+
+    store.clearFetched { error("Nothing is stored to keep") }
+    assertNull(store.data.first())
+  }
+
+  @Test
+  fun `a fetch clear keeps what is stored when asked to`() = runTest {
+    val store = newStore()
+    val asked = mutableListOf<Instant>()
+
+    store.write("a", LATER)
+    store.clearFetched { storedAt -> true.also { asked += storedAt } }
+    assertEquals(Fetched("a", LATER), store.data.first())
+    assertEquals(LATER, asked.distinct().single())
+  }
+
+  @Test
+  fun `a fetch clear removes what is stored when not asked to keep it`() = runTest {
+    val store = newStore()
+
+    store.write("a", FETCHED)
+    store.clearFetched { false }
+    assertNull(store.data.first())
+
+    // The store takes writes again
+    store.write("b", LATER)
+    assertEquals(Fetched("b", LATER), store.data.first())
+  }
+
+  @Test
   fun `an older fetch never replaces what a newer fetch stored meanwhile`() = runTest {
     val data = testDataScope(clock = testClock(FETCHED))
     val store = newStore()

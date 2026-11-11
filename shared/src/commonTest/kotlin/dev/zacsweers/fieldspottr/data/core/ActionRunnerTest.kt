@@ -19,6 +19,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
@@ -183,6 +184,62 @@ class ActionRunnerTest {
     assertThat(ran).containsExactly("new")
     old.assertCancelled()
     new.assertSucceeded()
+  }
+
+  @Test
+  fun `a conflated command cancels the one before it and starts once its cleanup ends`() = runTest {
+    val data = testDataScope()
+    val searches = data.newConflatedActionRunner()
+    val ran = mutableListOf<String>()
+    val cleaningUp = CompletableDeferred<Unit>()
+    val finishCleanup = CompletableDeferred<Unit>()
+
+    val a = searches.run {
+      ran += "A"
+      try {
+        awaitCancellation()
+      } finally {
+        withContext(NonCancellable) {
+          cleaningUp.complete(Unit)
+          finishCleanup.await()
+        }
+      }
+    }
+    testScheduler.runCurrent()
+    val b = searches.run { ran += "B" }
+    val c = searches.run { ran += "C" }
+    cleaningUp.await()
+    testScheduler.runCurrent()
+
+    // A is still cleaning up, so C waits, and B never starts
+    assertThat(ran).containsExactly("A")
+    c.assertPending()
+    finishCleanup.complete(Unit)
+    testScheduler.runCurrent()
+
+    assertThat(ran).containsExactly("A", "C")
+    a.assertCancelled()
+    b.assertCancelled()
+    c.assertSucceeded()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `conflated runners from one data scope never cancel or wait on each other`() = runTest {
+    val data = testDataScope()
+    val first = data.newConflatedActionRunner()
+    val second = data.newConflatedActionRunner()
+    val release = CompletableDeferred<Unit>()
+
+    val running = first.run { release.await() }
+    testScheduler.runCurrent()
+    second.run {}.awaitSucceeded()
+
+    running.assertRunning()
+    release.complete(Unit)
+    testScheduler.runCurrent()
+    running.assertSucceeded()
+    data.assertNoFailures()
   }
 
   @Test

@@ -517,7 +517,7 @@ internal constructor(
         }
           // A row for another hash came from an older manifest, so it counts as nothing stored
           .map { row -> row?.takeIf { it.hash == area.hash }?.toFetched() },
-      clear = { withContext(io) { db.await().clearAreaFeed(name) } },
+      clear = { keepsStored -> withContext(io) { db.await().clearAreaFeed(area, keepsStored) } },
       invalidate = { withContext(io) { db.await().invalidateAreaFeed(name) } },
     ) { feed, fetchedAt, keepsStored ->
       withContext(io) {
@@ -620,10 +620,27 @@ internal constructor(
     }
   }
 
-  private suspend fun FSDatabase.clearAreaFeed(name: String) {
-    transaction {
-      fsdbQueries.deleteAreaPermits(name)
-      fsdbQueries.deleteAreaFeed(name)
+  /**
+   * Removes [area]'s permits and its feed row in one transaction, unless [keepsStored] says the
+   * feed stored now for this manifest should stay. A row for another hash counts as nothing stored,
+   * as in [replaceAreaFeed].
+   */
+  private suspend fun FSDatabase.clearAreaFeed(
+    area: AvailabilityManifestArea,
+    keepsStored: (storedAt: Instant) -> Boolean,
+  ) {
+    val areaName = area.resolvedAreaName
+    feedWrites.withLock {
+      transactionRetryingConflicts {
+        val stored = fsdbQueries.getAreaFeed(areaName).executeAsOneOrNull()
+        if (
+          stored != null && stored.hash == area.hash && keepsStored(stored.toFetched().fetchedAt)
+        ) {
+          return@transactionRetryingConflicts
+        }
+        fsdbQueries.deleteAreaPermits(areaName)
+        fsdbQueries.deleteAreaFeed(areaName)
+      }
     }
   }
 

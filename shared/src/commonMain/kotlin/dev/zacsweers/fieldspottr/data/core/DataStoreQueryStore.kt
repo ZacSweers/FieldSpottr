@@ -27,7 +27,15 @@ import okio.SYSTEM
 fun <T> DataStore<Fetched<T>?>.asQueryStore(): QueryStore<T> =
   QueryStore.of(
     data,
-    clear = { updateData { null } },
+    clear = { keepsStored ->
+      updateData { current ->
+        if (current != null && keepsStored(current.fetchedAt)) {
+          current
+        } else {
+          null
+        }
+      }
+    },
     invalidate = { updateData { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
   ) { value, fetchedAt, keepsStored ->
     updateData { current ->

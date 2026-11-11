@@ -58,11 +58,10 @@ data class OutboxEntry<E>(
  * keeps rows across process death.
  *
  * The outbox drains each key on its own, so calls for different keys can run at the same time. A
- * store over a shared resource, like a database, must allow that or take turns itself.
+ * store over a shared resource, like a database, must handle that.
  *
- * Calls come from the outbox's runner, on its scope's dispatcher, usually `Dispatchers.Default`, so
- * they must not block that thread. A store whose calls block a thread should wrap them in
- * `withContext` with an I/O dispatcher passed to its constructor, as [QueryStore] describes.
+ * Calls run on the outbox scope's dispatcher, usually `Dispatchers.Default`, so they must not block
+ * it. A store that blocks moves that work to an I/O dispatcher, as [QueryStore] describes.
  */
 interface OutboxStore<E> {
   /**

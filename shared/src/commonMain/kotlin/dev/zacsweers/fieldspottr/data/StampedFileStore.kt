@@ -78,9 +78,15 @@ internal class StampedFileStore<T : Any>(
   }
 
   override suspend fun clear() {
+    writes.withLock { remove() }
+  }
+
+  override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
     writes.withLock {
-      withContext(io) { fs.delete(path) }
-      loaded.value = Loaded(null)
+      val stored = data.first()
+      if (stored == null || !keepsStored(stored.fetchedAt)) {
+        remove()
+      }
     }
   }
 
@@ -91,6 +97,12 @@ internal class StampedFileStore<T : Any>(
       withContext(io) { stamp(QueryStore.INVALIDATED) }
       loaded.value = Loaded(current.copy(fetchedAt = QueryStore.INVALIDATED))
     }
+  }
+
+  /** Deletes the file, then shows nothing stored. Callers hold [writes]. */
+  private suspend fun remove() {
+    withContext(io) { fs.delete(path) }
+    loaded.value = Loaded(null)
   }
 
   /** Writes [value] and its stamp, then shows it. Callers hold [writes]. */
