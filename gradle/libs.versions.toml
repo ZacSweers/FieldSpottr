@@ -63,7 +63,7 @@ circuitx-overlays = { module = "com.slack.circuit:circuitx-overlays", version.re
 circuitx-gestureNav = { module = "com.slack.circuit:circuitx-gesture-navigation", version.ref = "circuit" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-jb" }
 compose-material-icons = { module = "org.jetbrains.compose.material:material-icons-core", version = "1.7.3" }
-compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.12.0-alpha03" }
+compose-material-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.12.0-SNAPSHOT+v-mazunin-enable-lifecycle-and-nav3-for-1-12-0-alpha02" }
 compose-material3-adaptive = { module = "org.jetbrains.compose.material3.adaptive:adaptive", version = "1.3.0" }
 # Tooling support (Previews, etc.)
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-jb" }
