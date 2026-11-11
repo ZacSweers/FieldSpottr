@@ -62,7 +62,7 @@ class OutboxStoresTest {
     val store = inMemoryOutboxStore<String>()
     store.insert("k", "a")
 
-    val outbox = data.outbox(store, send = send)
+    val outbox = data.outbox("store", store, send = send)
 
     outbox.entries.first { it.isEmpty() }
     assertThat(send.sent).containsExactly("a")

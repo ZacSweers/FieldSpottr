@@ -50,6 +50,15 @@ abstract class QueryStoreContract {
   }
 
   @Test
+  fun `a write replaces a value fetched later`() = runTest {
+    val store = newStore()
+
+    store.write("a", LATER)
+    store.write("b", FETCHED)
+    assertEquals(Fetched("b", FETCHED), store.data.first())
+  }
+
+  @Test
   fun `invalidate keeps the value and marks it stale`() = runTest {
     val store = newStore()
 
@@ -160,16 +169,12 @@ abstract class QueryStoreContract {
     val releaseOlder = CompletableDeferred<Unit>()
     val freshness = Freshness.staleAfter(1.hours)
     val older =
-      data.query(
-        store,
-        freshness = freshness,
-        fetch = {
-          olderRead.complete(Unit)
-          releaseOlder.await()
-          "older"
-        },
-      )
-    val newer = data.query(store, freshness = freshness, fetch = { "newer" })
+      data.query(store, freshness) {
+        olderRead.complete(Unit)
+        releaseOlder.await()
+        "older"
+      }
+    val newer = data.query(store, freshness) { "newer" }
 
     // The older fetch reads the server first, and the newer one stores its value meanwhile
     val first = older.requestFetch(force = true)

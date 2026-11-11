@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
+import androidx.datastore.core.DataStore
 import dev.zacsweers.fieldspottr.data.core.testing.OutboxStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Instant
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import okio.ForwardingFileSystem
@@ -41,14 +46,16 @@ class InMemoryOutboxStoreTest : OutboxStoreContract() {
 
 class DataStoreOutboxStoreTest : OutboxStoreContract() {
   private lateinit var clock: TestClock
+  private lateinit var dataStore: DataStore<OutboxLog>
   private val fileSystem = FakeFileSystem()
 
   override fun TestScope.newStore(keepSettledFor: Duration): OutboxStore<String> {
     clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
     val directory = "/outbox".toPath()
     fileSystem.createDirectories(directory)
+    dataStore = outboxDataStore(backgroundScope, { directory / "test.outbox" }, fileSystem)
     return DataStoreOutboxStore(
-      dataStore = outboxDataStore(backgroundScope, { directory / "test.outbox" }, fileSystem),
+      dataStore = dataStore,
       codec = String.serializer().asCodec(Json),
       keepSettledFor = keepSettledFor,
       clock = clock,
@@ -57,6 +64,54 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
 
   override fun advanceStoreTime(duration: Duration) {
     clock.shift(duration)
+  }
+
+  // A JSON object where the codec expects a string
+  override suspend fun TestScope.insertUnreadable(
+    store: OutboxStore<String>,
+    key: String,
+  ): EntryId {
+    val row = OutboxLog.Row("unreadable", key, payload = """{"a":1}""", status = "queued")
+    dataStore.updateData { it.copy(rows = it.rows + row) }
+    return EntryId(row.id)
+  }
+
+  @Test
+  fun `a log with fields this version does not know still reads`() = runTest {
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    val codec = String.serializer().asCodec(Json)
+    val payload = Json.encodeToString(codec.encode("a"))
+    // As a newer version would write it, with a field on the log and one on the row
+    fileSystem.write(directory / "newer.outbox") {
+      writeUtf8(
+        """{"version":2,"rows":[""" +
+          """{"id":"row","key":"k","payload":$payload,"status":"queued","priority":1}]}"""
+      )
+    }
+    val store =
+      DataStoreOutboxStore(
+        outboxDataStore(backgroundScope, { directory / "newer.outbox" }, fileSystem),
+        codec,
+      )
+
+    assertEquals(listOf("a"), store.entries().first().map { it.payload })
+  }
+
+  @Test
+  fun `a log that does not parse starts empty and keeps working`() = runTest {
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    fileSystem.write(directory / "broken.outbox") { writeUtf8("""{"rows":[{"id":""") }
+    val store =
+      DataStoreOutboxStore(
+        outboxDataStore(backgroundScope, { directory / "broken.outbox" }, fileSystem),
+        String.serializer().asCodec(Json),
+      )
+
+    assertEquals(emptyList(), store.entries().first())
+    store.insert("k", "a")
+    assertEquals(listOf("a"), store.entries().first().map { it.payload })
   }
 
   @Test
@@ -194,4 +249,56 @@ class OutboxStoresClearAllTest {
       // The store this set built keeps its file, now empty, since its DataStore still owns it
       assertTrue(fileSystem.exists(directory / "tags.outbox"))
     }
+}
+
+/** [OutboxStores.open] on the two in-process store sets. The SQLDelight set has a JVM test. */
+class OutboxStoresPayloadTypeTest {
+  @Test
+  fun `an in-memory set opens a name again for an equal payload type only`() = runTest {
+    assertOneTypePerName(InMemoryOutboxStores())
+  }
+
+  @Test
+  fun `a file set opens a name again for an equal payload type only`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    assertOneTypePerName(DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem))
+  }
+}
+
+/**
+ * Checks that [stores] returns the same store for a name opened again with a new serializer object
+ * of the same type, and throws for a serializer of another type.
+ */
+internal fun assertOneTypePerName(stores: OutboxStores) {
+  val first = stores.open("notes", ListSerializer(String.serializer()))
+
+  assertSame(first, stores.open("notes", ListSerializer(String.serializer())))
+  val failure =
+    assertFailsWith<IllegalStateException> {
+      stores.open("notes", ListSerializer(Int.serializer()))
+    }
+  assertContains(failure.message.orEmpty(), "notes")
+  assertContains(failure.message.orEmpty(), "kotlin.String")
+  assertContains(failure.message.orEmpty(), "kotlin.Int")
+}
+
+/** [UndecodableRows], which both durable stores use to hand on rows that do not decode. */
+class UndecodableRowsTest {
+  @Test
+  fun `a listener that throws still hears every waiting row`() {
+    val rows = UndecodableRows()
+    rows.found("a", IllegalArgumentException("a"))
+    rows.found("b", IllegalArgumentException("b"))
+    val heard = ArrayList<EntryId>()
+
+    rows.listen { id, _ ->
+      heard += id
+      throw IllegalStateException("The failure handler rethrows")
+    }
+    rows.found("c", IllegalArgumentException("c"))
+
+    assertEquals(listOf(EntryId("a"), EntryId("b"), EntryId("c")), heard)
+  }
 }

@@ -16,18 +16,29 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 
-/** A value and the time it was fetched. */
-data class Fetched<out T>(val value: T, val fetchedAt: Instant)
+/**
+ * A value and the time it was fetched.
+ *
+ * [fetchedAt] can hold a sentinel, like [QueryStore.INVALIDATED] for data marked stale. A screen
+ * that shows when the data was fetched reads [lastFetchedAt] instead.
+ */
+data class Fetched<out T>(val value: T, val fetchedAt: Instant) {
+  /**
+   * The time the value was fetched, or null when it has no usable fetch time: it was invalidated,
+   * or it was built only from local changes and never fetched. For a screen that shows "updated
+   * at". The sentinels for both sit at or before [QueryStore.INVALIDATED].
+   */
+  val lastFetchedAt: Instant?
+    get() =
+      if (fetchedAt > QueryStore.INVALIDATED) {
+        fetchedAt
+      } else {
+        null
+      }
+}
 
 /** Just the values, for readers that do not need the fetch time. */
 fun <T> Flow<Fetched<T>?>.values(): Flow<T?> = map { it?.value }
-
-/**
- * The stored values without their fetch times, or null while nothing is stored. Collecting it never
- * fetches, so a screen reads its query's `data` instead.
- */
-val <T> QueryStore<T>.fetchedData: Flow<T?>
-  get() = data.values()
 
 /**
  * Where a [DataQuery] keeps its value and the time it was fetched. The query judges freshness from
@@ -42,6 +53,9 @@ val <T> QueryStore<T>.fetchedData: Flow<T?>
  * must not block it. A store that blocks, like a JDBC driver or file I/O, moves that work to an I/O
  * dispatcher it takes in its constructor. A store that only suspends, like DataStore, needs
  * nothing.
+ *
+ * A store implements [data], [writeFetched], [clearFetched] and [invalidate]. [write] and [clear]
+ * call the conditional forms with a `keepsStored` that is always false.
  */
 interface QueryStore<T> {
   /** The stored value and its fetch time, or null when nothing is stored. Emits on every change. */
@@ -49,9 +63,11 @@ interface QueryStore<T> {
 
   /**
    * Stores [value], fetched at [fetchedAt], whatever is stored now. For an edit outside a fetch,
-   * like a seed. A query's fetch uses [writeFetched].
+   * like a seed. A query's fetch uses [writeFetched], which this calls.
    */
-  suspend fun write(value: T, fetchedAt: Instant)
+  suspend fun write(value: T, fetchedAt: Instant) {
+    writeFetched(value, fetchedAt) { false }
+  }
 
   /**
    * A fetch's write. Stores [value], fetched at [fetchedAt], unless [keepsStored] says the stored
@@ -67,8 +83,10 @@ interface QueryStore<T> {
     keepsStored: (storedAt: Instant) -> Boolean,
   )
 
-  /** Removes the stored value, such as on logout. */
-  suspend fun clear()
+  /** Removes the stored value, such as on logout. It calls [clearFetched]. */
+  suspend fun clear() {
+    clearFetched { false }
+  }
 
   /**
    * [writeFetched] for a value that is gone: removes the stored value unless [keepsStored] says it
@@ -84,7 +102,8 @@ interface QueryStore<T> {
     /**
      * The fetch time of an invalidated value. Every freshness rule counts it as stale, and it
      * survives a store that keeps only epoch milliseconds. A custom store writes it to mark data
-     * stale, and returns it for data with no usable fetch time.
+     * stale, and returns it for data with no usable fetch time. [Fetched.lastFetchedAt] reads it as
+     * null.
      */
     val INVALIDATED: Instant = Instant.fromEpochSeconds(0)
 
@@ -92,6 +111,7 @@ interface QueryStore<T> {
      * The fetch time of a value built only from local changes, like an optimistic store's waiting
      * changes over a truth that a capped store evicted. It is stale, and a query whose data on
      * screen drops to it fetches again at once, as it does when the data goes away.
+     * [Fetched.lastFetchedAt] reads it as null.
      */
     internal val UNFETCHED: Instant = Instant.fromEpochSeconds(-1)
 
@@ -112,11 +132,11 @@ interface QueryStore<T> {
     /**
      * A store from its parts, for a source of truth that merges a fetch instead of replacing it.
      *
-     * [write] serves [QueryStore.write] and [QueryStore.writeFetched]. In one update, like one
-     * transaction, it reads the stored fetch time, asks `keepsStored` about it when something is
-     * stored, and writes only when the answer is false. [clear] serves [QueryStore.clear] and
-     * [QueryStore.clearFetched] the same way. The unconditional calls pass a `keepsStored` that is
-     * always false.
+     * [write] serves [QueryStore.writeFetched]. In one update, like one transaction, it reads the
+     * stored fetch time, asks `keepsStored` about it when something is stored, and writes only when
+     * the answer is false. [clear] serves [QueryStore.clearFetched] the same way.
+     * [QueryStore.write] and [QueryStore.clear] reach them with a `keepsStored` that is always
+     * false.
      *
      * Without [invalidate], invalidating reads the value and writes it back with a stale fetch
      * time. That is two steps, so a store that other writers share can lose a write between them.
@@ -135,16 +155,11 @@ interface QueryStore<T> {
       return object : QueryStore<T> {
         override val data: Flow<Fetched<T>?> = data
 
-        override suspend fun write(value: T, fetchedAt: Instant) =
-          writer(value, fetchedAt, REPLACES_STORED)
-
         override suspend fun writeFetched(
           value: T,
           fetchedAt: Instant,
           keepsStored: (storedAt: Instant) -> Boolean,
         ) = writer(value, fetchedAt, keepsStored)
-
-        override suspend fun clear() = clearer(REPLACES_STORED)
 
         override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) =
           clearer(keepsStored)
@@ -153,14 +168,11 @@ interface QueryStore<T> {
           if (invalidator != null) {
             invalidator()
           } else {
-            data.first()?.let { writer(it.value, INVALIDATED, REPLACES_STORED) }
+            data.first()?.let { writer(it.value, INVALIDATED) { false } }
           }
         }
       }
     }
-
-    /** The `keepsStored` of an unconditional write or clear, which replaces whatever is stored. */
-    private val REPLACES_STORED: (Instant) -> Boolean = { false }
   }
 }
 
@@ -182,10 +194,6 @@ sealed class InMemoryQueryStore<T> : QueryStore<T> {
    */
   abstract fun update(transform: (Fetched<T>?) -> Fetched<T>?)
 
-  override suspend fun write(value: T, fetchedAt: Instant) {
-    update { Fetched(value, fetchedAt) }
-  }
-
   override suspend fun writeFetched(
     value: T,
     fetchedAt: Instant,
@@ -198,10 +206,6 @@ sealed class InMemoryQueryStore<T> : QueryStore<T> {
         Fetched(value, fetchedAt)
       }
     }
-  }
-
-  override suspend fun clear() {
-    update { null }
   }
 
   override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {

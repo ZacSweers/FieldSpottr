@@ -5,7 +5,11 @@ package dev.zacsweers.fieldspottr.data.core
 import kotlin.jvm.JvmInline
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
 
 /** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
 @JvmInline value class EntryId(val value: String)
@@ -78,15 +82,75 @@ interface OutboxStore<E> {
    */
   suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean
 
-  /** Rows neither Sent nor Discarded, oldest first, re-emitted on every change. */
+  /**
+   * Rows neither Sent nor Discarded, oldest first, re-emitted on every change. A store decodes each
+   * row on its own and leaves out a row it cannot decode, as [onUndecodable] describes.
+   */
   fun entries(): Flow<List<OutboxEntry<E>>>
 
   /**
    * One row, still observable after Sent or Discarded until the store prunes it. Null when there is
-   * no such row.
+   * no such row, or when its payload cannot be decoded.
    */
   fun entry(id: EntryId): Flow<OutboxEntry<E>?>
+
+  /**
+   * Each key's head: its oldest row that is Queued or Sending, one per key, re-emitted when a head
+   * changes. The order of the list is unspecified. Only a head can send or back off, so the outbox
+   * watches this in place of [entries]. A row that cannot be decoded is skipped, so the next row on
+   * its key is the head.
+   *
+   * The default reads and decodes every row of [entries] on each change. A store over many rows
+   * overrides it so that a change decodes and returns about one row per key.
+   */
+  fun heads(): Flow<List<OutboxEntry<E>>> =
+    entries()
+      .map { rows -> rows.filter { it.status.isSendable }.distinctBy { it.key } }
+      .distinctUntilChanged()
+
+  /**
+   * [key]'s head as [heads] describes it, read once, or null when the key has none. A drain reads
+   * this before each send. The default reads [entries].
+   */
+  suspend fun head(key: String): OutboxEntry<E>? =
+    entries().first().firstOrNull { it.key == key && it.status.isSendable }
+
+  /**
+   * Hands [report] each row neither Sent nor Discarded that this store left out of a read because
+   * its payload does not decode, with the decode error. Such a row never makes a read throw and
+   * never blocks its key or another key. It stays stored until [OutboxStores.clearAll].
+   *
+   * The store hands on each such row once for as long as it lives, on the thread of the read that
+   * met it, so [report] must not block. A row met before any listener was set waits for the first
+   * one. One listener hears at a time, and a new one replaces the last. Closing the result removes
+   * [report]. The default never calls it, which suits a store that keeps payloads as objects.
+   *
+   * A throw from [report] is dropped. The listener is usually the failure handler itself, so no
+   * other handler is left to tell. The read that met the row goes on, and the row counts as handed
+   * on.
+   */
+  fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
+    AutoCloseable {}
 }
+
+/** A store an [OutboxStores] set opened for a name, with the payload type it was opened for. */
+internal class OpenedStore<S>(val descriptor: SerialDescriptor, val store: S) {
+  /**
+   * [store], if [serializer] describes the payload type it was opened for. Otherwise it throws, as
+   * [OutboxStores.open] describes, since the store's codec would fail on the other type.
+   */
+  fun checked(name: String, serializer: KSerializer<*>): S {
+    check(serializer.descriptor == descriptor) {
+      "Outbox $name holds payloads of type $descriptor, so it cannot open for " +
+        "${serializer.descriptor}"
+    }
+    return store
+  }
+}
+
+/** Queued or Sending: the row waits to send, or is in flight. Only such a row can be a head. */
+internal val OutboxStatus.isSendable: Boolean
+  get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending
 
 /**
  * A set of [OutboxStore]s keyed by outbox name. The app builds one set and hands it to
@@ -96,9 +160,13 @@ interface OutboxStore<E> {
  */
 interface OutboxStores {
   /**
-   * The store for the outbox called [name]. Calls with the same name return stores over the same
-   * rows, so an outbox built again after its scope ended finds the rows it left. Use one payload
-   * type per name. A durable store encodes each payload with [serializer] in the set's format.
+   * The store for the outbox called [name]. Calls with the same name return the same store, so an
+   * outbox built again after its scope ended finds the rows it left. A durable store encodes each
+   * payload with [serializer] in the set's format.
+   *
+   * A name holds one payload type. A later call whose [serializer] has a descriptor equal to the
+   * first call's returns the store, also when the serializer is a new object. A call whose
+   * descriptor differs throws [IllegalStateException], which names the outbox and both types.
    */
   fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E>
 

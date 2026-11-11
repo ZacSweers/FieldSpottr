@@ -24,10 +24,11 @@ import kotlinx.coroutines.withContext
  * since a driver's calls block. A write or clear runs in a transaction on [database] that reads the
  * row first, so it checks the stored fetch time and changes the row in one step, as
  * [QueryStore.writeFetched] and [QueryStore.clearFetched] require, and [write] or [clear] runs
- * inside that transaction. When another connection writes between that read and the write, the
- * transaction runs again, as [transactionRetryingConflicts] describes, so [write] and [clear] may
- * run more than once. Keep [invalidate] to one update, like an UPDATE that sets the fetch time to
- * [QueryStore.INVALIDATED], so it never loses a write that lands between a read and a write.
+ * inside that transaction. When SQLite refuses the transaction because another connection holds a
+ * lock, the transaction runs again, as [transactionRetryingConflicts] describes, so [write] and
+ * [clear] may run more than once. Keep [invalidate] to one update, like an UPDATE that sets the
+ * fetch time to [QueryStore.INVALIDATED], so it never loses a write that lands between a read and a
+ * write.
  *
  * Like [SqlDelightOutboxStores], this depends on SQLDelight and the core API only, so it can move
  * to an artifact of its own.

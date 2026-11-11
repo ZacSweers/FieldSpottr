@@ -45,6 +45,16 @@ internal class RealActionRunner(
   internal val keysHeld: Int
     get() = tails.load().size
 
+  /**
+   * Whether no command on [ordering]'s key is queued, running or settling. A key leaves the map
+   * only after its newest command settled, so a true answer means every command submitted on it
+   * before this call has finished. [Ordering.Concurrent] has no key and is always idle.
+   */
+  internal fun isIdle(ordering: Ordering): Boolean {
+    val key = ordering.chainKey ?: return true
+    return tails.load()[key] == null
+  }
+
   override fun run(ordering: Ordering, block: suspend () -> Unit): Operation =
     runOrJoin(ordering, tag = null, joins = { false }, block = block)
 

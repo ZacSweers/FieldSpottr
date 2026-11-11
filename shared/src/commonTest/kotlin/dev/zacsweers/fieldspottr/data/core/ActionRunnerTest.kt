@@ -225,6 +225,19 @@ class ActionRunnerTest {
   }
 
   @Test
+  fun `a conflated runner reports failures to its own handler`() = runTest {
+    val data = testDataScope()
+    val failures = TestFailures()
+    val searches = data.newConflatedActionRunner(onFailure = failures)
+    val failure = IllegalStateException("search failed")
+
+    assertThat(searches.run { throw failure }.awaitFailed<Throwable>()).isSameInstanceAs(failure)
+
+    assertThat(failures.take()).containsExactly(failure)
+    data.assertNoFailures()
+  }
+
+  @Test
   fun `conflated runners from one data scope never cancel or wait on each other`() = runTest {
     val data = testDataScope()
     val first = data.newConflatedActionRunner()

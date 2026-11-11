@@ -8,7 +8,9 @@ import dev.zacsweers.fieldspottr.data.core.InMemoryOutboxStores
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
-import dev.zacsweers.fieldspottr.data.core.invoke
+import dev.zacsweers.fieldspottr.data.core.RetryPolicy
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -38,9 +40,9 @@ internal constructor(
   /** What fetches threw. */
   val fetchFailures: TestFailures,
   /**
-   * What commands threw, on runners from `newActionRunner()`, inside outboxes, and in a query's
-   * commands that failed without a fetch. A runner built with its own handler reports there
-   * instead.
+   * Every other failure without a handler of its own, like what commands threw on runners from
+   * `newActionRunner()`, inside outboxes, and in a query's commands that failed without a fetch. A
+   * query, runner, outbox or optimistic store built with its own handler reports there instead.
    */
   val actionFailures: TestFailures,
   /** The outbox rows, by outbox name. Tests read them through [outboxStore]. */
@@ -96,8 +98,8 @@ internal constructor(private val delegate: DataScope, val factory: TestDataScope
     get() = factory.fetchFailures
 
   /**
-   * What commands threw, on runners from [newActionRunner] and inside outboxes. A runner built with
-   * its own handler reports there instead.
+   * Every other failure without a handler of its own, like what commands threw on runners from
+   * [newActionRunner] and inside outboxes. A part built with its own handler reports there instead.
    */
   val actionFailures: TestFailures
     get() = factory.actionFailures
@@ -133,8 +135,10 @@ fun TestScope.testDataScopeFactory(
   online: Boolean = true,
   /** Hears when rows wait, like a [RecordingOutboxScheduler]. */
   scheduler: OutboxScheduler = OutboxScheduler.None,
-  /** Whether a send that threw may succeed on a later attempt, as [DataScope.Factory] describes. */
-  canRetrySend: (Throwable) -> Boolean = { true },
+  /** The retry policy of every outbox built without one, as [DataScope.Factory] describes. */
+  retry: RetryPolicy = RetryPolicy.exponential(),
+  /** The hold-off policy of every query built without one, as [DataScope.Factory] describes. */
+  fetchRetry: RetryPolicy = RetryPolicy.exponential(initial = 1.seconds, max = 1.minutes),
 ): TestDataScopeFactory {
   val onlineState = MutableStateFlow(online)
   val fetchFailures = TestFailures()
@@ -142,13 +146,14 @@ fun TestScope.testDataScopeFactory(
   val stores = InMemoryOutboxStores()
   val delegate =
     DataScope.Factory(
-      onFailure = fetchFailures,
-      onActionFailure = actionFailures,
+      onFailure = actionFailures,
+      onFetchFailure = fetchFailures,
       online = onlineState,
       stores = stores,
       scheduler = scheduler,
       clock = clock,
-      canRetrySend = canRetrySend,
+      retry = retry,
+      fetchRetry = fetchRetry,
     )
   return TestDataScopeFactory(
     delegate,
@@ -175,6 +180,7 @@ fun TestScope.testDataScope(
   clock: TestClock = testClock(),
   online: Boolean = true,
   scheduler: OutboxScheduler = OutboxScheduler.None,
-  canRetrySend: (Throwable) -> Boolean = { true },
+  retry: RetryPolicy = RetryPolicy.exponential(),
+  fetchRetry: RetryPolicy = RetryPolicy.exponential(initial = 1.seconds, max = 1.minutes),
 ): TestDataScope =
-  testDataScopeFactory(eager, clock, online, scheduler, canRetrySend).create(backgroundScope)
+  testDataScopeFactory(eager, clock, online, scheduler, retry, fetchRetry).create(backgroundScope)

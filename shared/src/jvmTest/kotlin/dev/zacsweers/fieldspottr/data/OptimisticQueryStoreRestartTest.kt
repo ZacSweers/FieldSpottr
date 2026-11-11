@@ -12,7 +12,6 @@ import dev.zacsweers.fieldspottr.data.core.InMemoryQueryStore
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import dev.zacsweers.fieldspottr.data.core.invoke
 import dev.zacsweers.fieldspottr.data.core.optimisticStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
@@ -56,7 +55,7 @@ class OptimisticQueryStoreRestartTest {
   private fun TestScope.process(): DataScope.Factory =
     DataScope.Factory(
       onFailure = TestFailures(),
-      onActionFailure = TestFailures(),
+      onFetchFailure = TestFailures(),
       online = online,
       stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO),
       clock = testClock(START),

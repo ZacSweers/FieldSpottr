@@ -198,8 +198,8 @@ internal constructor(
   private val areasQuery =
     data.query(
       store = areasStore,
-      fetch = ::downloadAreas,
       freshness = Freshness.staleAfter(REPO_DATA_REFRESH_INTERVAL),
+      fetch = ::downloadAreas,
     )
 
   private val manifestStore =
@@ -218,16 +218,16 @@ internal constructor(
   private val manifestQuery =
     data.query(
       store = manifestStore,
-      fetch = ::downloadManifest,
       freshness = Freshness.staleAfter(REPO_DATA_REFRESH_INTERVAL),
+      fetch = ::downloadManifest,
     )
 
   // Keyed by manifest entry, so a feed whose hash changed is a new key with nothing stored
   private val feeds =
     data.keyed(
       store = ::feedStore,
-      fetch = ::downloadFeed,
       freshness = Freshness.staleAfter(REPO_DATA_REFRESH_INTERVAL),
+      fetch = ::downloadFeed,
     )
 
   private val showBuiltInAreas = MutableStateFlow(false)

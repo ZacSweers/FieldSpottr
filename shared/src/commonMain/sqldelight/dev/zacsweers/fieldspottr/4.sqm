@@ -14,3 +14,6 @@ CREATE TABLE IF NOT EXISTS outboxRow (
 );
 
 CREATE INDEX IF NOT EXISTS outboxRow_pending ON outboxRow(outbox, status, seq);
+
+-- Finds one key's rows by status in send order, for heads and nextSendable
+CREATE INDEX IF NOT EXISTS outboxRow_key ON outboxRow(outbox, orderingKey, status, seq);

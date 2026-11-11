@@ -230,8 +230,8 @@ class OutboxBacklogTest {
         }
       }
 
-    assertFailsWith<IllegalStateException> { data.outbox(flaky, send = send) }
-    data.outbox(flaky, send = send)
+    assertFailsWith<IllegalStateException> { data.outbox("flaky", flaky, send = send) }
+    data.outbox("flaky", flaky, send = send)
     runCurrent()
 
     // Only the outbox that was built counts, so the backlog still reports

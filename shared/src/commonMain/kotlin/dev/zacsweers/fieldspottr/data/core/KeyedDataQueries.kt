@@ -79,6 +79,12 @@ interface KeyedDataQueries<K : Any, T> {
   /** Marks every key's stored data stale without fetching. */
   fun invalidate(keys: Collection<K>): Operation =
     Operation.all(keys.distinct().map { invalidate(it) })
+
+  /**
+   * [requestFetch] for every key in use now, with a collector or with work queued or running. The
+   * handle settles once every request has, failed if any failed.
+   */
+  fun requestFetchAll(force: Boolean): Operation
 }
 
 /** [KeyedDataQueries.requestFetch] for [key] with `force = true`: fetches now. */

@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS outboxRow (
 
 CREATE INDEX IF NOT EXISTS outboxRow_pending ON outboxRow(outbox, status, seq);
 
+-- Finds one key's rows by status in send order, for heads and nextSendable
+CREATE INDEX IF NOT EXISTS outboxRow_key ON outboxRow(outbox, orderingKey, status, seq);
+
 insert:
 INSERT INTO outboxRow(id, outbox, orderingKey, payload, status) VALUES (?, ?, ?, ?, 'queued');
 
@@ -33,6 +36,38 @@ SELECT * FROM outboxRow WHERE outbox = ? AND status NOT IN ('sent', 'discarded')
 
 byId:
 SELECT * FROM outboxRow WHERE outbox = ? AND id = ?;
+
+-- Each key's oldest queued or sending row. It reads only outboxRow_key, one entry per row of the
+-- outbox, and fetches one row per key.
+heads:
+SELECT * FROM outboxRow
+WHERE seq IN (
+  SELECT MIN(seq) FROM outboxRow
+  WHERE outbox = :outbox AND status IN ('queued', 'sending')
+  GROUP BY orderingKey
+)
+ORDER BY seq;
+
+-- A key's oldest queued or sending row after seq :after, to step past one that does not decode.
+-- Each status is one index search for one seq, so no rows are sorted.
+nextSendable:
+SELECT * FROM outboxRow
+WHERE seq IN (
+  (
+    SELECT seq FROM outboxRow
+    WHERE outbox = :outbox AND orderingKey = :key AND status = 'queued' AND seq > :after
+    ORDER BY seq
+    LIMIT 1
+  ),
+  (
+    SELECT seq FROM outboxRow
+    WHERE outbox = :outbox AND orderingKey = :key AND status = 'sending' AND seq > :after
+    ORDER BY seq
+    LIMIT 1
+  )
+)
+ORDER BY seq
+LIMIT 1;
 
 -- Matches the stored status and cause exactly as read, so a write between the read and this
 -- update makes it change nothing

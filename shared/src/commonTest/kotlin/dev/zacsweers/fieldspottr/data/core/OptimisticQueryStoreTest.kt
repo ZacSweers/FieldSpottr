@@ -5,15 +5,20 @@ package dev.zacsweers.fieldspottr.data.core
 import app.cash.turbine.test
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.hasMessage
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
+import assertk.assertions.isTrue
 import assertk.assertions.messageContains
+import dev.zacsweers.fieldspottr.data.core.impl.IDEMPOTENCE_CHECKS
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.impl.committedValues
+import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
+import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
@@ -28,7 +33,9 @@ import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.test.Test
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -37,8 +44,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -98,7 +109,7 @@ class OptimisticQueryStoreTest {
           send(add, id)
         },
       )
-    val query = data.query(store, fetch, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
     return store to query
   }
 
@@ -297,7 +308,7 @@ class OptimisticQueryStoreTest {
         // The server normalizes what it stores
         exchange = { add, _ -> listOf("a", add.tag.uppercase()) },
       )
-    val query = data.query(store, fetch, Freshness.staleAfter(2.hours))
+    val query = data.query(store, Freshness.staleAfter(2.hours), fetch = fetch)
     query.data.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       store.mutate(Add("b")).awaitSucceeded()
@@ -323,11 +334,7 @@ class OptimisticQueryStoreTest {
         send = { _, add, id -> send(add, id) },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { key -> listOf(key) },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
 
     queries.data("x").test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("x"))
@@ -350,11 +357,7 @@ class OptimisticQueryStoreTest {
         send = { _, add, id -> send(add, id) },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { key -> listOf(key) },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
     queries.data("x").first { it != null }
 
     stores.mutate("x", Add("b")).awaitSucceeded()
@@ -377,11 +380,7 @@ class OptimisticQueryStoreTest {
         send = { _, add, id -> send(add, id) },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { _ -> fetch() },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { _ -> fetch() }
     queries.requestFetch("x", force = false).awaitSucceeded()
     // A refresh that reads the server before the changes reach it, and lands after them
     fetch.respond = { listOf("a", "z") }
@@ -418,11 +417,7 @@ class OptimisticQueryStoreTest {
         },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { _ -> fetch() },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { _ -> fetch() }
     queries.requestFetch("x", force = false).awaitSucceeded()
     // A refresh that reads the server before the changes reach it, and lands after them. It starts
     // at the same instant as the sends, so its write lands and the records put the answers back.
@@ -464,11 +459,7 @@ class OptimisticQueryStoreTest {
         },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { _ -> fetch() },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { _ -> fetch() }
     queries.requestFetch("x", force = false).awaitSucceeded()
     fetch.respond = { listOf("a", "z") }
     fetch.hold()
@@ -500,11 +491,7 @@ class OptimisticQueryStoreTest {
         send = { _, add, id -> send(add, id) },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { key -> listOf(key) },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
     queries.requestFetch("x", force = false).awaitSucceeded()
     queries.requestFetch("y", force = false).awaitSucceeded()
     stores.mutate("x", Add("b")).awaitSucceeded()
@@ -531,7 +518,7 @@ class OptimisticQueryStoreTest {
       )
     val fetch = TestKeyedFetch<String, List<String>> { key -> listOf(key) }
     val queries =
-      data.keyed(store = stores, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     queries.requestFetch("x", force = false).awaitSucceeded()
     send.hold(Add("b"))
 
@@ -562,11 +549,7 @@ class OptimisticQueryStoreTest {
         send = { _, add, id -> send(add, id) },
       )
     val queries =
-      data.keyed(
-        store = stores,
-        fetch = { key -> listOf(key) },
-        freshness = Freshness.staleAfter(1.hours),
-      )
+      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
 
     queries.data("x").test {
       assertThat(awaitItem()).isNull()
@@ -650,7 +633,7 @@ class OptimisticQueryStoreTest {
     // change in the truth, and its row still Sending
     truth = QueryStore.inMemory(Fetched(listOf("a", "b"), START))
     val rows = data.outboxStore<KeyedMutation<Unit, Add>>("tags")
-    rows.insert(key = Unit.toString(), payload = KeyedMutation(Unit, Add("b")))
+    rows.insert(key = "{}", payload = KeyedMutation(Unit, Add("b"), token = "earlier"))
     val row = rows.entries().first().single()
     rows.update(row.copy(status = OutboxStatus.Sending), expected = OutboxStatus.Queued)
 
@@ -699,7 +682,6 @@ class OptimisticQueryStoreTest {
     val scope =
       DataScope.Factory(
           onFailure = failures,
-          onActionFailure = failures,
           online = MutableStateFlow(false),
           stores = inserts,
           clock = testClock(START),
@@ -715,7 +697,7 @@ class OptimisticQueryStoreTest {
       )
     fetch.respond = { listOf("new") }
     // Never stale, so collecting the seeded value starts no fetch of its own
-    val query = scope.query(store, fetch, Freshness.NeverStale)
+    val query = scope.query(store, Freshness.NeverStale, fetch = fetch)
     val seen = mutableListOf<List<String>?>()
     backgroundScope.launch { query.data.collect { seen += it?.value } }
     runCurrent()
@@ -729,7 +711,9 @@ class OptimisticQueryStoreTest {
     val refresh = query.refresh()
     runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
-    assertThat(seen).containsExactly(listOf("old"))
+    // The changes show before their rows are stored, and the fetched value waits for the rows
+    assertThat(seen.last()).isEqualTo(listOf("old", "first", "second"))
+    assertThat(seen.none { "new" in it.orEmpty() }).isTrue()
 
     inserts.release()
     refresh.awaitSucceeded()
@@ -769,7 +753,7 @@ class OptimisticQueryStoreTest {
         exchange = { _, _ -> listOf("confirmed") },
       )
     fetch.respond = { listOf("old") }
-    val query = data.query(store, fetch, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
     val refresh = query.refresh()
     runCurrent()
@@ -802,7 +786,7 @@ class OptimisticQueryStoreTest {
         // The server normalizes what it stores
         exchange = { add, _ -> listOf("a", add.tag.uppercase()) },
       )
-    val query = data.query(store, fetch, Freshness.staleAfter(2.hours))
+    val query = data.query(store, Freshness.staleAfter(2.hours), fetch = fetch)
     store.mutate(Add("b")).awaitSucceeded()
     assertThat(query.stored.first()).isEqualTo(Fetched(listOf("a", "B"), START))
 
@@ -849,6 +833,30 @@ class OptimisticQueryStoreTest {
     runCurrent()
     assertThat(after.data.first()).isNull()
     assertThat(send.attempts).containsExactly(Add("b"))
+    scopes.assertNoFailures()
+  }
+
+  @Test
+  fun `an optimistic store rebuilt for the same name and types opens the same rows`() = runTest {
+    val scopes = testDataScopeFactory(clock = testClock(START), online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    // Each build opens the name with a new KeyedMutation serializer object
+    fun DataScope.tags() =
+      optimisticStores<Item, List<String>, Add>(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+        send = { _, add, id -> send(add, id) },
+      )
+    scopes.create(owner).tags().mutate(Item("x"), Add("b")).stored.awaitSucceeded()
+    owner.cancel()
+    owner.coroutineContext.job.join()
+
+    val after = scopes.create(backgroundScope).tags()
+
+    assertThat(after.pending(Item("x")).first { it.isNotEmpty() }.map { it.mutation })
+      .containsExactly(Add("b"))
     scopes.assertNoFailures()
   }
 
@@ -973,7 +981,7 @@ class OptimisticQueryStoreTest {
       data = testDataScope(clock = testClock(START))
       val server = CounterServer(answer = CompletableDeferred())
       val store = data.counterStore(server, QueryStore.inMemory(Fetched(0, START)))
-      val query = data.query(store, fetch = { server.count }, Freshness.staleAfter(1.hours))
+      val query = data.query(store, Freshness.staleAfter(1.hours)) { server.count }
 
       query.data.test {
         assertThat(awaitItem()?.value).isEqualTo(0)
@@ -1003,7 +1011,7 @@ class OptimisticQueryStoreTest {
       // What an owner that stopped after it stored the server's answer leaves behind: the count
       // holds the change, and its row still says Sending
       val rows = data.outboxStore<KeyedMutation<Unit, Int>>("count")
-      rows.insert(key = Unit.toString(), payload = KeyedMutation(Unit, 1))
+      rows.insert(key = "{}", payload = KeyedMutation(Unit, 1, token = "earlier"))
       val row = rows.entries().first().single()
       rows.update(row.copy(status = OutboxStatus.Sending), expected = OutboxStatus.Queued)
       val server = CounterServer(count = 1, applied = setOf(row.id))
@@ -1024,7 +1032,7 @@ class OptimisticQueryStoreTest {
     data = testDataScope(clock = testClock(START))
     val server = TallyServer(accept = CompletableDeferred())
     val store = data.tallyStore(server, QueryStore.inMemory(Fetched(server.read(), START)))
-    val query = data.query(store, fetch = { server.read() }, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours)) { server.read() }
 
     val handle = store.mutate(Increment("e1", 1))
     store.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
@@ -1046,7 +1054,7 @@ class OptimisticQueryStoreTest {
     data = testDataScope(clock = testClock(START))
     val server = TallyServer(answer = CompletableDeferred())
     val store = data.tallyStore(server, QueryStore.inMemory(Fetched(server.read(), START)))
-    val query = data.query(store, fetch = { server.read() }, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours)) { server.read() }
 
     val handle = store.mutate(Increment("e1", 1))
     store.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
@@ -1125,7 +1133,7 @@ class OptimisticQueryStoreTest {
         send = { _, _ -> },
       )
     val fetch = TestFetch { "draft" }
-    val query = data.query(store, fetch, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
     // The refresh reads the server before the delete reaches it
     fetch.hold()
@@ -1200,7 +1208,805 @@ class OptimisticQueryStoreTest {
     assertThat(truth.data.value).isEqualTo(Fetched(listOf("seed"), START))
     data.assertNoFailures()
   }
+
+  @Test
+  fun `an apply that throws leaves its change out and data keeps flowing`() = runTest {
+    data = testDataScope(clock = testClock(START), online = false)
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val boom = IllegalArgumentException("Cannot apply boom")
+    val store =
+      data.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = { current, add ->
+          if (add.tag == "boom") {
+            throw boom
+          }
+          addOnce(current, add)
+        },
+        send = { add, id -> send(add, id) },
+      )
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+    query.data.test {
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
+      store.mutate(Add("boom"))
+      store.pending.first { it.isNotEmpty() }
+      store.mutate(Add("c"))
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a", "c"))
+      store.pending.first { it.size == 2 }
+      expectNoEvents()
+    }
+    // Once for the change, however many times the views applied it
+    assertThat(data.actionFailures.assertSingle<IllegalStateException>().cause)
+      .isSameInstanceAs(boom)
+    data.fetchFailures.assertNone()
+  }
+
+  @Test
+  fun `an apply that throws at commit leaves the truth stale and the send succeeds`() = runTest {
+    data = testDataScope(clock = testClock(START), online = false)
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val broken = IllegalStateException("Broken apply")
+    var breaks = false
+    val store =
+      data.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = { current, add ->
+          if (breaks) {
+            throw broken
+          }
+          addOnce(current, add)
+        },
+        send = { add, id -> send(add, id) },
+      )
+    val handle = store.mutate(Add("b"))
+    assertThat(store.data.first()?.value).isEqualTo(listOf("a", "b"))
+
+    breaks = true
+    data.online.value = true
+    handle.awaitSucceeded()
+
+    // The server has the change, and the next fetch brings it
+    assertThat(send.sent).containsExactly(Add("b"))
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a"), QueryStore.INVALIDATED))
+    assertThat(store.data.first()?.value).isEqualTo(listOf("a"))
+    assertThat(store.pending.first()).isEmpty()
+    // The view and the commit both met the throw, and it is reported once for the change
+    assertThat(data.actionFailures.assertSingle<IllegalStateException>().cause)
+      .isSameInstanceAs(broken)
+  }
+
+  @Test
+  fun `the idempotence check runs on the last of the first commits of a set`() = runTest {
+    val store = appendsDuplicates()
+    // Each of these commits passes the check
+    repeat(IDEMPOTENCE_CHECKS - 1) { store.mutate(Add("t$it")).awaitSucceeded() }
+    data.actionFailures.assertNone()
+
+    store.mutate(Add("dup")).awaitSucceeded()
+    assertOnlyIdempotencyReport()
+  }
+
+  @Test
+  fun `the idempotence check stops after the first commits of a set`() = runTest {
+    val store = appendsDuplicates()
+    repeat(IDEMPOTENCE_CHECKS) { store.mutate(Add("t$it")).awaitSucceeded() }
+
+    // Not checked any more, so the apply that is not idempotent goes unreported
+    store.mutate(Add("dup")).awaitSucceeded()
+    assertThat(truth.data.value?.value?.last()).isEqualTo("dup")
+    data.assertNoFailures()
+  }
+
+  /**
+   * A tag store whose apply is idempotent for every tag but `dup`, which it appends again each
+   * time, so only a commit of `dup` can fail the idempotence check.
+   */
+  private fun TestScope.appendsDuplicates(): OptimisticQueryStore<List<String>, Add> {
+    data = testDataScope(clock = testClock(START))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    return data.optimisticStore<List<String>, Add>(
+      name = "tags",
+      base = truth,
+      apply = { current, add ->
+        if (add.tag == "dup") {
+          append(current, add)
+        } else {
+          addOnce(current, add)
+        }
+      },
+      send = { add, id -> send(add, id) },
+    )
+  }
+
+  @Test
+  fun `a change shows before its row is stored and stays once stored`() = runTest {
+    val inserts = HoldingOutboxStores()
+    val failures = TestFailures()
+    val scope =
+      DataScope.Factory(
+          onFailure = failures,
+          online = MutableStateFlow(false),
+          stores = inserts,
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store =
+      scope.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::append,
+        send = { _, _ -> },
+      )
+    store.data.test {
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
+      inserts.hold()
+      val handle = store.mutate(Add("b"))
+      // The slow insert has not stored the row, and the change shows already
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
+      assertThat(handle.stored.state.value).isEqualTo(OperationState.Queued)
+      assertThat(store.pending.first()).isEmpty()
+
+      inserts.release()
+      handle.stored.awaitSucceeded()
+      store.pending.first { it.isNotEmpty() }
+      // The stored row took over from the local change without a gap, and append, which is not
+      // idempotent, shows that the change applied once
+      expectNoEvents()
+      assertThat(store.data.first()?.value).isEqualTo(listOf("a", "b"))
+    }
+    failures.assertNone()
+  }
+
+  @Test
+  fun `a change whose row cannot be stored shows and then goes away`() = runTest {
+    val diskFull = IllegalStateException("Disk full")
+    val inserts = HoldingOutboxStores(failure = diskFull)
+    val failures = TestFailures()
+    val scope =
+      DataScope.Factory(
+          onFailure = failures,
+          online = MutableStateFlow(true),
+          stores = inserts,
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store =
+      scope.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = truth,
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+    store.data.test {
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
+      inserts.hold()
+      val handle = store.mutate(Add("b"))
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
+
+      inserts.release()
+      assertThat(handle.awaitFailed<IllegalStateException>()).hasMessage("Disk full")
+      assertThat(handle.stored.await()).isInstanceOf<OperationState.Failed>()
+      assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
+      expectNoEvents()
+    }
+    assertThat(send.attempts).isEmpty()
+    assertThat(failures.assertSingle<IllegalStateException>()).hasMessage("Disk full")
+  }
+
+  @Test
+  fun `keys order their rows by their serialized form`() = runTest {
+    data = testDataScope(clock = testClock(START), online = false)
+    val stores =
+      data.optimisticStores<Item, List<String>, Add>(
+        name = "tagsByItem",
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+        send = { _, add, id -> send(add, id) },
+      )
+    // Equal keys whose toString differs share one order
+    stores.mutate(Item("x"), Add("b")).stored.awaitSucceeded()
+    stores.mutate(Item("x"), Add("c")).stored.awaitSucceeded()
+    val strings =
+      data.optimisticStores<String, List<String>, Add>(
+        name = "tagsByName",
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+        send = { _, add, id -> send(add, id) },
+      )
+    strings.mutate("x", Add("b")).stored.awaitSucceeded()
+    val single =
+      data.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = QueryStore.inMemory<List<String>>(null),
+        apply = ::addOnce,
+        send = { add, id -> send(add, id) },
+      )
+    single.mutate(Add("b")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<Item, Add>>("tagsByItem").entries().first().map { it.key }
+      )
+      .containsExactly("""{"id":"x"}""", """{"id":"x"}""")
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByName").entries().first().map { it.key }
+      )
+      .containsExactly("\"x\"")
+    assertThat(data.outboxStore<KeyedMutation<Unit, Add>>("tags").entries().first().map { it.key })
+      .containsExactly("{}")
+    data.assertNoFailures()
+  }
+
+  /** Adds [by] to a count, which is not idempotent. */
+  @Serializable data class Bump(val by: Int)
+
+  /** A change with no equals of its own, as a plain serializable class has. */
+  @Serializable class Op(val tag: String, val boom: Boolean)
+
+  /**
+   * The outbox's heads watcher sees the row once the store shows it, and drains it while the insert
+   * has not returned. The commit then finds no local change with the row's id, so the record and
+   * the local change both apply.
+   */
+  @Test
+  fun `a change sent before its insert returns shows once`() = runTest {
+    val failures = TestFailures()
+    val data =
+      DataScope.Factory(
+          onFailure = failures,
+          online = MutableStateFlow(true),
+          stores = LaggingOutboxStores(insertReturnsAfter = 1.seconds),
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    var server = 0
+    val count =
+      data.optimisticStore<Int, Bump>(
+        name = "count",
+        base = QueryStore.inMemory(Fetched(0, START)),
+        apply = { current, bump -> (current ?: 0) + bump.by },
+        exchange = { bump, _ ->
+          server += bump.by
+          server
+        },
+      )
+    val seen = mutableListOf<Int?>()
+    backgroundScope.launch { count.data.collect { seen += it?.value } }
+    runCurrent()
+    count.mutate(Bump(1))
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    // One bump was made, so no value may count two
+    assertThat(seen.filter { it != null && it > 1 }).isEmpty()
+  }
+
+  /**
+   * The rows list lags the store. The first change's insert returned, so its local change waits for
+   * the rows to show it. The second change's insert starts, and the rows list that first shows the
+   * first row arrives meanwhile. That row is the newest unshown row on the key, so it is held, and
+   * its local change goes in the same update. The first change leaves the view until the second
+   * insert returns.
+   */
+  @Test
+  fun `an earlier change stays in view while a later insert runs`() = runTest {
+    val failures = TestFailures()
+    val data =
+      DataScope.Factory(
+          onFailure = failures,
+          // Offline, so rows stay and only the local change logic decides the view
+          online = MutableStateFlow(false),
+          stores =
+            LaggingOutboxStores(insertStartsAfter = 500.milliseconds, rowsLag = 100.milliseconds),
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    val tags =
+      data.optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = QueryStore.inMemory(Fetched(listOf("a"), START)),
+        apply = { current, add ->
+          val list = current.orEmpty()
+          if (add.tag in list) {
+            list
+          } else {
+            list + add.tag
+          }
+        },
+        send = { _, _ -> },
+      )
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    tags.mutate(Add("b"))
+    tags.mutate(Add("c"))
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    // Once "b" showed, every later value holds it
+    val firstB = seen.indexOfFirst { it != null && "b" in it }
+    assertThat(seen.drop(firstB).filter { it == null || "b" !in it }).isEmpty()
+  }
+
+  /**
+   * A fetch from after the send prunes the change's record, since the store reads its row as Sent.
+   * The shared rows still list the row as Sending, so the view applies the change again on top of a
+   * truth that holds it.
+   */
+  @Test
+  fun `a pruned record never lets a lagging row apply again`() = runTest {
+    val failures = TestFailures()
+    val clock = testClock(START)
+    val data =
+      DataScope.Factory(
+          onFailure = failures,
+          online = MutableStateFlow(true),
+          stores = LaggingOutboxStores(rowsLag = 1.seconds),
+          clock = clock,
+        )
+        .create(backgroundScope)
+    var server = 0
+    val count =
+      data.optimisticStore<Int, Bump>(
+        name = "count",
+        base = QueryStore.inMemory(Fetched(0, START)),
+        apply = { current, bump -> (current ?: 0) + bump.by },
+        exchange = { bump, _ ->
+          delay(2.seconds)
+          server += bump.by
+          server
+        },
+      )
+    val seen = mutableListOf<Int?>()
+    backgroundScope.launch { count.data.collect { seen += it?.value } }
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    count.mutate(Bump(1))
+    // The send ends at +2s, and the rows list shows that at +3s
+    advanceTimeBy(2.seconds + 100.milliseconds)
+    runCurrent()
+    // Sound so far: the value counts the one change
+    assertThat(seen.filter { it != null && it > 1 }).isEmpty()
+    // A fetch from after the send, with the server's value
+    count.write(server, clock.now())
+    runCurrent()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    assertThat(seen.filter { it != null && it > 1 }).isEmpty()
+  }
+
+  /**
+   * A durable store decodes a new payload object on each read. A mutation class without equals then
+   * never matches the reported set, so one throwing change is reported on each row list, and the
+   * set grows by one entry each time.
+   */
+  @Test
+  fun `a throwing apply is reported once per change with a decoding store`() = runTest {
+    val failures = TestFailures()
+    val data =
+      DataScope.Factory(
+          onFailure = failures,
+          online = MutableStateFlow(false),
+          stores = LaggingOutboxStores(decodeEachRead = true),
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+    val tags =
+      data.optimisticStore<List<String>, Op>(
+        name = "ops",
+        base = QueryStore.inMemory(Fetched(listOf("a"), START)),
+        apply = { current, op ->
+          check(!op.boom) { "boom" }
+          current.orEmpty() + op.tag
+        },
+        send = { _, _ -> },
+      )
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    tags.mutate(Op("x", boom = true))
+    runCurrent()
+    // Each later change lists the rows again, which decodes the throwing change again
+    repeat(5) {
+      tags.mutate(Op("ok$it", boom = false)).stored.await()
+      runCurrent()
+    }
+    val reports = failures.take().filter { it.message.orEmpty().startsWith("apply threw") }
+    assertThat(reports.size).isEqualTo(1)
+  }
+
+  /**
+   * A change whose apply throws waits as a row, offline. Collectors come and go, which stops and
+   * starts the shared subscription, and the set still knows the change, so it reports it once.
+   */
+  @Test
+  fun `a waiting change is reported once across collectors`() = runTest {
+    val failures = TestFailures()
+    val tags =
+      DataScope.Factory(
+          onFailure = failures,
+          online = MutableStateFlow(false),
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+        .optimisticStore<List<String>, Op>(
+          name = "ops",
+          base = QueryStore.inMemory(Fetched(listOf("a"), START)),
+          apply = { current, op ->
+            check(!op.boom) { "boom" }
+            current.orEmpty() + op.tag
+          },
+          send = { _, _ -> },
+        )
+    repeat(3) { round ->
+      val collector = backgroundScope.launch { tags.data.collect {} }
+      runCurrent()
+      if (round == 0) {
+        tags.mutate(Op("x", boom = true)).stored.await()
+        runCurrent()
+      }
+      collector.cancel()
+      advanceTimeBy(1.seconds)
+      runCurrent()
+    }
+    val reports = failures.take().filter { it.message.orEmpty().startsWith("apply threw") }
+    assertThat(reports.size).isEqualTo(1)
+  }
+
+  /** Tags over a store whose row list arrives a second late, offline, in [scope]. */
+  private fun TestScope.laggingTags(
+    scope: CoroutineScope
+  ): OptimisticQueryStore<List<String>, Add> =
+    DataScope.Factory(
+        onFailure = TestFailures(),
+        // Offline, so rows stay queued
+        online = MutableStateFlow(false),
+        stores = LaggingOutboxStores(rowsLag = 1.seconds),
+        clock = testClock(START),
+      )
+      .create(scope)
+      .optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = QueryStore.inMemory(Fetched(listOf("a"), START)),
+        apply = { current, add ->
+          val list = current.orEmpty()
+          if (add.tag in list) {
+            list
+          } else {
+            list + add.tag
+          }
+        },
+        send = { _, _ -> },
+      )
+
+  /**
+   * The outbox's scope stops after the row is stored and before the lagging list shows it. The
+   * handle settles Cancelled while the row waits for the next owner, so the change stays in view.
+   */
+  @Test
+  fun `a stored change stays in view when the outbox stops before the list shows it`() = runTest {
+    val owner = Job(backgroundScope.coroutineContext[Job])
+    val tags = laggingTags(CoroutineScope(backgroundScope.coroutineContext + owner))
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    tags.mutate(Add("b")).stored.await()
+    runCurrent()
+    owner.cancel()
+    runCurrent()
+    advanceTimeBy(3.seconds)
+    runCurrent()
+    val firstB = seen.indexOfFirst { it != null && "b" in it }
+    assertThat(seen.drop(firstB).filter { it == null || "b" !in it }).isEmpty()
+  }
+
+  /**
+   * After clear() returns, the lagging list still lists the row as Queued. The set dropped the
+   * change itself, so no view shows it.
+   */
+  @Test
+  fun `a cleared change does not show after clear returns`() = runTest {
+    val tags = laggingTags(backgroundScope)
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    tags.mutate(Add("b")).stored.await()
+    // The list shows the row, so its local change is gone
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    tags.clear()
+    runCurrent()
+    val afterClear = seen.size
+    advanceTimeBy(100.milliseconds)
+    runCurrent()
+    assertThat(seen.drop(afterClear - 1).filter { it != null && "b" in it }).isEmpty()
+    assertThat(listOfNotNull(tags.data.first()).filter { "b" in it.value }).isEmpty()
+  }
+
+  /**
+   * Two retries of one failed row, back to back, whose requeues both fail on a store error. Each
+   * undo removes only its own call's mark, so the change falls back to Failed and stays out of
+   * view.
+   */
+  @Test
+  fun `two failed retries leave a failed change out of the view`() = runTest {
+    val stores = LaggingOutboxStores()
+    val tags = factoryTags(stores, online = true, send = { _, _ -> throw PermanentFailure("No") })
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    tags.mutate(Add("b")).await()
+    runCurrent()
+    val id = tags.pending.first().single().id
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("a"))
+    // Each requeue reads its row first, which fails here before anything changes
+    stores.failEntryReads = true
+    tags.retry(id)
+    tags.retry(id)
+    runCurrent()
+    stores.failEntryReads = false
+    advanceTimeBy(11.minutes)
+    runCurrent()
+    assertThat(tags.pending.first().single().status).isInstanceOf<OutboxStatus.Failed>()
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("a"))
+  }
+
+  /**
+   * clear() reads the rows, then discards them one status write at a time, each taking a second. A
+   * change stored meanwhile keeps its row, which clear never read, so it stays in view.
+   */
+  @Test
+  fun `a change stored during a clear and not discarded by it stays in view`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds)
+    val tags = factoryTags(stores, online = false, send = { _, _ -> })
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    tags.mutate(Add("b")).stored.await()
+    runCurrent()
+    val clearing = backgroundScope.launch { tags.clear() }
+    runCurrent()
+    tags.mutate(Add("c")).stored.await()
+    runCurrent()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    clearing.join()
+    val rows =
+      stores.delegate
+        .open("tags", KeyedMutation.serializer(Unit.serializer(), Add.serializer()))
+        .entries()
+        .first()
+    assertThat(rows.map { it.payload.mutation }).containsExactly(Add("c"))
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("c"))
+  }
+
+  /**
+   * A change handed off by a stopped owner, whose row a list that never catches up never shows. On
+   * an idle set, its timer still ends it when its lifetime runs out.
+   */
+  @Test
+  fun `a handed off change the list never shows expires on an idle set`() = runTest {
+    val owner = Job(backgroundScope.coroutineContext.job)
+    val stores = LaggingOutboxStores(firstListOnly = true)
+    val sets =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = MutableStateFlow(false),
+          stores = stores,
+          clock = testClock(START),
+        )
+        .create(CoroutineScope(backgroundScope.coroutineContext + owner))
+        .optimisticStores<Unit, List<String>, Add>(
+          name = "tags",
+          base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
+          apply = ::addOnce,
+          send = { _, _, _ -> },
+        )
+    val tags = sets(Unit)
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    tags.mutate(Add("b")).stored.await()
+    owner.cancel()
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a", "b"))
+    assertThat(sets.knownChanges).isEqualTo(1)
+
+    advanceTimeBy(9.minutes)
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a", "b"))
+    advanceTimeBy(2.minutes)
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a"))
+    assertThat(sets.knownChanges).isEqualTo(0)
+  }
+
+  /**
+   * A change fails, is retried six minutes later and fails again, while the list stays frozen on
+   * the row as Queued. Its expiry counts from the second failure, so a fetch write eight minutes
+   * after it, which checks expiry, still finds it Failed and the stale list does not show it.
+   */
+  @Test
+  fun `a change that fails again starts its expiry over`() = runTest {
+    val stores = LaggingOutboxStores(firstListOnly = true)
+    val online = MutableStateFlow(false)
+    val tags =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = online,
+          stores = stores,
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+        .optimisticStore<List<String>, Add>(
+          name = "tags",
+          base = QueryStore.inMemory(Fetched(listOf("a"), START)),
+          apply = ::addOnce,
+          send = { _, _ -> throw PermanentFailure("No") },
+        )
+    val handle = tags.mutate(Add("b"))
+    handle.stored.await()
+    // The only list the views ever get shows the row as Queued
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    val id = tags.pending.first().single().id
+    online.value = true
+    handle.await()
+    runCurrent()
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("a"))
+
+    advanceTimeBy(6.minutes)
+    tags.retry(id).await()
+    runCurrent()
+    advanceTimeBy(8.minutes)
+    tags.write(listOf("a"), testClock(START).now())
+    runCurrent()
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("a"))
+  }
+
+  /**
+   * A discarded change is Dropped for good. A retry of its row, while a lagging list still shows
+   * the row, leaves no mark, so the change never shows again.
+   */
+  @Test
+  fun `a retry of a discarded change does not show it`() = runTest {
+    val tags = factoryTags(LaggingOutboxStores(rowsLag = 1.seconds), online = false) { _, _ -> }
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    tags.mutate(Add("b")).stored.await()
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    val id = tags.pending.first().single().id
+    tags.discard(id).awaitSucceeded()
+    runCurrent()
+    val discardedAt = seen.size
+    tags.retry(id).await()
+    runCurrent()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    assertThat(seen.drop(discardedAt).filter { it != null && "b" in it }).isEmpty()
+  }
+
+  /**
+   * A discard of a failed row runs slowly, since each status write takes a second. A retry of the
+   * row meanwhile adds no mark over the discard's, so the change never shows while the discard
+   * settles.
+   */
+  @Test
+  fun `a retry while a discard runs does not show the change`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds)
+    val tags = factoryTags(stores, online = true, send = { _, _ -> throw PermanentFailure("No") })
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    tags.mutate(Add("b")).await()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    val id = tags.pending.first().single().id
+    assertThat(seen.last()).isEqualTo(listOf("a"))
+    val discarding = tags.discard(id)
+    runCurrent()
+    val discardedAt = seen.size
+    tags.retry(id)
+    runCurrent()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    discarding.awaitSucceeded()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    assertThat(seen.drop(discardedAt).filter { it != null && "b" in it }).isEmpty()
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("a"))
+  }
+
+  /**
+   * Two retries of one failed row. The first sends and commits while a list a second behind still
+   * shows the row, and the second retry's requeue reads the row slowly. The second retry finds the
+   * change on record and adds no mark, so nothing stays known on an idle set.
+   */
+  @Test
+  fun `a retry after the change committed leaves nothing known on an idle set`() = runTest {
+    val stores = SlowEntryOutboxStores()
+    val rejected = MutableStateFlow(true)
+    val sets =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = MutableStateFlow(true),
+          stores = stores,
+          clock = testClock(START),
+        )
+        .create(backgroundScope)
+        .optimisticStores<Unit, List<String>, Add>(
+          name = "tags",
+          base = { QueryStore.inMemory(Fetched(emptyList(), START)) },
+          apply = ::addOnce,
+          send = { _, add, _ ->
+            if (rejected.value) {
+              throw PermanentFailure("Rejected $add")
+            }
+          },
+        )
+    val tags = sets(Unit)
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    tags.mutate(Add("b")).await()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    val id = tags.pending.first().single().id
+    assertThat(sets.knownChanges).isEqualTo(0)
+    rejected.value = false
+    tags.retry(id).await()
+    runCurrent()
+    stores.slowEntryReads = true
+    val second = tags.retry(id)
+    advanceTimeBy(20.seconds)
+    runCurrent()
+    stores.slowEntryReads = false
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    assertThat(second.state.value).isEqualTo(OperationState.Succeeded)
+    // Idle past the expiry, so only a forget rule can have removed the change
+    advanceTimeBy(15.minutes)
+    runCurrent()
+    assertThat(sets.knownChanges).isEqualTo(0)
+  }
+
+  /** Tags over [stores] in a data scope of their own, with [send]. */
+  private fun TestScope.factoryTags(
+    stores: OutboxStores,
+    online: Boolean,
+    send: suspend (Add, EntryId) -> Unit,
+  ): OptimisticQueryStore<List<String>, Add> =
+    DataScope.Factory(
+        onFailure = TestFailures(),
+        online = MutableStateFlow(online),
+        stores = stores,
+        clock = testClock(START),
+      )
+      .create(backgroundScope)
+      .optimisticStore<List<String>, Add>(
+        name = "tags",
+        base = QueryStore.inMemory(Fetched(listOf("a"), START)),
+        apply = ::addOnce,
+        send = send,
+      )
+
+  /**
+   * A key whose `toString` differs on every call, so only its serialized form can order its rows.
+   */
+  @Serializable
+  class Item(val id: String) {
+    override fun equals(other: Any?): Boolean = other is Item && other.id == id
+
+    override fun hashCode(): Int = id.hashCode()
+
+    override fun toString(): String = "Item(id=$id)#${itemToStrings++}"
+  }
 }
+
+/** How many times [OptimisticQueryStoreTest.Item.toString] ran, which makes each result differ. */
+private var itemToStrings = 0
 
 /**
  * A counter server that counts each change once by its row id, as an idempotency key makes a real
@@ -1291,8 +2097,11 @@ private fun countOnce(
   }
 }
 
-/** Outbox stores whose inserts wait while held, like a database that is slow to write. */
-private class HoldingOutboxStores : OutboxStores {
+/**
+ * Outbox stores whose inserts wait while held, like a database that is slow to write. With a
+ * [failure], each insert throws it once it may go on, and stores nothing.
+ */
+private class HoldingOutboxStores(private val failure: Throwable? = null) : OutboxStores {
   private val delegate = InMemoryOutboxStores()
   private val held = MutableStateFlow(false)
 
@@ -1309,7 +2118,37 @@ private class HoldingOutboxStores : OutboxStores {
     return object : OutboxStore<E> by rows {
       override suspend fun insert(key: String, payload: E): EntryId {
         held.first { !it }
+        failure?.let { throw it }
         return rows.insert(key, payload)
+      }
+    }
+  }
+
+  override suspend fun clearAll() = delegate.clearAll()
+}
+
+/**
+ * In-memory outbox stores whose row list arrives a second late. While [slowEntryReads] is set, each
+ * read of a single row starts three seconds late.
+ */
+private class SlowEntryOutboxStores : OutboxStores {
+  private val delegate = InMemoryOutboxStores()
+  var slowEntryReads = false
+
+  override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+    val rows = delegate.open(name, serializer)
+    return object : OutboxStore<E> by rows {
+      override fun entries(): Flow<List<OutboxEntry<E>>> =
+        rows.entries().onEach { delay(1.seconds) }
+
+      override fun entry(id: EntryId): Flow<OutboxEntry<E>?> {
+        val wait =
+          if (slowEntryReads) {
+            3.seconds
+          } else {
+            Duration.ZERO
+          }
+        return rows.entry(id).onStart { delay(wait) }
       }
     }
   }

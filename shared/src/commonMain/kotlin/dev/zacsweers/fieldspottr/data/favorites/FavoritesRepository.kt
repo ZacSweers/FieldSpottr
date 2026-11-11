@@ -86,8 +86,7 @@ internal constructor(
       send = { change, id -> api.setFavorite(change.group, change.on, idempotencyKey = id.value) },
     )
 
-  private val query =
-    data.query(store, fetch = api::favorites, freshness = Freshness.staleAfter(1.hours))
+  private val query = data.query(store, Freshness.staleAfter(1.hours), fetch = api::favorites)
 
   /** The favorite groups, local changes included. Collecting it fetches first when stale. */
   val favorites: Flow<Set<String>> = query.data.values().map { it.orEmpty() }

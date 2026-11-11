@@ -24,11 +24,7 @@ class JvmSqlDriverFactory(private val appDirs: FSAppDirs) : SqlDriverFactory {
     name: String,
   ): SqlDriver {
     val dbPath = appDirs.userConfig.resolve("$name.db")
-    val driver =
-      JdbcSqliteDriver(
-        url = "jdbc:sqlite:${dbPath.toNioPath().absolutePathString()}",
-        properties = sqliteDriverProperties(),
-      )
+    val driver = fileSqliteDriver(dbPath.toNioPath().absolutePathString())
     schema.create(driver).await()
     driver.ensureDbPermitOverlayColumns()
     return driver
@@ -43,12 +39,19 @@ private suspend fun SqlDriver.ensureDbPermitOverlayColumns() {
 }
 
 /**
- * Settings for a file database, where the driver opens one connection per thread. A connection
- * waits up to the busy timeout for a lock. IMMEDIATE applies only to transactions that JDBC begins.
- * SQLDelight's driver begins its own with a plain BEGIN, which takes no lock until the first
- * statement. So two SQLDelight transactions that both read before they write can still deadlock,
- * and SQLite fails one with SQLITE_BUSY at once. Such a transaction runs through
- * [dev.zacsweers.fieldspottr.data.transactionRetryingConflicts].
+ * A driver for the database file at [path], with [properties]. Each transaction takes the write
+ * lock before its first statement, as [ImmediateTransactionDriver] describes.
+ */
+internal fun fileSqliteDriver(
+  path: String,
+  properties: Properties = sqliteDriverProperties(),
+): SqlDriver =
+  ImmediateTransactionDriver(JdbcSqliteDriver(url = "jdbc:sqlite:$path", properties = properties))
+
+/**
+ * Settings for a file database. A connection waits up to the busy timeout for a lock. IMMEDIATE
+ * applies only to transactions that JDBC begins. SQLDelight's driver begins its own with a plain
+ * BEGIN, so [fileSqliteDriver] begins them with BEGIN IMMEDIATE instead.
  */
 internal fun sqliteDriverProperties(): Properties =
   Properties().apply {

@@ -56,8 +56,7 @@ class TestFixturesTest {
   fun `an eager data scope settles a fetch before the request returns`() = runTest {
     var fetches = 0
     val data = testDataScope(eager = true)
-    val query =
-      data.query(QueryStore.inMemory(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
+    val query = data.query(QueryStore.inMemory(), Freshness.staleAfter(1.hours)) { ++fetches }
 
     query.requestFetch(force = true).assertSucceeded()
     assertThat(fetches).isEqualTo(1)
@@ -78,8 +77,9 @@ class TestFixturesTest {
   fun `freshness follows virtual time`() = runTest {
     var fetches = 0
     val query =
-      testDataScope(eager = true)
-        .query(QueryStore.inMemory(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
+      testDataScope(eager = true).query(QueryStore.inMemory(), Freshness.staleAfter(1.hours)) {
+        ++fetches
+      }
     query.requestFetch(force = false)
 
     advanceTimeBy(59.minutes)
@@ -95,11 +95,9 @@ class TestFixturesTest {
   fun `fetch and command failures land in separate lists`() = runTest {
     val data = testDataScope(eager = true)
     val query =
-      data.query(
-        QueryStore.inMemory<Int>(),
-        fetch = { error("fetch failed") },
-        Freshness.staleAfter(1.hours),
-      )
+      data.query(QueryStore.inMemory<Int>(), Freshness.staleAfter(1.hours)) {
+        error("fetch failed")
+      }
 
     query.requestFetch(force = true).assertFailed<IllegalStateException>()
     data.newActionRunner().run { throw IllegalArgumentException("command failed") }
@@ -187,7 +185,8 @@ class TestFixturesTest {
   fun `a test fetch holds calls until released`() = runTest {
     val fetch = TestFetch { 1 }
     val query =
-      testDataScope(eager = true).query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+      testDataScope(eager = true)
+        .query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     fetch.hold()
     val handle = query.requestFetch(force = true)
@@ -204,7 +203,8 @@ class TestFixturesTest {
   fun `a test fetch records a call a newer forced request cancels`() = runTest {
     val fetch = TestFetch { 1 }
     val query =
-      testDataScope(eager = true).query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+      testDataScope(eager = true)
+        .query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     fetch.hold()
     val first = query.requestFetch(force = true)
@@ -222,7 +222,7 @@ class TestFixturesTest {
   fun `a test fetch answers with whatever respond gives now`() = runTest {
     val data = testDataScope(eager = true)
     val fetch = TestFetch { 1 }
-    val query = data.query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+    val query = data.query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     query.requestFetch(force = true).assertSucceeded()
     fetch.respond = { error("down") }
@@ -238,8 +238,8 @@ class TestFixturesTest {
       testDataScope(eager = true)
         .keyed(
           store = QueryStore.inMemoryByKey(),
-          fetch = fetch,
           freshness = Freshness.staleAfter(1.hours),
+          fetch = fetch,
         )
 
     fetch.hold()
@@ -259,7 +259,7 @@ class TestFixturesTest {
   fun `a recording store shows what a query did to it`() = runTest {
     val data = testDataScope(eager = true)
     val store = RecordingQueryStore<Int>()
-    val query = data.query(store, TestFetch { 1 }, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = TestFetch { 1 })
 
     query.requestFetch(force = false).assertSucceeded()
     // Fresh now, so this one checks the stored time and writes nothing

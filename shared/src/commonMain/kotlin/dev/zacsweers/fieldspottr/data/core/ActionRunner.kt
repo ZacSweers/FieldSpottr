@@ -51,10 +51,13 @@ fun interface ConflatedActionRunner {
 
 /**
  * A new [ConflatedActionRunner] in this data scope. Its commands cancel only each other, so one
- * runner never cancels or waits on another.
+ * runner never cancels or waits on another. Failed commands go to [onFailure], or to the factory's
+ * `onFailure` handler when it is null, as with [DataScope.newActionRunner].
  */
-fun DataScope.newConflatedActionRunner(): ConflatedActionRunner {
-  val actions = newActionRunner()
+fun DataScope.newConflatedActionRunner(
+  onFailure: ((Throwable) -> Unit)? = null
+): ConflatedActionRunner {
+  val actions = newActionRunner(onFailure)
   val ordering = Ordering.Keyed(Unit, OnPrevious.Cancel)
   return ConflatedActionRunner { block -> actions.run(ordering, block) }
 }

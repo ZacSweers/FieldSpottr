@@ -22,7 +22,6 @@ import dev.zacsweers.fieldspottr.data.SqlDelightOutboxStores
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
-import dev.zacsweers.fieldspottr.data.core.invoke
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
 import dev.zacsweers.metro.Provides
@@ -106,9 +105,9 @@ interface FSGraph {
   ): DataScope.Factory {
     val log = logger.withTag("Data")
     return DataScope.Factory(
-      onFailure = { log.e(it) { "Fetch failed" } },
       // Each fetch reports its own failure, so an action that fails with one only summarizes it
-      onActionFailure = { log.w(it) { "Action failed" } },
+      onFailure = { log.w(it) { "Action failed" } },
+      onFetchFailure = { log.e(it) { "Fetch failed" } },
       online = network.online,
       stores = stores,
       scheduler = scheduler,

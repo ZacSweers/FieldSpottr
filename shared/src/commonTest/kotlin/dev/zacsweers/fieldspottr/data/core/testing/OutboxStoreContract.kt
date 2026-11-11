@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.testing
 
+import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import kotlin.test.Test
@@ -31,6 +32,16 @@ abstract class OutboxStoreContract {
 
   /** Moves the store's notion of time forward by [duration], for settled rows to expire. */
   protected abstract fun advanceStoreTime(duration: Duration)
+
+  /**
+   * Stores a Queued row on [key] in [store] whose payload the store cannot decode, like one written
+   * before its payload class changed, and returns its id. Null for a store that keeps payloads as
+   * objects, which skips the checks for such rows.
+   */
+  protected open suspend fun TestScope.insertUnreadable(
+    store: OutboxStore<String>,
+    key: String,
+  ): EntryId? = null
 
   @Test
   fun `insert queues rows oldest first`() = runTest {
@@ -104,6 +115,86 @@ abstract class OutboxStoreContract {
     val entries = store.entries().first()
     assertEquals(List(20) { "payload$it" }.toSet(), entries.map { it.payload }.toSet())
     assertTrue(entries.all { it.status == OutboxStatus.Sending })
+  }
+
+  @Test
+  fun `heads are each key's oldest queued or sending row`() = runTest {
+    val store = newStore(1.minutes)
+    val a = store.insert("k", "a")
+    store.insert("k", "b")
+    store.insert("j", "c")
+    val rowA = checkNotNull(store.entry(a).first())
+
+    // A failed row waits for a retry, so the next row on its key is the head
+    assertTrue(store.update(rowA.copy(status = OutboxStatus.Failed("boom")), OutboxStatus.Queued))
+
+    assertEquals(setOf("b", "c"), store.heads().first().map { it.payload }.toSet())
+    assertEquals("b", store.head("k")?.payload)
+    assertEquals("c", store.head("j")?.payload)
+    assertNull(store.head("none"))
+
+    // A sending row is still the head, and a sent one leaves its key without one
+    val rowC = checkNotNull(store.head("j"))
+    assertTrue(store.update(rowC.copy(status = OutboxStatus.Sending), OutboxStatus.Queued))
+    assertEquals(OutboxStatus.Sending, store.head("j")?.status)
+    assertTrue(store.update(rowC.copy(status = OutboxStatus.Sent), OutboxStatus.Sending))
+    assertNull(store.head("j"))
+    assertEquals(listOf("b"), store.heads().first().map { it.payload })
+  }
+
+  @Test
+  fun `a row that cannot be decoded is left out and blocks nothing`() = runTest {
+    val store = newStore(1.minutes)
+    val unreadable = insertUnreadable(store, "k") ?: return@runTest
+    val readable = store.insert("k", "a")
+    store.insert("j", "b")
+
+    assertEquals(listOf("a", "b"), store.entries().first().map { it.payload })
+    assertNull(store.entry(unreadable).first())
+    // It never sends, so the next row on its key is the head
+    assertEquals(readable, store.head("k")?.id)
+    assertEquals(setOf("a", "b"), store.heads().first().map { it.payload }.toSet())
+  }
+
+  @Test
+  fun `a row that cannot be decoded is handed on once`() = runTest {
+    val store = newStore(1.minutes)
+    val unreadable = insertUnreadable(store, "k") ?: return@runTest
+    store.insert("k", "a")
+    // Reads meet the row before anything listens
+    store.entries().first()
+    store.head("k")
+
+    val reported = ArrayList<EntryId>()
+    val listening = store.onUndecodable { id, _ -> reported += id }
+    store.entries().first()
+    store.heads().first()
+    assertNull(store.entry(unreadable).first())
+    assertEquals(listOf(unreadable), reported)
+
+    // Once per store, so a later listener hears nothing more of it
+    listening.close()
+    val later = ArrayList<EntryId>()
+    store.onUndecodable { id, _ -> later += id }.use { store.entries().first() }
+    assertEquals(emptyList(), later)
+  }
+
+  @Test
+  fun `a listener that throws does not fail the read that met the row`() = runTest {
+    val store = newStore(1.minutes)
+    val unreadable = insertUnreadable(store, "k") ?: return@runTest
+    store.insert("k", "a")
+    val heard = ArrayList<EntryId>()
+    store.onUndecodable { id, _ ->
+      heard += id
+      throw IllegalStateException("The failure handler rethrows")
+    }
+
+    assertEquals(listOf("a"), store.entries().first().map { it.payload })
+    assertEquals("a", store.head("k")?.payload)
+    assertEquals(listOf("a"), store.heads().first().map { it.payload })
+    assertNull(store.entry(unreadable).first())
+    assertEquals(listOf(unreadable), heard)
   }
 
   @Test

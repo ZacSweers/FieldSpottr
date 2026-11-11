@@ -65,14 +65,10 @@ class ClearPublicationTest {
       val data = DataScope.Factory(onFailure = { reported.incrementAndGet() }).create(owner)
       val store = QueryStore.inMemory(Fetched(1, Clock.System.now()))
       val query =
-        data.query(
-          store,
-          fetch = {
-            attempts.incrementAndGet()
-            throw failure
-          },
-          freshness = Freshness.staleAfter(1.hours),
-        )
+        data.query(store, Freshness.staleAfter(1.hours)) {
+          attempts.incrementAndGet()
+          throw failure
+        }
       val fastSawInitial = CountDownLatch(1)
       val slowSawInitial = CountDownLatch(1)
       val slowSawClear = CountDownLatch(1)

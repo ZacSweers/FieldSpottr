@@ -59,10 +59,6 @@ internal class StampedFileStore<T : Any>(
     emitAll(loaded.filterNotNull().map { it.fetched })
   }
 
-  override suspend fun write(value: T, fetchedAt: Instant) {
-    writes.withLock { store(value, fetchedAt) }
-  }
-
   // The lock makes the check and the write one update, since this instance owns the file
   override suspend fun writeFetched(
     value: T,
@@ -75,10 +71,6 @@ internal class StampedFileStore<T : Any>(
         store(value, fetchedAt)
       }
     }
-  }
-
-  override suspend fun clear() {
-    writes.withLock { remove() }
   }
 
   override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {

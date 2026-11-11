@@ -21,7 +21,7 @@ class InMemoryQueryStoreTest {
 
   private fun TestScope.query(store: QueryStore<String>): DataQuery<String> =
     testDataScope(clock = testClock(START))
-      .query(store = store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+      .query(store = store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
 
   @Test
   fun `a stale seed shows at once and still fetches`() = runTest {
