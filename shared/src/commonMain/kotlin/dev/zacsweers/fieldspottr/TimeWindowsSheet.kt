@@ -2,6 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,7 +37,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,6 +69,9 @@ private data class WindowDraft(
  * Bottom sheet that manages Find a Field time windows. It lists the built-in windows and the saved
  * custom windows, and switches to an editor in place to create or edit a custom window. Deleting is
  * explicit through each saved window's delete button.
+ *
+ * Every change animates. The list and the editor slide between each other while the sheet's height
+ * follows, and saved windows grow in and shrink out as they're added and deleted.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,26 +92,45 @@ internal fun TimeWindowsSheet(
         .imePadding()
         .padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
     ) {
-      val draft = editing
-      if (draft == null) {
-        WindowList(
-          windows = windows,
-          canAddWindow = canAddWindow,
-          onNew = { editing = WindowDraft(id = null, name = "", startHour = 17, endHour = 20) },
-          onEdit = { window ->
-            editing = WindowDraft(window.id, window.name, window.startHour, window.endHour)
-          },
-          onDelete = onDelete,
-        )
-      } else {
-        WindowEditor(
-          draft = draft,
-          onCancel = { editing = null },
-          onSave = { saved ->
-            onSave(saved.id, saved.name, saved.startHour, saved.endHour)
-            editing = null
-          },
-        )
+      AnimatedContent(
+        targetState = editing,
+        transitionSpec = {
+          // The editor comes in from the end, and the list comes back from the start
+          val direction =
+            if (targetState != null) {
+              1
+            } else {
+              -1
+            }
+          (slideInHorizontally { width -> direction * width / 4 } + fadeIn()) togetherWith
+            (slideOutHorizontally { width -> -direction * width / 4 } + fadeOut()) using
+            SizeTransform()
+        },
+        label = "time windows sheet page",
+      ) { draft ->
+        // Each page lays its parts out in a column, and AnimatedContent stacks its pages in a box
+        Column(Modifier.fillMaxWidth()) {
+          if (draft == null) {
+            WindowList(
+              windows = windows,
+              canAddWindow = canAddWindow,
+              onNew = { editing = WindowDraft(id = null, name = "", startHour = 17, endHour = 20) },
+              onEdit = { window ->
+                editing = WindowDraft(window.id, window.name, window.startHour, window.endHour)
+              },
+              onDelete = onDelete,
+            )
+          } else {
+            WindowEditor(
+              draft = draft,
+              onCancel = { editing = null },
+              onSave = { saved ->
+                onSave(saved.id, saved.name, saved.startHour, saved.endHour)
+                editing = null
+              },
+            )
+          }
+        }
       }
     }
   }
@@ -118,7 +153,7 @@ private fun WindowList(
 
   SheetSectionLabel("SAVED")
   val custom = windows.filterNot { it.builtIn }
-  if (custom.isEmpty()) {
+  AnimatedVisibility(visible = custom.isEmpty(), enter = RowEnter, exit = RowExit) {
     Text(
       "No saved windows yet",
       style = MaterialTheme.typography.bodyMedium,
@@ -126,7 +161,7 @@ private fun WindowList(
       modifier = Modifier.padding(vertical = 8.dp),
     )
   }
-  for (window in custom) {
+  AnimatedRows(items = custom, keyOf = TimeWindow::id) { window ->
     WindowRow(window) {
       IconButton(onClick = { onEdit(window) }) {
         Icon(Icons.Outlined.Edit, contentDescription = "Edit ${window.name}")
@@ -141,7 +176,7 @@ private fun WindowList(
   Button(onClick = onNew, enabled = canAddWindow, modifier = Modifier.fillMaxWidth()) {
     Text("New window")
   }
-  if (!canAddWindow) {
+  AnimatedVisibility(visible = !canAddWindow, enter = RowEnter, exit = RowExit) {
     Text(
       "You can save up to ${TimeWindow.MAX_CUSTOM_WINDOWS} windows.",
       style = MaterialTheme.typography.bodySmall,
@@ -149,6 +184,66 @@ private fun WindowList(
       modifier = Modifier.padding(top = 8.dp),
     )
   }
+}
+
+/** Rows grow in and shrink out, so the content below them moves instead of jumping. */
+private val RowEnter = expandVertically(expandFrom = Alignment.Top) + fadeIn()
+private val RowExit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+
+/**
+ * Lays out [items] one under another and animates rows in and out with [RowEnter] and [RowExit].
+ * Rows present when this first composes show without animating. A removed row stays where it was
+ * until its exit finishes.
+ */
+@Composable
+internal fun <T> AnimatedRows(items: List<T>, keyOf: (T) -> Any, row: @Composable (T) -> Unit) {
+  // The rows on screen, including removed rows that are still leaving
+  var shown by remember { mutableStateOf(items) }
+  val initialKeys = remember { items.mapTo(HashSet(), keyOf) }
+  val currentKeys = remember(items) { items.mapTo(HashSet(), keyOf) }
+  val merged = remember(shown, items) { mergeKeepingRemoved(shown, items, keyOf) }
+  SideEffect { shown = merged }
+  Column(Modifier.fillMaxWidth()) {
+    for (item in merged) {
+      val itemKey = keyOf(item)
+      key(itemKey) {
+        val visibility = remember { MutableTransitionState(itemKey in initialKeys) }
+        val isCurrent = itemKey in currentKeys
+        SideEffect { visibility.targetState = isCurrent }
+        // Drop a removed row once it has finished leaving
+        if (!isCurrent && visibility.isIdle && !visibility.currentState) {
+          SideEffect { shown = shown.filterNot { keyOf(it) == itemKey } }
+        }
+        AnimatedVisibility(visibleState = visibility, enter = RowEnter, exit = RowExit) {
+          row(item)
+        }
+      }
+    }
+  }
+}
+
+/**
+ * [current] with each row of [previous] that's missing from it put back after the row it followed,
+ * so a removed row leaves from where it was.
+ */
+internal fun <T> mergeKeepingRemoved(
+  previous: List<T>,
+  current: List<T>,
+  keyOf: (T) -> Any,
+): List<T> {
+  val currentKeys = current.mapTo(HashSet(), keyOf)
+  val merged = current.toMutableList()
+  var insertAt = 0
+  for (item in previous) {
+    val itemKey = keyOf(item)
+    if (itemKey in currentKeys) {
+      insertAt = merged.indexOfFirst { keyOf(it) == itemKey } + 1
+    } else {
+      merged.add(insertAt, item)
+      insertAt++
+    }
+  }
+  return merged
 }
 
 @Composable
