@@ -2,11 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement.spacedBy
@@ -52,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.calf.ui.progress.AdaptiveCircularProgressIndicator
@@ -77,6 +85,7 @@ import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
 import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.EmphasizedEasing
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.WeatherStrip
@@ -93,8 +102,10 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Clock.System
 import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.ImmutableSet
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.collections.immutable.toImmutableSet
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
@@ -139,8 +150,10 @@ data object FindFieldScreen : Screen {
     val isToday: Boolean,
     /** The current New York hour. On today, search hours and window chips start here. */
     val currentHour: Int,
-    /** Built-in windows followed by saved custom windows. */
+    /** Built-in windows followed by saved custom windows, including hidden built-ins. */
     val windows: ImmutableList<TimeWindow>,
+    /** Ids of the built-in windows the user hid. They get no chip and are never searched. */
+    val hiddenBuiltIns: ImmutableSet<String>,
     val isManagingWindows: Boolean,
     /** The selected date is today or later and some open groups lack pending permit data. */
     val isMissingPendingData: Boolean,
@@ -161,7 +174,7 @@ data object FindFieldScreen : Screen {
 
     /** The window chips to show. See [visibleWindows]. */
     val visibleWindows: List<TimeWindow>
-      get() = visibleWindows(windows, isToday, currentHour)
+      get() = visibleWindows(windows, isToday, currentHour, hiddenBuiltIns)
   }
 
   sealed interface Event {
@@ -175,6 +188,9 @@ data object FindFieldScreen : Screen {
       Event
 
     data class DeleteWindow(val id: String) : Event
+
+    /** Hides or shows the built-in window with [id]. */
+    data class SetBuiltInWindowHidden(val id: String, val hidden: Boolean) : Event
 
     data class SelectDate(val date: LocalDate) : Event
 
@@ -201,9 +217,13 @@ fun FindFieldPresenter(
 
   val customWindows by preferencesStore.customTimeWindows.collectAsRetainedState(emptyList())
   val windows = remember(customWindows) { (TimeWindow.builtIns + customWindows).toImmutableList() }
+  val hiddenBuiltIns by preferencesStore.hiddenBuiltInTimeWindows.collectAsRetainedState(emptySet())
+  // Hidden built-ins are never searched, even as the fallback for a passed or deleted window
+  val shownWindows =
+    remember(windows, hiddenBuiltIns) { windows.filterNot { it.id in hiddenBuiltIns } }
   var selectedWindowId by retain { mutableStateOf(TimeWindow.forHour(currentHour)?.id) }
   var isManagingWindows by retain { mutableStateOf(false) }
-  val selectedWindow = resolveSelectedWindow(selectedWindowId, windows, currentHour)
+  val selectedWindow = resolveSelectedWindow(selectedWindowId, shownWindows, currentHour)
   // When the date rolls over at midnight, a selection of the old "today" moves to the new one.
   var lastToday by retain { mutableStateOf(today) }
   LaunchedEffect(today) {
@@ -212,7 +232,8 @@ fun FindFieldPresenter(
     }
     lastToday = today
   }
-  val hours = searchHours(selectedWindow, isToday = selectedDate == today, currentHour)
+  val hours =
+    searchHours(selectedWindow, isToday = selectedDate == today, currentHour, shownWindows)
 
   // Freshness across every area, recomputed when downloads land and at least hourly
   val lastUpdatesFlow = retain { repository.lastUpdatesFlow() }
@@ -239,6 +260,7 @@ fun FindFieldPresenter(
     isToday = selectedDate == today,
     currentHour = currentHour,
     windows = windows,
+    hiddenBuiltIns = hiddenBuiltIns.toImmutableSet(),
     isManagingWindows = isManagingWindows,
     isMissingPendingData = availability?.isMissingPendingData == true && selectedDate >= today,
     freshness = freshness,
@@ -270,6 +292,9 @@ fun FindFieldPresenter(
           selectedWindowId = TimeWindow.forHour(currentHour)?.id
         }
         scope.launch { preferencesStore.deleteCustomTimeWindow(event.id) }
+      }
+      is FindFieldScreen.Event.SetBuiltInWindowHidden -> {
+        scope.launch { preferencesStore.setBuiltInTimeWindowHidden(event.id, event.hidden) }
       }
       is FindFieldScreen.Event.SelectDate -> selectedDate = event.date
       is FindFieldScreen.Event.NavigateToArea -> {
@@ -417,6 +442,8 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       ) { newDate ->
         state.eventSink(FindFieldScreen.Event.SelectDate(newDate))
       }
+      // Chips fade in and out as windows are hidden, shown, added, or deleted, and the chips
+      // around them slide into place
       LazyRow(horizontalArrangement = spacedBy(8.dp)) {
         items(state.visibleWindows, key = { it.id }) { window ->
           val startHour =
@@ -425,6 +452,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
             state.weather?.isRainyWindow(state.selectedDate, startHour, window.endHour) == true
           FilterChip(
             selected = state.selectedWindow == window,
+            modifier = Modifier.animateItem(),
             onClick = {
               state.eventSink(
                 FindFieldScreen.Event.SelectWindow(
@@ -452,6 +480,7 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
         item(key = "manage-windows") {
           FilterChip(
             selected = false,
+            modifier = Modifier.animateItem(),
             onClick = { state.eventSink(FindFieldScreen.Event.ShowWindowManager(true)) },
             label = { Icon(Icons.Outlined.Add, contentDescription = "Manage time windows") },
           )
@@ -463,11 +492,15 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
     if (state.isManagingWindows) {
       TimeWindowsSheet(
         windows = state.windows,
+        hiddenBuiltIns = state.hiddenBuiltIns,
         canAddWindow = state.canAddWindow,
         onSave = { id, name, startHour, endHour ->
           state.eventSink(FindFieldScreen.Event.SaveWindow(id, name, startHour, endHour))
         },
         onDelete = { id -> state.eventSink(FindFieldScreen.Event.DeleteWindow(id)) },
+        onSetHidden = { id, hidden ->
+          state.eventSink(FindFieldScreen.Event.SetBuiltInWindowHidden(id, hidden))
+        },
         onDismiss = { state.eventSink(FindFieldScreen.Event.ShowWindowManager(false)) },
       )
     }
@@ -561,6 +594,21 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       }
     }
   }
+}
+
+/** How long a changed time value takes to roll into place. */
+private const val TimeValueMillis = 200
+
+/**
+ * Rolls a changed time value like an odometer. The old value slides up and out while the new one
+ * rises in from below, and the space around them resizes to fit. The two never overlap and the clip
+ * hides each as it leaves, so neither fades.
+ */
+private fun <S> AnimatedContentTransitionScope<S>.timeValueTransition(): ContentTransform {
+  val slide = tween<IntOffset>(TimeValueMillis, easing = EmphasizedEasing)
+  return slideInVertically(slide) { height -> height } togetherWith
+    slideOutVertically(slide) { height -> -height } using
+    SizeTransform(clip = true) { _, _ -> tween(TimeValueMillis, easing = EmphasizedEasing) }
 }
 
 @Composable
@@ -671,15 +719,23 @@ private fun FieldAvailabilityRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
-        for (opening in field.fieldOpenings) {
-          Text(
-            "${opening.fieldNames} · ${opening.openTimeRange}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.tertiary,
-            // Two lines fit the free times next to a wide time chip
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-          )
+        AnimatedContent(
+          targetState = field.fieldOpenings,
+          transitionSpec = { timeValueTransition() },
+          label = "field openings",
+        ) { openings ->
+          Column {
+            for (opening in openings) {
+              Text(
+                "${opening.fieldNames} · ${opening.openTimeRange}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                // Two lines fit the free times next to a wide time chip
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
         }
       }
 
@@ -708,12 +764,19 @@ private fun FieldAvailabilityRow(
           shape = MaterialTheme.shapes.small,
           color = MaterialTheme.colorScheme.secondaryContainer,
         ) {
-          Text(
+          AnimatedContent(
             // Only some fields are free, and the opening lines list them
-            text = field.openTimeRange.ifEmpty { "Some fields" },
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-          )
+            targetState = field.openTimeRange.ifEmpty { "Some fields" },
+            transitionSpec = { timeValueTransition() },
+            contentAlignment = Alignment.Center,
+            label = "open time range",
+          ) { timeRange ->
+            Text(
+              text = timeRange,
+              style = MaterialTheme.typography.labelMedium,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+          }
         }
       }
 
@@ -730,21 +793,25 @@ private fun FieldAvailabilityRow(
 }
 
 /**
- * The windows worth offering as chips. On today, windows that have already ended are hidden, so the
- * windows still ahead and the manage chip stay on screen.
+ * The windows worth offering as chips. Built-ins in [hiddenBuiltIns] never show. On today, windows
+ * that have already ended are hidden too, so the windows still ahead and the manage chip stay on
+ * screen.
  */
 internal fun visibleWindows(
   windows: List<TimeWindow>,
   isToday: Boolean,
   currentHour: Int,
+  hiddenBuiltIns: Set<String> = emptySet(),
 ): List<TimeWindow> {
-  return if (isToday) windows.filterNot { it.hasPassed(currentHour) } else windows
+  val shown = windows.filterNot { it.builtIn && it.id in hiddenBuiltIns }
+  return if (isToday) shown.filterNot { it.hasPassed(currentHour) } else shown
 }
 
 /**
  * The window for [selectedId] among [windows], or null for the whole day when [selectedId] is null.
- * A selected window that no longer exists, like a deleted custom window, falls back to the built-in
- * window for [currentHour].
+ * A selected window that isn't in [windows], like a deleted custom window or a hidden built-in,
+ * falls back to the built-in window for [currentHour], or to the whole day when that one isn't in
+ * [windows] either.
  */
 internal fun resolveSelectedWindow(
   selectedId: String?,
@@ -752,7 +819,8 @@ internal fun resolveSelectedWindow(
   currentHour: Int,
 ): TimeWindow? {
   if (selectedId == null) return null
-  return windows.find { it.id == selectedId } ?: TimeWindow.forHour(currentHour)
+  return windows.find { it.id == selectedId }
+    ?: TimeWindow.forHour(currentHour)?.takeIf { it in windows }
 }
 
 /** The window Find a Field searches and its hours, with an exclusive [endHour]. */
@@ -761,15 +829,20 @@ internal data class SearchHours(val window: TimeWindow?, val startHour: Int, val
 /**
  * Resolves the hours to search for [selected], where null means the whole day. On today, hours
  * before [currentHour] drop off the start, and a window that has already ended falls back to the
- * window that holds [currentHour], or to the rest of the day when no window holds it.
+ * built-in window in [windows] that holds [currentHour], or to the rest of the day when none does.
  */
-internal fun searchHours(selected: TimeWindow?, isToday: Boolean, currentHour: Int): SearchHours {
+internal fun searchHours(
+  selected: TimeWindow?,
+  isToday: Boolean,
+  currentHour: Int,
+  windows: List<TimeWindow> = TimeWindow.builtIns,
+): SearchHours {
   if (!isToday) {
     return SearchHours(selected, selected?.startHour ?: 0, selected?.endHour ?: 24)
   }
   val window =
     if (selected != null && selected.hasPassed(currentHour)) {
-      TimeWindow.forHour(currentHour)
+      TimeWindow.forHour(currentHour)?.takeIf { it in windows }
     } else {
       selected
     }

@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.isEmpty
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
 import java.nio.file.Files
@@ -24,6 +25,19 @@ class FSPreferencesStoreTest {
   @Test
   fun `no custom windows by default`() = runTest {
     assertThat(store.customTimeWindows.first()).isEmpty()
+  }
+
+  @Test
+  fun `built-in windows hide and show again`() = runTest {
+    assertThat(store.hiddenBuiltInTimeWindows.first()).isEmpty()
+    store.setBuiltInTimeWindowHidden(TimeWindow.MORNING.id, hidden = true)
+    store.setBuiltInTimeWindowHidden(TimeWindow.EVENING.id, hidden = true)
+    assertThat(store.hiddenBuiltInTimeWindows.first())
+      .containsExactlyInAnyOrder(TimeWindow.MORNING.id, TimeWindow.EVENING.id)
+
+    store.setBuiltInTimeWindowHidden(TimeWindow.MORNING.id, hidden = false)
+    assertThat(store.hiddenBuiltInTimeWindows.first())
+      .containsExactlyInAnyOrder(TimeWindow.EVENING.id)
   }
 
   @Test

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import co.touchlab.kermit.Logger
 import dev.zacsweers.fieldspottr.FSAppDirs
 import dev.zacsweers.metro.AppScope
@@ -58,6 +59,27 @@ class FSPreferencesStore(appDirs: FSAppDirs, private val json: Json) {
     editCustomTimeWindows { windows -> windows.filterNot { it.id == id } }
   }
 
+  /** Ids of the built-in Find a Field windows the user hid. Hidden windows get no chip. */
+  val hiddenBuiltInTimeWindows: Flow<Set<String>> =
+    dataStore.data.map { prefs -> prefs[KEY_HIDDEN_BUILT_IN_TIME_WINDOWS].orEmpty() }
+
+  suspend fun setBuiltInTimeWindowHidden(id: String, hidden: Boolean) {
+    dataStore.edit { prefs ->
+      val current = prefs[KEY_HIDDEN_BUILT_IN_TIME_WINDOWS].orEmpty()
+      val updated =
+        if (hidden) {
+          current + id
+        } else {
+          current - id
+        }
+      if (updated.isEmpty()) {
+        prefs.remove(KEY_HIDDEN_BUILT_IN_TIME_WINDOWS)
+      } else {
+        prefs[KEY_HIDDEN_BUILT_IN_TIME_WINDOWS] = updated
+      }
+    }
+  }
+
   private suspend fun editCustomTimeWindows(transform: (List<TimeWindow>) -> List<TimeWindow>) {
     dataStore.edit { prefs ->
       val updated = transform(decodeWindows(prefs[KEY_CUSTOM_TIME_WINDOWS]))
@@ -100,5 +122,6 @@ class FSPreferencesStore(appDirs: FSAppDirs, private val json: Json) {
   private companion object {
     val KEY_DEFAULT_GROUP = stringPreferencesKey("default_group")
     val KEY_CUSTOM_TIME_WINDOWS = stringPreferencesKey("custom_time_windows")
+    val KEY_HIDDEN_BUILT_IN_TIME_WINDOWS = stringSetPreferencesKey("hidden_built_in_time_windows")
   }
 }
