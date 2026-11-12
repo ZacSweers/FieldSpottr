@@ -4,9 +4,13 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotSameInstanceAs
 import assertk.assertions.isSameInstanceAs
+import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
@@ -19,14 +23,19 @@ import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.test.Test
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
@@ -39,6 +48,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
@@ -47,9 +57,13 @@ class DataQueryTest {
   private val stored = MutableStateFlow<Fetched<Int>?>(null)
   // No invalidate, so these tests cover the default that rewrites the value with a stale time
   private val store =
-    QueryStore.of(stored, clear = stored::clearFetched) { value, fetchedAt, keepsStored ->
-      stored.writeFetched(value, fetchedAt, keepsStored)
-    }
+    QueryStore.of(
+      stored,
+      clear = stored::clearFetched,
+      write = { fetched, keepsStored ->
+        stored.writeFetched(fetched, keepsStored)
+      },
+    )
   // One more than what is stored, so each fetch stores a value of its own
   private val fetch = TestFetch { (stored.value?.value ?: 0) + 1 }
   private lateinit var data: TestDataScope
@@ -58,7 +72,7 @@ class DataQueryTest {
     freshness: Freshness = Freshness.staleAfter(1.hours)
   ): DataQuery<Int> {
     data = testDataScope(clock = testClock(START))
-    return data.query(store = store, fetch = fetch, freshness = freshness)
+    return data.query(store = store, freshness = freshness, fetch = fetch)
   }
 
   @Test
@@ -181,8 +195,50 @@ class DataQueryTest {
 
     assertThat(query.invalidate().await()).isEqualTo(OperationState.Succeeded)
     assertThat(fetch.callCount).isEqualTo(0)
-    assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
+    assertThat(stored.value).isEqualTo(Fetched(1, START - 10.minutes, invalidated = true))
     assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `an invalidated value fetched a moment ago is stale`() = runTest {
+    stored.value = Fetched(1, START, invalidated = true)
+    val query = dataQuery()
+
+    assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `data on screen that drops to a value never fetched fetches again at once`() = runTest {
+    stored.value = Fetched(1, START)
+    val query = dataQuery()
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(0)
+
+    // Like local changes over a truth that a capped store evicted
+    stored.value = Fetched(5, fetchedAt = null)
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(stored.value).isEqualTo(Fetched(6, START))
+  }
+
+  @Test
+  fun `invalidated data on screen waits for the next collect`() = runTest {
+    stored.value = Fetched(1, START)
+    val query = dataQuery()
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+
+    query.invalidate().awaitSucceeded()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(0)
+    assertThat(stored.value).isEqualTo(Fetched(1, START, invalidated = true))
+
+    query.data.first()
+    testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -198,7 +254,7 @@ class DataQueryTest {
     request.await()
     invalidate.await()
     // The fetch's write came first, so the value it stored is the one marked stale
-    assertThat(stored.value).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
+    assertThat(stored.value).isEqualTo(Fetched(1, START, invalidated = true))
   }
 
   @Test
@@ -259,16 +315,20 @@ class DataQueryTest {
     val releaseOld = CompletableDeferred<Unit>()
     // Pauses the older fetch inside the write, after the query has handed over its rule
     val shared =
-      QueryStore.of(row, clear = row::clearFetched) { value, fetchedAt, keepsStored ->
-        if (value == 1) {
-          writingOld.complete(Unit)
-          releaseOld.await()
-        }
-        row.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        row,
+        clear = row::clearFetched,
+        write = { fetched, keepsStored ->
+          if (fetched.value == 1) {
+            writingOld.complete(Unit)
+            releaseOld.await()
+          }
+          row.writeFetched(fetched, keepsStored)
+        },
+      )
     val freshness = Freshness.staleAfter(1.hours)
-    val older = data.query(shared, freshness = freshness, fetch = { 1 })
-    val newer = data.query(shared, freshness = freshness, fetch = { 2 })
+    val older = data.query(shared, freshness = freshness) { 1 }
+    val newer = data.query(shared, freshness = freshness) { 2 }
 
     val first = older.requestFetch(force = true)
     writingOld.await()
@@ -344,28 +404,27 @@ class DataQueryTest {
     val state = MutableStateFlow<Fetched<Int>?>(null)
     val writes = mutableListOf<Int>()
     val store =
-      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        writes += value
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        state,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          writes += fetched.value
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     val firstStarted = CompletableDeferred<Unit>()
     val release = CompletableDeferred<Unit>()
     var calls = 0
     val query =
-      testDataScope(clock = testClock(START))
-        .query(
-          store = store,
-          fetch = {
-            calls++
-            if (calls == 1) {
-              firstStarted.complete(Unit)
-              // Like a callback API that finishes whether or not anyone still waits
-              withContext(NonCancellable) { release.await() }
-            }
-            calls
-          },
-          freshness = Freshness.staleAfter(1.hours),
-        )
+      testDataScope(clock = testClock(START)).query(store, Freshness.staleAfter(1.hours)) {
+        calls++
+        if (calls == 1) {
+          firstStarted.complete(Unit)
+          // Like a callback API that finishes whether or not anyone still waits
+          withContext(NonCancellable) { release.await() }
+        }
+        calls
+      }
 
     val first = query.requestFetch(force = true)
     firstStarted.await()
@@ -384,7 +443,7 @@ class DataQueryTest {
     val single = QueryStore.inMemory<Int>()
     single.write(1, START)
     single.invalidate()
-    assertThat(single.data.first()).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
+    assertThat(single.data.first()).isEqualTo(Fetched(1, START, invalidated = true))
     single.clear()
     assertThat(single.data.first()).isEqualTo(null)
 
@@ -392,7 +451,7 @@ class DataQueryTest {
     byKey("a").write(1, START)
     byKey("b").write(2, START)
     byKey("a").invalidate()
-    assertThat(byKey("a").data.first()).isEqualTo(Fetched(1, QueryStore.INVALIDATED))
+    assertThat(byKey("a").data.first()).isEqualTo(Fetched(1, START, invalidated = true))
     assertThat(byKey("b").data.first()).isEqualTo(Fetched(2, START))
     byKey("b").clear()
     assertThat(byKey("b").data.first()).isEqualTo(null)
@@ -417,12 +476,16 @@ class DataQueryTest {
       emitAll(state)
     }
     val store =
-      QueryStore.of(slowReads, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        slowReads,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     val query =
       testDataScope(clock = testClock(START))
-        .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+        .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     val check = query.requestFetch(force = false)
     backgroundScope.launch { query.data.collect {} }
     testScheduler.runCurrent()
@@ -455,13 +518,17 @@ class DataQueryTest {
       }
     }
     val store =
-      QueryStore.of(pausedFirstRead, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        pausedFirstRead,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     val fetchTwo = TestFetch { 2 }
     val query =
       testDataScope(clock = testClock(START))
-        .query(store, fetch = fetchTwo, freshness = Freshness.staleAfter(1.hours))
+        .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetchTwo)
     val check = query.requestFetch(force = false)
     checkRead.await()
 
@@ -482,7 +549,7 @@ class DataQueryTest {
   fun `an offline collector whose first fetch failed tries once`() = runTest {
     data = testDataScope(clock = testClock(START))
     fetch.respond = { error("offline") }
-    val query = data.query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+    val query = data.query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     backgroundScope.launch { query.data.collect {} }
     testScheduler.runCurrent()
@@ -500,21 +567,22 @@ class DataQueryTest {
         values,
         clear = { keepsStored ->
           val current = values.replayCache.lastOrNull()
-          if (current == null || !keepsStored(current.fetchedAt)) {
+          if (current == null || !keepsStored(current.fetchedAt, current.invalidated)) {
             values.emit(null)
           }
         },
-      ) { value, fetchedAt, keepsStored ->
-        // Only this test's collector emits too, and it never writes, so the check needs no lock
-        val current = values.replayCache.lastOrNull()
-        if (current == null || !keepsStored(current.fetchedAt)) {
-          values.emit(Fetched(value, fetchedAt))
-        }
-      }
+        write = { fetched, keepsStored ->
+          // Only this test's collector emits too, and it never writes, so the check needs no lock
+          val current = values.replayCache.lastOrNull()
+          if (current == null || !keepsStored(current.fetchedAt, current.invalidated)) {
+            values.emit(fetched)
+          }
+        },
+      )
     fetch.respond = { error("offline") }
     val query =
       testDataScope(clock = testClock(START))
-        .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+        .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     val resume = CompletableDeferred<Unit>()
     backgroundScope.launch { query.data.collect {} }
     // Stops on the first value, so the newer value and the clear wait in its buffer
@@ -604,7 +672,7 @@ class DataQueryTest {
     val query =
       testDataScopeFactory(clock = testClock(START))
         .create(owner)
-        .query(store = store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+        .query(store = store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     fetch.hold()
     val request = query.requestFetch(force = true)
     testScheduler.runCurrent()
@@ -641,7 +709,7 @@ class DataQueryTest {
     val failing = TestFetch<Int> { error("offline") }
     val query =
       testDataScope(eager = true, clock = testClock(START))
-        .query(QueryStore.inMemory(), fetch = failing, freshness = Freshness.staleAfter(1.hours))
+        .query(QueryStore.inMemory(), freshness = Freshness.staleAfter(1.hours), fetch = failing)
 
     query.data.first()
 
@@ -655,17 +723,21 @@ class DataQueryTest {
     val published = CompletableDeferred<Unit>()
     val finishWrite = CompletableDeferred<Unit>()
     val store =
-      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        // Visible before the write returns, like a database that notifies inside its transaction
-        state.writeFetched(value, fetchedAt, keepsStored)
-        published.complete(Unit)
-        finishWrite.await()
-      }
+      QueryStore.of(
+        state,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          // Visible before the write returns, like a database that notifies inside its transaction
+          state.writeFetched(fetched, keepsStored)
+          published.complete(Unit)
+          finishWrite.await()
+        },
+      )
     var calls = 0
     val counting = TestFetch { ++calls }
     val query =
       testDataScope(clock = testClock(START))
-        .query(store, fetch = counting, freshness = Freshness.staleAfter(1.hours))
+        .query(store, freshness = Freshness.staleAfter(1.hours), fetch = counting)
     backgroundScope.launch { query.data.collect {} }
 
     published.await()
@@ -709,16 +781,803 @@ class DataQueryTest {
         backing.data,
         clear = backing::clearFetched,
         invalidate = { throw notMarked },
-      ) { value, fetchedAt, keepsStored ->
-        backing.writeFetched(value, fetchedAt, keepsStored)
-      }
-    val query = data.query(failingInvalidate, fetch, Freshness.staleAfter(1.hours))
+        write = { fetched, keepsStored ->
+          backing.writeFetched(fetched, keepsStored)
+        },
+      )
+    val query = data.query(failingInvalidate, Freshness.staleAfter(1.hours), fetch = fetch)
 
     assertThat(query.invalidate().awaitFailed<Throwable>()).isSameInstanceAs(notMarked)
 
     assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
     assertThat(data.actionFailures.take()).containsExactly(notMarked)
     data.fetchFailures.assertNone()
+  }
+
+  @Test
+  fun `a store that fails under the watcher is reported and watched again`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(Fetched(1, START))
+    val broken = IllegalStateException("store failed")
+    var collections = 0
+    // The collector's collection comes first and the watcher's second, which fails after a value
+    val flaky = flow {
+      if (++collections == 2) {
+        emit(state.value)
+        throw broken
+      }
+      emitAll(state)
+    }
+    val store =
+      QueryStore.of(
+        flaky,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
+    val handled = mutableListOf<Throwable>()
+    val owner =
+      CoroutineScope(
+        backgroundScope.coroutineContext +
+          SupervisorJob(backgroundScope.coroutineContext.job) +
+          CoroutineExceptionHandler { _, t -> handled += t }
+      )
+    val factory = testDataScopeFactory(clock = testClock(START))
+    val fetchTwo = TestFetch { 2 }
+    val query = factory.create(owner).query(store, Freshness.staleAfter(1.hours), fetch = fetchTwo)
+
+    val seen = mutableListOf<Fetched<Int>?>()
+    backgroundScope.launch { query.data.collect { seen += it } }
+    testScheduler.runCurrent()
+    assertThat(factory.actionFailures.take()).containsExactly(broken)
+    assertThat(handled).isEmpty()
+
+    // The watcher collects again after its pause, so it sees the store lose its value and fetches
+    advanceTimeBy(1.seconds)
+    testScheduler.runCurrent()
+    state.value = null
+    testScheduler.runCurrent()
+
+    assertThat(fetchTwo.callCount).isEqualTo(1)
+    assertThat(seen.last()).isEqualTo(Fetched(2, START + 1.seconds))
+    assertThat(handled).isEmpty()
+    factory.assertNoFailures()
+  }
+
+  @Test
+  fun `a forced request replaces a running unforced fetch and settles its handle`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(null)
+    val writes = mutableListOf<Int>()
+    val store =
+      QueryStore.of(
+        state,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          writes += fetched.value
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
+    val firstStarted = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    var calls = 0
+    val query =
+      testDataScope(clock = testClock(START)).query(store, Freshness.staleAfter(1.hours)) {
+        calls++
+        if (calls == 1) {
+          firstStarted.complete(Unit)
+          // Like a callback API that finishes whether or not anyone still waits
+          withContext(NonCancellable) { release.await() }
+        }
+        calls
+      }
+
+    val background = query.requestFetch(force = false)
+    firstStarted.await()
+    val refresh = query.requestFetch(force = true)
+    testScheduler.runCurrent()
+
+    // Shown at once, while the replaced fetch still runs because it ignores cancellation
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = true))
+    assertThat(refresh).isSameInstanceAs(background)
+    release.complete(Unit)
+    assertThat(background.await()).isEqualTo(OperationState.Succeeded)
+    assertThat(calls).isEqualTo(2)
+    assertThat(writes).containsExactly(2)
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+  }
+
+  @Test
+  fun `a forced request replaces a collector's fetch that a background request joined`() = runTest {
+    val query = dataQuery()
+    fetch.hold()
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = false))
+    // Joins the collector's fetch in flight
+    val background = query.fetchIfStale()
+
+    val refresh = query.refresh()
+    testScheduler.runCurrent()
+    assertThat(fetch.cancelled).hasSize(1)
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = true))
+    fetch.release()
+
+    assertThat(refresh).isSameInstanceAs(background)
+    background.awaitSucceeded()
+    assertThat(fetch.callCount).isEqualTo(2)
+    assertThat(stored.value).isEqualTo(Fetched(1, START))
+  }
+
+  @Test
+  fun `a forced request takes over an unforced fetch across a queued invalidation`() = runTest {
+    val query = dataQuery()
+    fetch.hold()
+    val background = query.fetchIfStale()
+    testScheduler.runCurrent()
+
+    val invalidation = query.invalidate()
+    val refresh = query.refresh()
+    testScheduler.runCurrent()
+    assertThat(refresh).isSameInstanceAs(background)
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = true))
+    assertThat(fetch.cancelled).hasSize(1)
+    fetch.release()
+
+    background.awaitSucceeded()
+    invalidation.awaitSucceeded()
+    // One forced fetch replaced the hung one, and the invalidation left its result fresh
+    assertThat(fetch.callCount).isEqualTo(2)
+    assertThat(stored.value).isEqualTo(Fetched(1, START))
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(2)
+  }
+
+  @Test
+  fun `an invalidation behind a failed takeover still marks the data stale`() = runTest {
+    stored.value = Fetched(1, START - 2.hours)
+    val query = dataQuery()
+    fetch.hold()
+    val background = query.fetchIfStale()
+    testScheduler.runCurrent()
+
+    fetch.respond = { error("offline") }
+    val invalidation = query.invalidate()
+    val refresh = query.refresh()
+    testScheduler.runCurrent()
+    fetch.release()
+
+    background.awaitFailed<IllegalStateException>()
+    refresh.awaitFailed<IllegalStateException>()
+    invalidation.awaitSucceeded()
+    assertThat(stored.value).isEqualTo(Fetched(1, START - 2.hours, invalidated = true))
+  }
+
+  @Test
+  fun `an invalidation requested during a takeover's fetch marks its result stale`() = runTest {
+    val query = dataQuery()
+    fetch.hold()
+    val background = query.fetchIfStale()
+    testScheduler.runCurrent()
+    query.refresh()
+    // The forced fetch has started in the unforced fetch's place
+    testScheduler.runCurrent()
+
+    val invalidation = query.invalidate()
+    fetch.release()
+
+    background.awaitSucceeded()
+    invalidation.awaitSucceeded()
+    assertThat(stored.value).isEqualTo(Fetched(1, START, invalidated = true))
+  }
+
+  @Test
+  fun `a forced request never joins a takeover from before an invalidation`() = runTest {
+    val query = dataQuery()
+    fetch.hold()
+    val background = query.fetchIfStale()
+    testScheduler.runCurrent()
+    query.refresh()
+    testScheduler.runCurrent()
+
+    query.invalidate()
+    val again = query.refresh()
+    testScheduler.runCurrent()
+    assertThat(again).isNotSameInstanceAs(background)
+    fetch.release()
+
+    background.awaitSucceeded()
+    again.awaitSucceeded()
+    // The second forced fetch ran after the invalidation, so its value is left fresh
+    assertThat(stored.value).isEqualTo(Fetched(2, START))
+  }
+
+  @Test
+  fun `each collector of fresh data reads the store once`() = runTest {
+    for (collectors in 1..3) {
+      val recording = RecordingQueryStore(QueryStore.inMemory(Fetched(1, START)))
+      val query =
+        testDataScope(clock = testClock(START))
+          .query(recording, Freshness.staleAfter(1.hours), fetch = fetch)
+
+      val jobs = List(collectors) { backgroundScope.launch { query.data.collect {} } }
+      testScheduler.runCurrent()
+
+      // One collection per collector, plus the one the watcher shares between them
+      assertThat(recording.dataCollections).isEqualTo(collectors + 1)
+      jobs.forEach { it.cancel() }
+    }
+    assertThat(fetch.callCount).isEqualTo(0)
+  }
+
+  @Test
+  fun `failed collector fetches hold off for a window that doubles`() = runTest {
+    fetch.respond = { error("offline") }
+    val query = dataQuery()
+
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    // Inside the 1 second window
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+
+    advanceTimeBy(1.seconds)
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(2)
+    // The second failure in a row holds off for 2 seconds
+    advanceTimeBy(1.seconds)
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(2)
+    advanceTimeBy(1.seconds)
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(3)
+  }
+
+  @Test
+  fun `explicit requests never hold off`() = runTest {
+    fetch.respond = { error("offline") }
+    val query = dataQuery()
+
+    query.data.first()
+    testScheduler.runCurrent()
+    query.fetchIfStale().awaitFailed<IllegalStateException>()
+    query.refresh().awaitFailed<IllegalStateException>()
+
+    assertThat(fetch.callCount).isEqualTo(3)
+  }
+
+  @Test
+  fun `a successful fetch clears the hold-off`() = runTest {
+    fetch.respond = { error("offline") }
+    val query = dataQuery()
+    query.data.first()
+    testScheduler.runCurrent()
+
+    fetch.respond = { 1 }
+    query.refresh().awaitSucceeded()
+    query.invalidate().awaitSucceeded()
+    // Still inside the window the failure opened, yet the collector fetches
+    query.data.first()
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(3)
+  }
+
+  @Test
+  fun `a reconnect fetches again for a collected query whose fetch failed`() = runTest {
+    data = testDataScope(clock = testClock(START), online = false)
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+    val respond = fetch.respond
+    fetch.respond = { error("offline") }
+
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    // Offline does not skip the fetch, so a first load fails fast
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
+
+    fetch.respond = respond
+    data.online.value = true
+    testScheduler.runCurrent()
+
+    // Inside the hold-off window, which a reconnect ignores
+    assertThat(fetch.callCount).isEqualTo(2)
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+    assertThat(stored.value).isEqualTo(Fetched(1, START))
+  }
+
+  @Test
+  fun `a reconnect leaves fresh data that fetched fine`() = runTest {
+    stored.value = Fetched(1, START)
+    data = testDataScope(clock = testClock(START), online = false)
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    data.online.value = true
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(0)
+  }
+
+  @Test
+  fun `a takeover that its owner's cancellation reaches first leaves the status idle`() = runTest {
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val query =
+      testDataScopeFactory(clock = testClock(START))
+        .create(owner)
+        .query(store = store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
+    fetch.hold()
+    val background = query.fetchIfStale()
+    testScheduler.runCurrent()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = false))
+
+    // The owner stops, and a pull to refresh lands before the cancellation reaches the fetch
+    owner.cancel()
+    query.refresh()
+    testScheduler.runCurrent()
+
+    assertThat(background.state.value).isInstanceOf<OperationState.Terminal>()
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+  }
+
+  @Test
+  fun `a takeover stopped with its owner while the old fetch finishes leaves the status idle`() =
+    runTest {
+      val owner =
+        CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+      val started = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+      var calls = 0
+      val query =
+        testDataScopeFactory(clock = testClock(START)).create(owner).query(
+          store,
+          Freshness.staleAfter(1.hours),
+        ) {
+          calls++
+          if (calls == 1) {
+            started.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+          }
+          calls
+        }
+      val background = query.fetchIfStale()
+      started.await()
+      query.refresh()
+      testScheduler.runCurrent()
+      assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = true))
+
+      owner.cancel()
+      release.complete(Unit)
+      testScheduler.runCurrent()
+
+      assertThat(background.state.value).isInstanceOf<OperationState.Terminal>()
+      assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+    }
+
+  @Test
+  fun `a clock set back never holds off past the window`() = runTest {
+    val query = dataQuery()
+    fetch.respond = { error("offline") }
+    query.data.first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+
+    // The device clock is set back 10 minutes. The window was 1 second.
+    data.clock.shift(-10.minutes)
+    advanceTimeBy(5.seconds)
+    fetch.respond = { 1 }
+    query.data.first()
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(2)
+  }
+
+  @Test
+  fun `a failure made offline does not hold off once the device is online again`() = runTest {
+    data = testDataScope(clock = testClock(START), online = false)
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+    val respond = fetch.respond
+    fetch.respond = { error("offline") }
+    val collector = backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    collector.cancel()
+    testScheduler.runCurrent()
+
+    // Nothing collects, so the reconnect itself fetches nothing
+    data.online.value = true
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+    fetch.respond = respond
+    // Still inside the window the offline failure opened
+    query.data.first()
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(2)
+  }
+
+  /** A query over [store] whose fetches always fail, in a scope whose factory uses [fetchRetry]. */
+  private fun TestScope.failingQuery(
+    fetchRetry: RetryPolicy,
+    retry: RetryPolicy? = null,
+  ): DataQuery<Int> {
+    fetch.respond = { error("offline") }
+    data = testDataScope(clock = testClock(START), fetchRetry = fetchRetry)
+    return data.query(store, Freshness.staleAfter(1.hours), retry = retry, fetch = fetch)
+  }
+
+  /** Collects [query] for one value and returns how many fetches have run in all. */
+  private suspend fun TestScope.collectOnce(query: DataQuery<Int>): Int {
+    query.data.first()
+    testScheduler.runCurrent()
+    return fetch.callCount
+  }
+
+  @Test
+  fun `the factory's fetch policy sets the hold-off window`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy { attempt -> 10.seconds * attempt })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(10.seconds - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+    // The second failure in a row waits 20 seconds
+    advanceTimeBy(20.seconds - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(3)
+  }
+
+  @Test
+  fun `a wait longer than the policy's bound is cut to it`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy(maxDelay = 3.seconds) { 1.hours })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(3.seconds - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+  }
+
+  @Test
+  fun `a zero wait never holds off`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy { Duration.ZERO })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    assertThat(collectOnce(query)).isEqualTo(2)
+    assertThat(collectOnce(query)).isEqualTo(3)
+  }
+
+  @Test
+  fun `a declined failure stops collector fetches past the policy's bound`() = runTest {
+    val query =
+      failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1, maxDelay = 30.seconds) { 1.seconds })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    // Past the bound, and past the time the count of failures in a row lasts
+    advanceTimeBy(1.minutes)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(30.days)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    // The status keeps the failure, so a screen can offer a retry
+    assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
+  }
+
+  @Test
+  fun `a declined failure stops collector fetches for a policy without a bound`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(2.hours)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(30.days)
+    assertThat(collectOnce(query)).isEqualTo(1)
+  }
+
+  @Test
+  fun `a declined failure holds off the watcher's recheck`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+
+    // Another writer stores a value, which then goes away
+    stored.value = Fetched(1, START)
+    testScheduler.runCurrent()
+    advanceTimeBy(2.hours)
+    stored.value = null
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `a declined failure holds off the reconnect check`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+
+    data.online.value = false
+    testScheduler.runCurrent()
+    data.online.value = true
+    testScheduler.runCurrent()
+
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
+  }
+
+  @Test
+  fun `an unforced request never joins a reconnect check that a decline holds off`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+
+    // The reconnect check queues behind a running forced fetch
+    fetch.hold()
+    val refresh = query.refresh()
+    testScheduler.runCurrent()
+    data.online.value = false
+    testScheduler.runCurrent()
+    data.online.value = true
+    testScheduler.runCurrent()
+    val request = query.fetchIfStale()
+    fetch.release()
+
+    refresh.awaitFailed<IllegalStateException>()
+    request.awaitFailed<IllegalStateException>()
+    assertThat(fetch.callCount).isEqualTo(3)
+  }
+
+  @Test
+  fun `explicit requests run after a declined failure and only a success clears it`() = runTest {
+    val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+    assertThat(collectOnce(query)).isEqualTo(1)
+
+    query.fetchIfStale().awaitFailed<IllegalStateException>()
+    query.refresh().awaitFailed<IllegalStateException>()
+    assertThat(fetch.callCount).isEqualTo(3)
+    // Failed requests leave the decline in place
+    assertThat(collectOnce(query)).isEqualTo(3)
+
+    fetch.respond = { 1 }
+    query.refresh().awaitSucceeded()
+    query.invalidate().awaitSucceeded()
+    // The success cleared the decline, so the collector fetches, and its failure declines again
+    fetch.respond = { error("offline") }
+    assertThat(collectOnce(query)).isEqualTo(5)
+    advanceTimeBy(30.days)
+    assertThat(collectOnce(query)).isEqualTo(5)
+  }
+
+  @Test
+  fun `a failure declined while offline does not hold off once online`() = runTest {
+    data =
+      testDataScope(
+        clock = testClock(START),
+        online = false,
+        fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds },
+      )
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+    val respond = fetch.respond
+    fetch.respond = { error("offline") }
+    assertThat(collectOnce(query)).isEqualTo(1)
+    // Still offline, so the decline holds
+    assertThat(collectOnce(query)).isEqualTo(1)
+    backgroundScope.launch { query.data.collect {} }
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount).isEqualTo(1)
+
+    fetch.respond = respond
+    data.online.value = true
+    testScheduler.runCurrent()
+
+    // The reconnect check fetches
+    assertThat(fetch.callCount).isEqualTo(2)
+    assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+  }
+
+  @Test
+  fun `a retryable failure after a declined one continues the count of failures in a row`() =
+    runTest {
+      class NotFound : Exception("Not found")
+      data =
+        testDataScope(
+          clock = testClock(START),
+          online = false,
+          fetchRetry =
+            RetryPolicy.exponential(
+              initial = 1.seconds,
+              max = 1.minutes,
+              retryable = { it !is NotFound },
+            ),
+        )
+      val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+      fetch.respond = { throw NotFound() }
+      // Declined, but made offline
+      assertThat(collectOnce(query)).isEqualTo(1)
+      data.online.value = true
+      testScheduler.runCurrent()
+
+      fetch.respond = { error("timeout") }
+      assertThat(collectOnce(query)).isEqualTo(2)
+      // The second failure in a row, which waits 2 seconds
+      advanceTimeBy(2.seconds - 1.milliseconds)
+      assertThat(collectOnce(query)).isEqualTo(2)
+      advanceTimeBy(1.milliseconds)
+      // A failure the policy declines online stops the query's own fetches again
+      fetch.respond = { throw NotFound() }
+      assertThat(collectOnce(query)).isEqualTo(3)
+      advanceTimeBy(30.days)
+      assertThat(collectOnce(query)).isEqualTo(3)
+    }
+
+  @Test
+  fun `a policy can read the failure`() = runTest {
+    class RateLimited(val retryAfter: Duration) : Exception("Rate limited")
+    val policy =
+      object : RetryPolicy {
+        override fun delayAfter(attempt: Int, failure: Throwable): Duration? =
+          (failure as? RateLimited)?.retryAfter ?: 1.seconds
+      }
+    val query = failingQuery(fetchRetry = policy)
+    fetch.respond = { throw RateLimited(retryAfter = 45.seconds) }
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(45.seconds - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+    // Without the header, the next failure waits the policy's default
+    fetch.respond = { error("offline") }
+    advanceTimeBy(45.seconds)
+    assertThat(collectOnce(query)).isEqualTo(3)
+    advanceTimeBy(1.seconds)
+    assertThat(collectOnce(query)).isEqualTo(4)
+  }
+
+  @Test
+  fun `a query's own policy replaces the factory's`() = runTest {
+    val query =
+      failingQuery(
+        fetchRetry = RetryPolicy { 1.minutes },
+        retry = RetryPolicy { 5.seconds },
+      )
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(5.seconds - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+  }
+
+  @Test
+  fun `a policy without a bound that throws is reported and holds off for an hour`() = runTest {
+    val broken = IllegalStateException("policy failed")
+    val query = failingQuery(fetchRetry = RetryPolicy { throw broken })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    assertThat(data.actionFailures.take()).containsExactly(broken)
+    // No bound, so it holds off for an hour
+    advanceTimeBy(1.hours - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+  }
+
+  @Test
+  fun `a policy that throws holds off for its bound`() = runTest {
+    val broken = IllegalStateException("policy failed")
+    val query = failingQuery(fetchRetry = RetryPolicy(maxDelay = 30.seconds) { throw broken })
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    assertThat(data.actionFailures.take()).containsExactly(broken)
+    advanceTimeBy(30.seconds - 1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(1.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+  }
+
+  @Test
+  fun `a failure more than the longest wait after the window counts as the first again`() =
+    runTest {
+      val query =
+        failingQuery(
+          fetchRetry = RetryPolicy(maxDelay = 30.seconds) { attempt -> 10.seconds * attempt }
+        )
+
+      assertThat(collectOnce(query)).isEqualTo(1)
+      // The 10 second window ends at 10 seconds, and the count lasts 30 seconds more
+      advanceTimeBy(40.seconds)
+      assertThat(collectOnce(query)).isEqualTo(2)
+      // Still the second failure in a row, which waits 20 seconds
+      advanceTimeBy(20.seconds - 1.milliseconds)
+      assertThat(collectOnce(query)).isEqualTo(2)
+      // That window ends at 60 seconds. A failure more than 30 seconds later counts as the first.
+      advanceTimeBy(30.seconds + 2.milliseconds)
+      assertThat(collectOnce(query)).isEqualTo(3)
+      advanceTimeBy(10.seconds)
+      assertThat(collectOnce(query)).isEqualTo(4)
+    }
+
+  @Test
+  fun `a policy whose first wait is zero reaches its second wait`() = runTest {
+    // Retry at once after the first failure, then back off for 10 seconds
+    val query =
+      failingQuery(
+        fetchRetry =
+          RetryPolicy { attempt ->
+            if (attempt == 1) {
+              Duration.ZERO
+            } else {
+              10.seconds
+            }
+          }
+      )
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+    advanceTimeBy(100.milliseconds)
+    // Failure 2 in a row, which opens a 10 second window
+    assertThat(collectOnce(query)).isEqualTo(2)
+    advanceTimeBy(100.milliseconds)
+    assertThat(collectOnce(query)).isEqualTo(2)
+  }
+
+  @Test
+  fun `a policy that throws an Error still reports the fetch's own failure`() = runTest {
+    // Like a policy left as TODO(), which throws NotImplementedError, an Error
+    val query = failingQuery(fetchRetry = RetryPolicy { TODO("policy not written yet") })
+    val offline = IllegalStateException("offline")
+    fetch.respond = { throw offline }
+
+    assertThat(collectOnce(query)).isEqualTo(1)
+
+    assertThat(data.fetchFailures.take()).containsExactly(offline)
+    assertThat(query.status.value).isEqualTo(FetchStatus.Failed(offline))
+    assertThat(data.actionFailures.take().single()).isInstanceOf<NotImplementedError>()
+    // No hold-off was recorded, so the next collector fetches at once
+    assertThat(collectOnce(query)).isEqualTo(2)
+  }
+
+  @Test
+  fun `a store that fails right after each value backs off`() = runTest {
+    val state = MutableStateFlow<Fetched<Int>?>(Fetched(1, START))
+    var collections = 0
+    // The collector's collection stays up. Each of the watcher's emits a value and then fails.
+    val flaky = flow {
+      if (++collections > 1) {
+        emit(state.value)
+        throw IllegalStateException("store failed")
+      }
+      emitAll(state)
+    }
+    val store =
+      QueryStore.of(
+        flaky,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
+    data = testDataScope(clock = testClock(START))
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+
+    backgroundScope.launch { query.data.collect {} }
+    advanceTimeBy(10.minutes)
+    testScheduler.runCurrent()
+
+    // Pauses of 1, 2, 4, 8, 16 and 32 seconds, then 1 minute each, so the failures land at 0, 1,
+    // 3, 7, 15, 31 and 63 seconds, then every minute up to 543 seconds
+    assertThat(data.actionFailures.take()).hasSize(15)
   }
 
   private companion object {

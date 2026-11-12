@@ -8,6 +8,7 @@ import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.data
 import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.refresh
 import dev.zacsweers.fieldspottr.data.core.values
@@ -52,7 +53,8 @@ private const val OPEN_METEO_URL =
     "&temperature_unit=fahrenheit" +
     "&forecast_days=8" +
     "&current=temperature_2m,weather_code" +
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunset" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min," +
+    "precipitation_probability_max,sunset" +
     "&hourly=weather_code,precipitation_probability"
 
 private val WEATHER_REFRESH_INTERVAL = 1.hours
@@ -198,8 +200,8 @@ internal constructor(
   private val query =
     data.query(
       store = store,
-      fetch = ::fetchForecast,
       freshness = Freshness.staleAfter(WEATHER_REFRESH_INTERVAL),
+      fetch = ::fetchForecast,
     )
 
   /** Latest known forecast, or null until one loads. Collecting it fetches first when stale. */

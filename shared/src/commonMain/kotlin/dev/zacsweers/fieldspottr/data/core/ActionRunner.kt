@@ -32,8 +32,21 @@ package dev.zacsweers.fieldspottr.data.core
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface ActionRunner {
-  /** Runs [block] as one command with [ordering]. The handle follows that command. */
+  /**
+   * Runs [block] as one command with [ordering]. The handle follows that command, and no holder of
+   * it can cancel the command. The command still stops when the runner's scope stops, or when a
+   * newer command replaces it through [OnPrevious.Cancel] or [OnPrevious.Supersede].
+   */
   fun run(ordering: Ordering = Ordering.Serial, block: suspend () -> Unit): Operation
+
+  /**
+   * [run], with a handle that can also cancel the command, as [CancellableOperation.cancel]
+   * describes. An owner that returns this handle to its callers lets them cancel the command.
+   */
+  fun runCancellable(
+    ordering: Ordering = Ordering.Serial,
+    block: suspend () -> Unit,
+  ): CancellableOperation
 
   companion object
 }
@@ -45,16 +58,33 @@ interface ActionRunner {
  * [newConflatedActionRunner], since commands on one runner cancel each other.
  */
 fun interface ConflatedActionRunner {
-  /** Runs [block] as one command that cancels the one before it. The handle follows it. */
-  fun run(block: suspend () -> Unit): Operation
+  /**
+   * Runs [block] as one command that cancels the one before it. The handle can also cancel the
+   * command, as [ActionRunner.runCancellable] describes.
+   */
+  fun runCancellable(block: suspend () -> Unit): CancellableOperation
+
+  /**
+   * [runCancellable], with a handle that no holder can cancel, as with [ActionRunner.run]. By
+   * default it wraps the cancellable handle in a plain view of it.
+   */
+  fun run(block: suspend () -> Unit): Operation = runCancellable(block).withoutCancel()
 }
 
 /**
  * A new [ConflatedActionRunner] in this data scope. Its commands cancel only each other, so one
- * runner never cancels or waits on another.
+ * runner never cancels or waits on another. Failed commands go to [onFailure], or to the factory's
+ * `onFailure` handler when it is null, as with [DataScope.newActionRunner].
  */
-fun DataScope.newConflatedActionRunner(): ConflatedActionRunner {
-  val actions = newActionRunner()
+fun DataScope.newConflatedActionRunner(
+  onFailure: ((Throwable) -> Unit)? = null
+): ConflatedActionRunner {
+  val actions = newActionRunner(onFailure)
   val ordering = Ordering.Keyed(Unit, OnPrevious.Cancel)
-  return ConflatedActionRunner { block -> actions.run(ordering, block) }
+  return object : ConflatedActionRunner {
+    override fun run(block: suspend () -> Unit): Operation = actions.run(ordering, block)
+
+    override fun runCancellable(block: suspend () -> Unit): CancellableOperation =
+      actions.runCancellable(ordering, block)
+  }
 }

@@ -5,12 +5,19 @@ package dev.zacsweers.fieldspottr.data.core
 import kotlin.jvm.JvmInline
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
 
 /** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
 @JvmInline value class EntryId(val value: String)
 
-/** Where an outbox row stands. [Sent] and [Discarded] are final, and the store prunes such rows. */
+/**
+ * Where an outbox row stands. [Sent] and [Discarded] are final. The store prunes a Discarded row,
+ * and a Sent row once its handle has committed it, as [OutboxEntry.committed] describes.
+ */
 sealed interface OutboxStatus {
   /** Waiting for its turn, the network or a backoff. */
   data object Queued : OutboxStatus
@@ -51,7 +58,35 @@ data class OutboxEntry<E>(
   val reverted: Boolean = false,
   /** When the current backoff ends. It lives on the row, so a restart waits it out. */
   val retryAt: Instant? = null,
+  /**
+   * Whether the outbox's handle has taken this Sent row into its local state, like an optimistic
+   * store that writes the change into its truth. A row sent while its data scope had no handle for
+   * the outbox stays uncommitted until a handle attaches, so the store keeps it until then.
+   */
+  val committed: Boolean = false,
+  /** When the send finished. Set on Sent rows only. A commit reads it to tell older fetches. */
+  val sentAt: Instant? = null,
+  /**
+   * The server's answer to a Sent row that is not committed yet, encoded by the outbox's reply
+   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does.
+   */
+  val reply: String? = null,
 )
+
+/**
+ * Whether the row has no work left: it is Sent and committed, or Discarded. Only such a row gets a
+ * settled time, and the store prunes it once that time is old enough.
+ */
+val OutboxEntry<*>.isDone: Boolean
+  get() = (status == OutboxStatus.Sent && committed) || status == OutboxStatus.Discarded
+
+/**
+ * Whether the row waits for its outbox's handle: it is Sent and not committed, or Failed and its
+ * revert has not run. A handle settles such rows when it attaches, oldest first per key.
+ */
+val OutboxEntry<*>.isOwed: Boolean
+  get() =
+    (status == OutboxStatus.Sent && !committed) || (status is OutboxStatus.Failed && !reverted)
 
 /**
  * Durable rows for an [Outbox]. The in-memory store is the default, and [DataStoreOutboxStore]
@@ -65,42 +100,128 @@ data class OutboxEntry<E>(
  */
 interface OutboxStore<E> {
   /**
-   * Inserts a Queued row and returns its id, a Uuid, so no other install or device reuses it.
+   * Inserts a Queued row with the id [id]. The outbox makes the id, a Uuid, before the insert, so
+   * no other install or device reuses it and the handle knows it before the row exists. An id
+   * already stored throws and stores nothing.
+   *
    * Throws only when it stored nothing, since the outbox then reverts the optimistic change. So an
-   * insert that starts runs to the end, and a caller cancelled meanwhile still gets the id of the
-   * row it stored.
+   * insert that starts runs to the end, also when its caller is cancelled meanwhile.
    */
-  suspend fun insert(key: String, payload: E): EntryId
+  suspend fun insert(id: EntryId, key: String, payload: E)
 
   /**
-   * Compare-and-set. Writes status, attempts, lastError, reverted and retryAt only if the row's
-   * status is still [expected]. Returns whether it wrote.
+   * Compare-and-set. Writes status, attempts, lastError, reverted, retryAt, committed, sentAt and
+   * reply only if the row's status is still [expected]. Returns whether it wrote.
    */
   suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean
 
-  /** Rows neither Sent nor Discarded, oldest first, re-emitted on every change. */
+  /**
+   * Rows that are not [isDone], oldest first, re-emitted on every change. That includes Sent rows
+   * that are not committed. A store decodes each row on its own and leaves out a row it cannot
+   * decode, as [onUndecodable] describes.
+   */
   fun entries(): Flow<List<OutboxEntry<E>>>
 
   /**
-   * One row, still observable after Sent or Discarded until the store prunes it. Null when there is
-   * no such row.
+   * The rows that are [isOwed], oldest first, read once. A handle reads these when it attaches. The
+   * default reads [entries].
+   */
+  suspend fun owed(): List<OutboxEntry<E>> = entries().first().filter { it.isOwed }
+
+  /**
+   * [key]'s rows that are [isOwed], oldest first, read once. A handle settles one key at a time
+   * with this. The default filters [owed]. A store over many rows overrides it to read only [key].
+   */
+  suspend fun owed(key: String): List<OutboxEntry<E>> = owed().filter { it.key == key }
+
+  /**
+   * One row, still observable once it is [isDone] until the store prunes it. Null when there is no
+   * such row, or when its payload cannot be decoded.
    */
   fun entry(id: EntryId): Flow<OutboxEntry<E>?>
+
+  /**
+   * Each key's head: its oldest row that is Queued or Sending, one per key, re-emitted when a head
+   * changes. The order of the list is unspecified. Only a head can send or back off, so the outbox
+   * watches this in place of [entries]. A row that cannot be decoded is skipped, so the next row on
+   * its key is the head.
+   *
+   * The default reads and decodes every row of [entries] on each change. A store over many rows
+   * overrides it so that a change decodes and returns about one row per key.
+   */
+  fun heads(): Flow<List<OutboxEntry<E>>> =
+    entries()
+      .map { rows -> rows.filter { it.status.isSendable }.distinctBy { it.key } }
+      .distinctUntilChanged()
+
+  /**
+   * [key]'s head as [heads] describes it, read once, or null when the key has none. A drain reads
+   * this before each send. The default reads [entries].
+   */
+  suspend fun head(key: String): OutboxEntry<E>? =
+    entries().first().firstOrNull { it.key == key && it.status.isSendable }
+
+  /**
+   * Hands [report] each row that is not [isDone] that this store left out of a read because its
+   * payload does not decode, with the decode error. Such a row never makes a read throw and never
+   * blocks its key or another key. It stays stored until [OutboxStores.clearAll].
+   *
+   * The store hands on each such row once for as long as it lives, on the thread of the read that
+   * met it, so [report] must not block. A row met before any listener was set waits for the first
+   * one. One listener hears at a time, and a new one replaces the last. Closing the result removes
+   * [report]. The default never calls it, which suits a store that keeps payloads as objects.
+   *
+   * A throw from [report] is dropped. The listener is usually the failure handler itself, so no
+   * other handler is left to tell. The read that met the row goes on, and the row counts as handed
+   * on.
+   */
+  fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
+    AutoCloseable {}
 }
+
+/** A store an [OutboxStores] set opened for a name, with the payload type it was opened for. */
+internal class OpenedStore<S>(val descriptor: SerialDescriptor, val store: S) {
+  /**
+   * [store], if [serializer] describes the payload type it was opened for. Otherwise it throws, as
+   * [OutboxStores.open] describes, since the store's codec would fail on the other type.
+   */
+  fun checked(name: String, serializer: KSerializer<*>): S {
+    check(serializer.descriptor == descriptor) {
+      "Outbox $name holds payloads of type $descriptor, so it cannot open for " +
+        "${serializer.descriptor}"
+    }
+    return store
+  }
+}
+
+/** Queued or Sending: the row waits to send, or is in flight. Only such a row can be a head. */
+internal val OutboxStatus.isSendable: Boolean
+  get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending
 
 /**
  * A set of [OutboxStore]s keyed by outbox name. The app builds one set and hands it to
  * [DataScope.Factory], and that choice decides where every outbox's rows live: in memory, in the
- * database or in files. Each outbox then opens its own store from the set by name. A durable set
- * also takes the payload format, so choosing the set chooses the format too.
+ * database or in files. Each [OutboxSender] then opens its store from the set by its key's name. A
+ * durable set also takes the payload format, so choosing the set chooses the format too.
  */
 interface OutboxStores {
   /**
-   * The store for the outbox called [name]. Calls with the same name return stores over the same
-   * rows, so an outbox built again after its scope ended finds the rows it left. Use one payload
-   * type per name. A durable store encodes each payload with [serializer] in the set's format.
+   * The store for the outbox called [name]. Calls with the same name return the same store, so a
+   * sender in a later data scope finds the rows an earlier one left. A durable store encodes each
+   * payload with [serializer] in the set's format.
+   *
+   * A name holds one payload type. A later call whose [serializer] has a descriptor equal to the
+   * first call's returns the store, also when the serializer is a new object. A call whose
+   * descriptor differs throws [IllegalStateException], which names the outbox and both types.
    */
   fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E>
+
+  /**
+   * Encodes the server's answers for [OutboxEntry.reply], for a row sent while no handle could
+   * commit it. A durable set encodes answers in its payload format. The default uses JSON.
+   */
+  fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
+    serializer.asCodec(DefaultPayloadFormat)
 
   /**
    * Deletes every row of every outbox in this set, including rows of outboxes that this process

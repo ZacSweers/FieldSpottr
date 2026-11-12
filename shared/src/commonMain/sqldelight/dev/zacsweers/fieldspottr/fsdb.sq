@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS dbAreaFeed (
   feedGeneratedAt INTEGER,
   feedFetchedAt INTEGER NOT NULL,
   hash TEXT NOT NULL,
+  -- 1 once invalidated. The next fetch's write sets it back to 0.
+  feedInvalidated INTEGER NOT NULL DEFAULT 0,
+  -- 1 when the row holds a value that was never fetched. feedFetchedAt then holds 0, unread.
+  feedNeverFetched INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(name)
 );
 
@@ -73,6 +77,9 @@ SELECT * FROM dbAreaFeed WHERE name = ?;
 deleteAreaFeed:
 DELETE FROM dbAreaFeed WHERE name = ?;
 
+invalidateAreaFeed:
+UPDATE dbAreaFeed SET feedInvalidated = 1 WHERE name = ?;
+
 permitDateRange:
 SELECT MIN(start) AS minDate, MAX(start) AS maxDate FROM dbPermit;
 
@@ -91,3 +98,6 @@ SELECT value FROM dbMetadata WHERE key = ?;
 
 setMetadata:
 INSERT OR REPLACE INTO dbMetadata(key, value) VALUES (?, ?);
+
+deleteMetadata:
+DELETE FROM dbMetadata WHERE key = ?;

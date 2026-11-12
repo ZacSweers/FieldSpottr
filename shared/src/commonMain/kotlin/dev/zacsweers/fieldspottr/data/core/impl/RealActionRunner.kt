@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data.core.impl
 
 import dev.zacsweers.fieldspottr.data.core.ActionRunner
+import dev.zacsweers.fieldspottr.data.core.CancellableOperation
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
@@ -45,14 +46,38 @@ internal class RealActionRunner(
   internal val keysHeld: Int
     get() = tails.load().size
 
+  /**
+   * Whether no command on [ordering]'s key is queued, running or settling. A key leaves the map
+   * only after its newest command settled, so a true answer means every command submitted on it
+   * before this call has finished. [Ordering.Concurrent] has no key and is always idle.
+   */
+  internal fun isIdle(ordering: Ordering): Boolean {
+    val key = ordering.chainKey ?: return true
+    return tails.load()[key] == null
+  }
+
   override fun run(ordering: Ordering, block: suspend () -> Unit): Operation =
     runOrJoin(ordering, tag = null, joins = { false }, block = block)
+
+  // A new command that joins nothing, so its entry is always the cancellable one built here
+  override fun runCancellable(
+    ordering: Ordering,
+    block: suspend () -> Unit,
+  ): CancellableOperation {
+    val entry =
+      submit(ordering, tag = null, joins = { false }, passes = { false }, cancellable = true, block)
+    return checkNotNull(entry.cancellableHandle) {
+      "A new command's entry has no cancellable handle"
+    }
+  }
 
   /**
    * Returns the handle of an unsettled command on [ordering]'s key that [joins] accepts, walking
    * back from the newest over the ones [passes] accepts. Otherwise runs [block] as a new command
    * tagged [tag]. One compare-and-set on the key's newest command decides, so a later command, like
-   * a query's invalidation, lines up behind every handle returned before it.
+   * a query's invalidation, lines up behind every handle returned before it. The handle cannot
+   * cancel the command, so a handle that other callers may join, like a query's fetch, is safe to
+   * share.
    */
   internal fun runOrJoin(
     ordering: Ordering,
@@ -60,7 +85,20 @@ internal class RealActionRunner(
     joins: (Entry) -> Boolean,
     passes: (Entry) -> Boolean = { false },
     block: suspend () -> Unit,
-  ): Operation {
+  ): Operation = submit(ordering, tag, joins, passes, cancellable = false, block).handle
+
+  /**
+   * The entry [runOrJoin] describes: the command it joined, or a new one it started. Only a new
+   * entry built with [cancellable] true has a [Entry.cancellableHandle].
+   */
+  private fun submit(
+    ordering: Ordering,
+    tag: Any?,
+    joins: (Entry) -> Boolean,
+    passes: (Entry) -> Boolean,
+    cancellable: Boolean,
+    block: suspend () -> Unit,
+  ): Entry {
     val key = ordering.chainKey
     var entry: Entry? = null
     // Serial is a key of its own. Concurrent has none.
@@ -71,16 +109,18 @@ internal class RealActionRunner(
       if (joined != null) {
         // Never started, so dropping it runs nothing
         entry?.job?.cancel()
-        return joined.handle
+        return joined
       }
-      val next = entry ?: newEntry(ordering, tag, block).also { entry = it }
+      val next = entry ?: newEntry(ordering, tag, cancellable, block).also { entry = it }
       // Written before the entry is published, so a newer command that finds it can walk past it
       next.predecessor = tail
       if (tails.compareAndSet(current, current.putting(key, next))) {
         break
       }
     }
-    return startLinked(entry ?: newEntry(ordering, tag, block), key)
+    val started = entry ?: newEntry(ordering, tag, cancellable, block)
+    startLinked(started, key)
+    return started
   }
 
   /** The command [joins] accepts, looking back from [newest] over the ones [passes] accepts. */
@@ -103,7 +143,7 @@ internal class RealActionRunner(
   }
 
   /** Starts [entry] once it is linked on [key], or at once when it has no key. */
-  private fun startLinked(entry: Entry, key: ChainKey?): Operation {
+  private fun startLinked(entry: Entry, key: ChainKey?) {
     // Registered once linked, so it also runs for a job that ended before then, like one whose
     // scope was already cancelled
     if (key != null) {
@@ -119,12 +159,16 @@ internal class RealActionRunner(
     }
     claimPredecessors(entry)
     entry.job?.start()
-    return entry.handle
   }
 
   /** An entry whose job waits to be started, so nothing runs until it is linked on its key. */
-  private fun newEntry(ordering: Ordering, tag: Any?, block: suspend () -> Unit): Entry {
-    val entry = Entry(ordering.mode, tag, this, ordering.chainKey)
+  private fun newEntry(
+    ordering: Ordering,
+    tag: Any?,
+    cancellable: Boolean,
+    block: suspend () -> Unit,
+  ): Entry {
+    val entry = Entry(ordering.mode, tag, this, ordering.chainKey, cancellable)
     val job =
       scope.launch(Holding(entry), CoroutineStart.LAZY) {
         waitForTurn(entry)
@@ -343,6 +387,7 @@ internal class Entry(
   val tag: Any?,
   val runner: RealActionRunner,
   chainKey: ChainKey?,
+  cancellable: Boolean = false,
 ) {
   // Cleared once the job completes
   @Volatile var chainKey: ChainKey? = chainKey
@@ -356,10 +401,36 @@ internal class Entry(
   val claim = AtomicReference(Claim.Undecided)
   // Written before the entry is published on its key. Cleared on start.
   @Volatile var predecessor: Entry? = null
-  private val runnerHandle = RunnerOperation(this)
+  private val runnerHandle =
+    if (cancellable) {
+      CancellableRunnerOperation(this)
+    } else {
+      RunnerOperation(this)
+    }
 
   val handle: Operation
     get() = runnerHandle
+
+  /** The handle as a [CancellableOperation], or null for an entry built without one. */
+  val cancellableHandle: CancellableOperation?
+    get() = runnerHandle as? CancellableRunnerOperation
+
+  /**
+   * Cancels this command for [CancellableOperation.cancel]. A queued command is claimed as
+   * superseded, so its block never starts even when its turn comes at the same moment, and the
+   * commands behind it walk past it as they do past any superseded one. A running command has its
+   * job cancelled, so it settles once its block has unwound. A settled command has no job left, so
+   * nothing happens.
+   */
+  fun cancel() {
+    if (claim.compareAndSet(Claim.Undecided, Claim.Superseded)) {
+      job?.cancel()
+      return
+    }
+    if (claim.load() == Claim.Started) {
+      job?.cancel()
+    }
+  }
 
   /** Whether a request may still share this command's outcome. */
   val isJoinable: Boolean
@@ -383,7 +454,7 @@ internal class Entry(
  * waiting on it from inside another command would never end.
  */
 @OptIn(DelicateDataLayerApi::class)
-private class RunnerOperation(entry: Entry) : Operation {
+private open class RunnerOperation(entry: Entry) : Operation {
   override val state: StateFlow<OperationState> = entry.state.asStateFlow()
   // Completes once the command has finished, cancelled or not
   val settled: Job = entry.settled
@@ -397,6 +468,19 @@ private class RunnerOperation(entry: Entry) : Operation {
     }
     entry?.let { requireNotWaitingOnItself(it) }
     return super.await()
+  }
+}
+
+/**
+ * A handle from [ActionRunner.runCancellable], which can also cancel its command until the command
+ * settles. It reads the entry once, so a call that races the settlement finds either the entry or
+ * nothing.
+ */
+@OptIn(DelicateDataLayerApi::class)
+private class CancellableRunnerOperation(entry: Entry) :
+  RunnerOperation(entry), CancellableOperation {
+  override fun cancel() {
+    entry?.cancel()
   }
 }
 

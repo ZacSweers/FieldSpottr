@@ -7,8 +7,10 @@ import kotlinx.coroutines.flow.first
 
 /**
  * The combined state of what the outboxes running from one factory still have to send, as
- * [DataScope.Factory.backlog] reports it. Failed rows do not count, since only [Outbox.retry] or
- * [Outbox.discard] moves them.
+ * [DataScope.Factory.backlog] reports it. An outbox runs while a data scope created with its
+ * [OutboxSender] lives. Failed rows do not count, since only [Outbox.retry] or [Outbox.discard]
+ * moves them. Sent rows that wait for a handle's commit do not count either, since the server has
+ * them.
  */
 sealed interface OutboxBacklog {
   /** No running outbox has a row waiting: every row is sent, failed or discarded. */
@@ -38,8 +40,8 @@ sealed interface OutboxBacklog {
  * the same state can arrive again.
  *
  * The scheduler never hears that the backlog is empty. The factory knows only the outboxes that
- * run, so rows can still wait in the store of an outbox the app has not built yet. Cancelling the
- * drain would strand them, and a drain that finds nothing is cheap, so let it run.
+ * run, so rows can still wait under a name whose sender no created data scope has yet. Cancelling
+ * the drain would strand them, and a drain that finds nothing is cheap, so let it run.
  */
 interface OutboxScheduler {
   /**
@@ -63,7 +65,8 @@ interface OutboxScheduler {
  * [OutboxBacklog.Empty] once every row is sent, or an [OutboxBacklog.BackingOff] whose deadline is
  * when the rest may retry, so a worker can schedule itself for that time.
  *
- * Only running outboxes count, so a worker builds the repositories that own them first. A row whose
+ * Only running outboxes count, so a worker first creates the data scope with the app's senders, if
+ * the app has not yet. No repository is needed, since senders drain without handles. A row whose
  * backoff deadline has passed counts as ready, so a worker that the deadline started waits for its
  * send. While the network is down, queued rows still count as ready and this keeps waiting, so give
  * the worker a network constraint and a timeout.

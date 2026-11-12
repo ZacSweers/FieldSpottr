@@ -91,6 +91,39 @@ interface Operation {
 }
 
 /**
+ * A handle on a command from [ActionRunner.run] or [ConflatedActionRunner.run], which its holder
+ * can also cancel. Other handles, like a query's fetch or an outbox send, stay plain [Operation]s,
+ * since other callers may share the work they follow.
+ */
+@SubclassOptInRequired(DelicateDataLayerApi::class)
+interface CancellableOperation : Operation {
+  /**
+   * Queued: the command never starts. Running: its block is cancelled. Settled: nothing happens.
+   * Returns at once. [await] returns after the block has unwound.
+   *
+   * A cancelled command settles [OperationState.Cancelled], no failure handler hears about it, and
+   * the next command on its line or key runs. It is safe to call from any thread, and more than
+   * once.
+   */
+  fun cancel()
+}
+
+/**
+ * A view of this handle that follows the same work and does not implement [CancellableOperation],
+ * so no cast reaches `cancel`.
+ */
+internal fun Operation.withoutCancel(): Operation = PlainOperation(this)
+
+/** [withoutCancel]'s view. It forwards [await], so the source's own checks still run. */
+@OptIn(DelicateDataLayerApi::class)
+private class PlainOperation(private val source: Operation) : Operation {
+  override val state: StateFlow<OperationState>
+    get() = source.state
+
+  override suspend fun await(): OperationState.Terminal = source.await()
+}
+
+/**
  * [Operation.await], throwing the cause when the work failed. For a command that composes other
  * handles and should fail when one of them does, like a sync over [Operation.all] of its fetches. A
  * cancelled handle is returned, since its outcome is unknown and throwing a cancellation from here

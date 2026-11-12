@@ -5,11 +5,12 @@ package dev.zacsweers.fieldspottr.data
 import java.sql.SQLException
 
 /**
- * The JDBC driver gives each thread its own connection to a file database and begins each
- * transaction with a plain BEGIN, which takes no lock until the first statement. So two
- * transactions can each read and then both try to write. sqlite-jdbc reports SQLITE_BUSY and its
- * extended forms, like SQLITE_BUSY_SNAPSHOT, with the primary code as the error code. SQLITE_BUSY
- * also covers a lock held past the busy timeout, which a retry waits for once more.
+ * The desktop driver gives each thread its own connection to a file database and begins each
+ * transaction with BEGIN IMMEDIATE, as [dev.zacsweers.fieldspottr.ImmediateTransactionDriver]
+ * describes. So a transaction holds the write lock before its first read, and SQLite never refuses
+ * its write for a stale read. SQLITE_BUSY then means another connection held a lock past the busy
+ * timeout, which a retry waits for once more. sqlite-jdbc reports SQLITE_BUSY and its extended
+ * forms with the primary code as the error code.
  */
 internal actual fun Throwable.isWriteConflict(): Boolean =
   this is SQLException && errorCode == SQLITE_BUSY
