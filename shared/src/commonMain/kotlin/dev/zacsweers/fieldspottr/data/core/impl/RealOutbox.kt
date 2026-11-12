@@ -866,7 +866,9 @@ internal class RealOutbox<E>(
     expected: OutboxStatus,
   ): Boolean = runCatchingCancellable {
     handle.owner.commit(row, delivery, sentAt, expected)
-  }.onFailure(handle.onFailure).isSuccess
+  }
+    .onFailure(handle.onFailure)
+    .isSuccess
 
   /**
    * Fails [head] for good after [failure] ended its [attempts]th attempt. Handles that follow the
