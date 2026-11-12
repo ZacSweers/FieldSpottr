@@ -14,7 +14,6 @@ import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.DbPermit
 import dev.zacsweers.fieldspottr.FakeFSAppDirs
 import dev.zacsweers.fieldspottr.data.core.DataScope
-import dev.zacsweers.fieldspottr.data.core.invoke
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock

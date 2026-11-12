@@ -7,16 +7,17 @@ import app.cash.sqldelight.SuspendingTransactionWithoutReturn
 
 /**
  * Runs [body] in a transaction, and runs it again from the start when SQLite refuses it because
- * another connection wrote after its first read.
+ * another connection holds a lock it needs.
  *
- * When another connection commits between this transaction's read and its first write, SQLite fails
- * that write at once: SQLITE_BUSY_SNAPSHOT in WAL mode, or SQLITE_BUSY in rollback mode. Waiting
- * cannot help, since the read is stale. So the transaction rolls back and [body] runs again. [body]
- * must be safe to run more than once: its database writes roll back, but anything else it did
- * stays.
+ * A transaction that begins with a plain BEGIN reads under a read lock and takes the write lock at
+ * its first write. SQLite refuses that write at once when another connection holds the write lock
+ * or committed after the read. An immediate retry is refused again while the other connection still
+ * holds the lock, so every driver here begins a transaction with the write lock, and a transaction
+ * waits up to the busy timeout for it. The JVM driver can still report SQLITE_BUSY when a lock
+ * stays held past that timeout. Then the transaction rolls back and [body] runs again. [body] must
+ * be safe to run more than once: its database writes roll back, but anything else it did stays.
  *
- * Each refusal means another connection committed, so a few attempts are enough. After the last, or
- * for any other failure, the error reaches the caller.
+ * After the last attempt, or for any other failure, the error reaches the caller.
  */
 internal suspend fun SuspendingTransacter.transactionRetryingConflicts(
   body: suspend SuspendingTransactionWithoutReturn.() -> Unit
@@ -36,11 +37,10 @@ internal suspend fun SuspendingTransacter.transactionRetryingConflicts(
 }
 
 /**
- * Whether this is SQLite refusing a transaction's write because another connection wrote after the
- * transaction read, as [transactionRetryingConflicts] describes. Only a driver that lets two
- * connections in one process each start a transaction with a read can see it.
+ * Whether this is SQLite refusing a transaction because another connection holds a lock it needs,
+ * as [transactionRetryingConflicts] describes.
  */
 internal expect fun Throwable.isWriteConflict(): Boolean
 
-/** Covers a race with two other writers that each commit between this one's read and its write. */
+/** Covers a lock that two other writers each hold past the busy timeout in turn. */
 private const val CONFLICT_ATTEMPTS = 3

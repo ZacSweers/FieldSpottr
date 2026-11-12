@@ -2,18 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
-import androidx.datastore.core.DataStoreFactory
-import androidx.datastore.core.okio.OkioSerializer
-import androidx.datastore.core.okio.OkioStorage
 import dev.zacsweers.fieldspottr.data.core.testing.QueryStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
-import kotlin.time.Instant
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
-import okio.BufferedSink
-import okio.BufferedSource
+import kotlinx.serialization.builtins.serializer
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
 
@@ -29,49 +27,48 @@ class InMemoryByKeyQueryStoreContractTest : QueryStoreContract() {
 }
 
 class ComposedQueryStoreContractTest : QueryStoreContract() {
-  // No invalidate, so this covers the default that rewrites the value with a stale time
+  // No invalidate, so this covers the default that rewrites the value with the flag set
   override fun TestScope.newStore(): QueryStore<String> {
     val state = MutableStateFlow<Fetched<String>?>(null)
-    return QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-      state.writeFetched(value, fetchedAt, keepsStored)
-    }
+    return QueryStore.of(
+      state,
+      clear = state::clearFetched,
+      write = { fetched, keepsStored ->
+        state.writeFetched(fetched, keepsStored)
+      },
+    )
   }
 }
 
 class DataStoreQueryStoreContractTest : QueryStoreContract() {
   private val fileSystem = FakeFileSystem()
+  private val path = "/store/a.json".toPath()
+  // The scope of the DataStore open now. DataStore allows one active instance per file, so a
+  // reopen cancels it first.
+  private var open: Job? = null
 
   override fun TestScope.newStore(): QueryStore<String> {
-    val directory = "/store".toPath()
-    fileSystem.createDirectories(directory)
-    return DataStoreFactory.create(
-        storage = OkioStorage(fileSystem, FetchedTextSerializer, producePath = { directory / "a" }),
-        scope = backgroundScope,
-      )
-      .asQueryStore()
+    fileSystem.createDirectories(path.parent!!)
+    return openStore()
+  }
+
+  override suspend fun TestScope.reopen(store: QueryStore<String>): QueryStore<String> {
+    open?.cancelAndJoin()
+    return openStore()
+  }
+
+  private fun TestScope.openStore(): QueryStore<String> {
+    val job = Job(backgroundScope.coroutineContext[Job])
+    open = job
+    return QueryStore.inFile(
+      scope = backgroundScope + job,
+      path = { path },
+      serializer = String.serializer(),
+      fileSystem = fileSystem,
+    )
   }
 }
 
 class RecordingQueryStoreContractTest : QueryStoreContract() {
   override fun TestScope.newStore(): QueryStore<String> = RecordingQueryStore()
-}
-
-/** The fetch time in epoch milliseconds on the first line, then the value. Empty means nothing. */
-private object FetchedTextSerializer : OkioSerializer<Fetched<String>?> {
-  override val defaultValue: Fetched<String>? = null
-
-  override suspend fun readFrom(source: BufferedSource): Fetched<String>? {
-    val text = source.readUtf8()
-    if (text.isEmpty()) {
-      return null
-    }
-    val (millis, value) = text.split('\n', limit = 2)
-    return Fetched(value, Instant.fromEpochMilliseconds(millis.toLong()))
-  }
-
-  override suspend fun writeTo(t: Fetched<String>?, sink: BufferedSink) {
-    if (t != null) {
-      sink.writeUtf8("${t.fetchedAt.toEpochMilliseconds()}\n${t.value}")
-    }
-  }
 }

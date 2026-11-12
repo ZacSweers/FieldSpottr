@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.data
 import dev.zacsweers.fieldspottr.BuildConfig
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.KeepsStored
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.metro.SuspendLazy
 import kotlin.time.Instant
@@ -25,9 +26,10 @@ import okio.buffer
 import okio.use
 
 /**
- * A JSON file whose fetch time and app version live in the metadata table under [fetchedAtKey] and
- * [appVersionKey]. The file is read once and then held in memory. A file with no fetch time, or one
- * another app version wrote, reads as stale, since a new version may read it differently.
+ * A JSON file whose fetch time, invalidated flag and app version live in the metadata table under
+ * [fetchedAtKey], [invalidatedKey] and [appVersionKey]. The file is read once and then held in
+ * memory. A file with no fetch time, or one another app version wrote, reads as stale, since a new
+ * version may read it differently.
  */
 internal class StampedFileStore<T : Any>(
   private val fs: FileSystem,
@@ -40,6 +42,7 @@ internal class StampedFileStore<T : Any>(
   /** Runs the file and database calls, which block. */
   private val io: CoroutineDispatcher,
   private val fetchedAtKey: String,
+  private val invalidatedKey: String,
   private val appVersionKey: String,
   private val decode: (String) -> T?,
   private val encode: (T) -> String,
@@ -59,43 +62,31 @@ internal class StampedFileStore<T : Any>(
     emitAll(loaded.filterNotNull().map { it.fetched })
   }
 
-  override suspend fun write(value: T, fetchedAt: Instant) {
-    writes.withLock { store(value, fetchedAt) }
-  }
-
   // The lock makes the check and the write one update, since this instance owns the file
-  override suspend fun writeFetched(
-    value: T,
-    fetchedAt: Instant,
-    keepsStored: (storedAt: Instant) -> Boolean,
-  ) {
+  override suspend fun writeFetched(fetched: Fetched<T>, keepsStored: KeepsStored) {
     writes.withLock {
       val stored = data.first()
-      if (stored == null || !keepsStored(stored.fetchedAt)) {
-        store(value, fetchedAt)
+      if (stored == null || !keepsStored(stored.fetchedAt, stored.invalidated)) {
+        store(fetched)
       }
     }
   }
 
-  override suspend fun clear() {
-    writes.withLock { remove() }
-  }
-
-  override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
+  override suspend fun clearFetched(keepsStored: KeepsStored) {
     writes.withLock {
       val stored = data.first()
-      if (stored == null || !keepsStored(stored.fetchedAt)) {
+      if (stored == null || !keepsStored(stored.fetchedAt, stored.invalidated)) {
         remove()
       }
     }
   }
 
-  // Only the fetch time changes, so the file stays as it is
+  // Only the flag changes, so the file and its fetch time stay as they are
   override suspend fun invalidate() {
     writes.withLock {
       val current = data.first() ?: return
-      withContext(io) { stamp(QueryStore.INVALIDATED) }
-      loaded.value = Loaded(current.copy(fetchedAt = QueryStore.INVALIDATED))
+      withContext(io) { db.await().fsdbQueries.setMetadata(invalidatedKey, true.toString()) }
+      loaded.value = Loaded(current.copy(invalidated = true))
     }
   }
 
@@ -105,36 +96,46 @@ internal class StampedFileStore<T : Any>(
     loaded.value = Loaded(null)
   }
 
-  /** Writes [value] and its stamp, then shows it. Callers hold [writes]. */
-  private suspend fun store(value: T, fetchedAt: Instant) {
+  /** Writes [fetched]'s value and its stamp, then shows it. Callers hold [writes]. */
+  private suspend fun store(fetched: Fetched<T>) {
     withContext(io) {
-      writeAtomically(encode(value))
-      stamp(fetchedAt)
+      writeAtomically(encode(fetched.value))
+      stamp(fetched.fetchedAt, fetched.invalidated)
     }
-    loaded.value = Loaded(Fetched(value, fetchedAt))
+    loaded.value = Loaded(fetched)
   }
 
-  private suspend fun stamp(fetchedAt: Instant) {
+  /** Stores the fetch time, or removes it when null, with the flag and this app version. */
+  private suspend fun stamp(fetchedAt: Instant?, invalidated: Boolean) {
     val database = db.await()
     database.transaction {
-      database.fsdbQueries.setMetadata(fetchedAtKey, fetchedAt.toEpochMilliseconds().toString())
-      database.fsdbQueries.setMetadata(appVersionKey, BuildConfig.VERSION_CODE.toString())
+      val queries = database.fsdbQueries
+      if (fetchedAt == null) {
+        queries.deleteMetadata(fetchedAtKey)
+      } else {
+        queries.setMetadata(fetchedAtKey, fetchedAt.toEpochMilliseconds().toString())
+      }
+      queries.setMetadata(invalidatedKey, invalidated.toString())
+      queries.setMetadata(appVersionKey, BuildConfig.VERSION_CODE.toString())
     }
   }
 
+  /**
+   * The file with its stamp. A missing fetch time reads as never fetched. A file another app
+   * version wrote keeps its fetch time and reads as invalidated.
+   */
   private suspend fun readStamped(): Fetched<T>? {
     return withContext(io) {
       val value = fs.readTextOrNull(path)?.let(decode) ?: return@withContext null
       val queries = db.await().fsdbQueries
       val fetchedAt = queries.getMetadata(fetchedAtKey).executeAsOneOrNull()?.toLongOrNull()
+      val invalidated = queries.getMetadata(invalidatedKey).executeAsOneOrNull() == true.toString()
       val appVersion = queries.getMetadata(appVersionKey).executeAsOneOrNull()?.toLongOrNull()
-      val stamp =
-        if (fetchedAt != null && appVersion == BuildConfig.VERSION_CODE) {
-          Instant.fromEpochMilliseconds(fetchedAt)
-        } else {
-          QueryStore.INVALIDATED
-        }
-      Fetched(value, stamp)
+      Fetched(
+        value,
+        fetchedAt?.let(Instant::fromEpochMilliseconds),
+        invalidated = invalidated || appVersion != BuildConfig.VERSION_CODE,
+      )
     }
   }
 

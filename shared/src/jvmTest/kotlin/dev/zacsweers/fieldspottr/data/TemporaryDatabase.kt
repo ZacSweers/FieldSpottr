@@ -5,10 +5,9 @@ package dev.zacsweers.fieldspottr.data
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
-import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.createFSDatabase
-import dev.zacsweers.fieldspottr.sqliteDriverProperties
+import dev.zacsweers.fieldspottr.fileSqliteDriver
 import dev.zacsweers.metro.suspendLazy
 import java.nio.file.Files
 import java.nio.file.Path
@@ -17,8 +16,8 @@ import kotlin.io.path.deleteIfExists
 import org.junit.rules.ExternalResource
 
 /**
- * A database in a temp file, with the desktop driver's settings. A file database gets a connection
- * per thread, so concurrent writes behave as they do in the app.
+ * A database in a temp file, with the desktop driver. A file database gets a connection per thread,
+ * so concurrent writes behave as they do in the app.
  */
 class TemporaryDatabase<T>(
   val databaseConstructor: (SqlDriver) -> T,
@@ -34,11 +33,7 @@ class TemporaryDatabase<T>(
     }
 
     val file = Files.createTempFile("fs-test", ".db")
-    val driver =
-      JdbcSqliteDriver(
-        url = "jdbc:sqlite:${file.absolutePathString()}",
-        properties = sqliteDriverProperties(),
-      )
+    val driver = fileSqliteDriver(file.absolutePathString())
     schema.create(driver).await()
     val instance = databaseConstructor(driver)
     this.dbBacker = instance

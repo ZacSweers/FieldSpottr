@@ -48,7 +48,7 @@ class HandleRetentionTest {
     val store = QueryStore.inMemory(Fetched(cleared, TestClock.DEFAULT_START))
     val fetch = TestFetch { ByteArray(1) }
     val query =
-      testDataScope().query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+      testDataScope().query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     val collector = backgroundScope.launch { query.data.collect {} }
     testScheduler.runCurrent()
 
@@ -110,9 +110,13 @@ class HandleRetentionTest {
   fun `a query does not keep a failed automatic check after a later refresh`() = runTest {
     val state = MutableStateFlow<Fetched<String>?>(Fetched("old", TestClock.DEFAULT_START))
     val store =
-      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        state,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     var thrown: ResponseException? = null
     val fetch =
       TestFetch<String> {
@@ -121,7 +125,7 @@ class HandleRetentionTest {
     val query =
       DataScope.Factory(onFailure = {}, clock = testClock())
         .create(backgroundScope)
-        .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+        .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     val collector = backgroundScope.launch { query.data.collect {} }
     testScheduler.runCurrent()
 
@@ -148,7 +152,7 @@ class HandleRetentionTest {
       val query =
         DataScope.Factory(onFailure = {}, clock = testClock())
           .create(backgroundScope)
-          .query(store, fetch = fetch, freshness = Freshness.staleAfter(1.hours))
+          .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
       // Stays subscribed throughout, so its watcher outlives the failed check it started with
       val collector = backgroundScope.launch { query.data.collect {} }
       testScheduler.runCurrent()

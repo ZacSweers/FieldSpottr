@@ -40,17 +40,20 @@ class OptimisticQueryStoreRetentionTest {
     // What the store emits, which the test moves by hand, like a store whose emissions run late
     val emitted = MutableStateFlow(stored.value)
     val base =
-      QueryStore.of(emitted, clear = stored::clearFetched) { value, fetchedAt, keepsStored ->
-        stored.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        emitted,
+        clear = stored::clearFetched,
+        write = { fetched, keepsStored ->
+          stored.writeFetched(fetched, keepsStored)
+        },
+      )
     fun DataScope.posts() =
-      optimisticStores<String, Post, Star>(
-        name = "posts",
+      optimisticStores(
+        PostsOutbox,
         base = { base },
         apply = { post, star -> post?.copy(starred = star.starred) },
-        send = { _, _, _ -> },
       )
-    val posts = scopes.create(owner).posts()
+    val posts = scopes.create(owner, setOf(PostsOutbox.sender { _, _ -> })).posts()
     val post = posts("p")
 
     // Eight refreshes read the server before the edit reached it, and land after its send in the
@@ -60,7 +63,9 @@ class OptimisticQueryStoreRetentionTest {
     post.mutate(Star(true)).awaitSucceeded()
     val bodies = List(8) { "$it".repeat(1 shl 20) }
     for (i in bodies.indices) {
-      post.writeFetched(Post(bodies[i]), fetchedAt[i]) { storedAt -> storedAt > fetchedAt[i] }
+      post.writeFetched(Post(bodies[i]), fetchedAt[i]) { storedAt, _ ->
+        storedAt != null && storedAt > fetchedAt[i]
+      }
     }
     assertThat(stored.value)
       .isEqualTo(Fetched(Post(bodies.last(), starred = true), fetchedAt.last()))
@@ -80,10 +85,14 @@ class OptimisticQueryStoreRetentionTest {
     // A reopened set, which has no records, shows the edit from the stored body
     owner.cancel()
     owner.coroutineContext.job.join()
-    val reopened = scopes.create(backgroundScope).posts()("p")
+    val reopened =
+      scopes.create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> })).posts()("p")
     assertThat(reopened.data.first()?.value).isEqualTo(Post(bodies.last(), starred = true))
     scopes.assertNoFailures()
   }
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+
+private val PostsOutbox =
+  OutboxKey<KeyedMutation<String, OptimisticQueryStoreRetentionTest.Star>>("posts")

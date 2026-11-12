@@ -16,7 +16,12 @@ class StampedFileStoreContractTest : QueryStoreContract() {
 
   private val fileSystem = FakeFileSystem()
 
-  override fun TestScope.newStore(): QueryStore<String> =
+  override fun TestScope.newStore(): QueryStore<String> = openStore()
+
+  // A new store reads the file and its stamp again, as after a restart
+  override suspend fun TestScope.reopen(store: QueryStore<String>): QueryStore<String> = openStore()
+
+  private fun openStore(): QueryStore<String> =
     StampedFileStore(
       fs = fileSystem,
       path = { "/data/value.txt".toPath() },
@@ -24,6 +29,7 @@ class StampedFileStoreContractTest : QueryStoreContract() {
       // Real threads, the way the app's stores run their blocking calls
       io = Dispatchers.IO,
       fetchedAtKey = "valueFetchedAt",
+      invalidatedKey = "valueInvalidated",
       appVersionKey = "valueAppVersion",
       decode = { it },
       encode = { it },

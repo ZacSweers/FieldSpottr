@@ -10,10 +10,10 @@ import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.InMemoryQueryStore
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
+import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import dev.zacsweers.fieldspottr.data.core.invoke
-import dev.zacsweers.fieldspottr.data.core.optimisticStore
+import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -52,11 +52,21 @@ class OptimisticQueryStoreRestartTest {
   private val truth: InMemoryQueryStore<List<String>> =
     QueryStore.inMemory(Fetched(listOf("a"), START))
 
+  /**
+   * Sends each row and records its id and attempt. Each process's data scope gets it at creation,
+   * as the app's graph hands its senders to every new process.
+   */
+  private val sender = Tags.sender { add, id ->
+    sentIds += id
+    attempts.update { it + 1 }
+    send(add, id)
+  }
+
   /** A new factory, like a new process: its own name claims, the same rows and network state. */
   private fun TestScope.process(): DataScope.Factory =
     DataScope.Factory(
       onFailure = TestFailures(),
-      onActionFailure = TestFailures(),
+      onFetchFailure = TestFailures(),
       online = online,
       stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO),
       clock = testClock(START),
@@ -67,21 +77,12 @@ class OptimisticQueryStoreRestartTest {
     CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
 
   private fun DataScope.tags(): OptimisticQueryStore<List<String>, Add> =
-    optimisticStore<List<String>, Add>(
-      name = "tags",
-      base = truth,
-      apply = { current, add -> current.orEmpty() + add.tag },
-      send = { add, id ->
-        sentIds += id
-        attempts.update { it + 1 }
-        send(add, id)
-      },
-    )
+    optimisticStore(Tags, base = truth, apply = { current, add -> current.orEmpty() + add.tag })
 
   @Test
   fun `rows outlive their owner and send in order after a restart`() = runTest {
     val first = owner()
-    val before = process().create(first).tags()
+    val before = process().create(first, setOf(sender)).tags()
     before.mutate(Add("b"))
     before.mutate(Add("c"))
     val waiting = before.pending.first { it.size == 2 }
@@ -89,7 +90,7 @@ class OptimisticQueryStoreRestartTest {
 
     first.cancel()
 
-    val after = process().create(owner()).tags()
+    val after = process().create(owner(), setOf(sender)).tags()
     // The rows are back from the database, so the changes still show before anything sends
     assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
     online.value = true
@@ -106,7 +107,7 @@ class OptimisticQueryStoreRestartTest {
     online.value = true
     send.hold(Add("b"))
     val first = owner()
-    val before = process().create(first).tags()
+    val before = process().create(first, setOf(sender)).tags()
     before.mutate(Add("b"))
     // The send has started and is waiting on the held gate
     attempts.first { it == 1 }
@@ -117,7 +118,7 @@ class OptimisticQueryStoreRestartTest {
     first.cancel()
     send.release(Add("b"))
 
-    val after = process().create(owner()).tags()
+    val after = process().create(owner(), setOf(sender)).tags()
     after.pending.first { it.isEmpty() }
 
     assertThat(send.attempts).containsExactly(Add("b"), Add("b"))
@@ -129,3 +130,5 @@ class OptimisticQueryStoreRestartTest {
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+
+private val Tags = OutboxKey<OptimisticQueryStoreRestartTest.Add>("tags")

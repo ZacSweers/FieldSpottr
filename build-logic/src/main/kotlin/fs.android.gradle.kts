@@ -10,6 +10,13 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 
 val catalog = rootProject.extensions.getByType<VersionCatalogsExtension>().named("libs")
 val compileSdkVersion = catalog.findVersion("androidCompileSdk").get().toString().toInt()
+
+/**
+ * The oldest Android API level the app runs on. The library sets it too, because lint checks each
+ * module's code, tests included, against that module's own value, and a module without one counts
+ * as API 1.
+ */
+val minSdkVersion = 29
 val jvmTargetVersion = catalog.findVersion("jvmTarget").get().toString()
 
 fun Lint.configureCommonLint() {
@@ -22,7 +29,7 @@ pluginManager.withPlugin("com.android.application") {
   configure<ApplicationExtension> {
     compileSdk = compileSdkVersion
     defaultConfig {
-      minSdk = 29
+      minSdk = minSdkVersion
       targetSdk = 36
     }
     lint { configureCommonLint() }
@@ -39,6 +46,7 @@ pluginManager.withPlugin("com.android.kotlin.multiplatform.library") {
     configure<KotlinMultiplatformExtension> {
       androidLibrary {
         compileSdk = compileSdkVersion
+        minSdk = minSdkVersion
         lint { configureCommonLint() }
         compilerOptions { configureCommonJvmCompilerOptions() }
       }

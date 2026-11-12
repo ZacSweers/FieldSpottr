@@ -17,14 +17,14 @@ import dev.zacsweers.fieldspottr.FieldSpottrApp
 import dev.zacsweers.fieldspottr.SqlDriverFactory
 import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.data.NetworkMonitor
-import dev.zacsweers.fieldspottr.data.OutboxOwner
 import dev.zacsweers.fieldspottr.data.SqlDelightOutboxStores
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
+import dev.zacsweers.fieldspottr.data.core.OutboxSender
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
-import dev.zacsweers.fieldspottr.data.core.invoke
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ForScope
+import dev.zacsweers.metro.Multibinds
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import dev.zacsweers.metro.SuspendLazy
@@ -49,10 +49,16 @@ interface FSGraph {
   val dataScopeFactory: DataScope.Factory
 
   /**
-   * Every repository that owns an outbox. Reading it constructs the ones not built yet, so their
-   * outboxes read their rows and send. A background drain reads it before it waits.
+   * The app data scope. Reading it creates it, and from then on it drains every outbox sender in
+   * the graph. A background drain reads it before it waits, so rows send with no repository built.
    */
-  val outboxOwners: Set<OutboxOwner>
+  @ForScope(AppScope::class) val appDataScope: DataScope
+
+  /**
+   * The sender of each app outbox. A feature contributes its sender into this set from the file
+   * that holds its outbox key. The set may be empty.
+   */
+  @Multibinds(allowEmpty = true) val outboxSenders: Set<OutboxSender<*>>
 
   @Provides @SingleIn(AppScope::class) fun provideFileSystem(): FileSystem = FileSystem.SYSTEM
 
@@ -106,23 +112,27 @@ interface FSGraph {
   ): DataScope.Factory {
     val log = logger.withTag("Data")
     return DataScope.Factory(
-      onFailure = { log.e(it) { "Fetch failed" } },
       // Each fetch reports its own failure, so an action that fails with one only summarizes it
-      onActionFailure = { log.w(it) { "Action failed" } },
+      onFailure = { log.w(it) { "Action failed" } },
+      onFetchFailure = { log.e(it) { "Fetch failed" } },
       online = network.online,
       stores = stores,
       scheduler = scheduler,
     )
   }
 
-  /** Data work that lives as long as the app, for the repositories in this graph. */
+  /**
+   * Data work that lives as long as the app, for the repositories in this graph. It drains every
+   * outbox in [senders] from its creation, and each repository builds its outbox handle on it.
+   */
   @Provides
   @SingleIn(AppScope::class)
   @ForScope(AppScope::class)
   fun provideAppDataScope(
     factory: DataScope.Factory,
     @ForScope(AppScope::class) scope: CoroutineScope,
-  ): DataScope = factory.create(scope)
+    senders: Set<OutboxSender<*>>,
+  ): DataScope = factory.create(scope, senders)
 
   @Provides
   @SingleIn(AppScope::class)

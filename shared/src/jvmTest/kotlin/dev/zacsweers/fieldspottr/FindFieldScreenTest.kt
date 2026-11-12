@@ -95,6 +95,30 @@ class FindFieldScreenTest {
   }
 
   @Test
+  fun `hidden built-ins get no chip`() {
+    val afterWork = TimeWindow.custom("custom-1", "After work", 17, 20)
+    val windows = TimeWindow.builtIns + afterWork
+    val hidden = setOf(TimeWindow.MORNING.id, TimeWindow.EVENING.id)
+    assertThat(visibleWindows(windows, isToday = false, currentHour = 9, hiddenBuiltIns = hidden))
+      .containsExactly(TimeWindow.AFTERNOON, afterWork)
+  }
+
+  @Test
+  fun `a hidden built-in is never the fallback`() {
+    val shown = TimeWindow.builtIns - TimeWindow.AFTERNOON
+    // The selected afternoon is hidden, and no other shown window holds 2pm
+    assertThat(resolveSelectedWindow(TimeWindow.AFTERNOON.id, shown, currentHour = 14))
+      .isEqualTo(null)
+    // A passed morning on today would fall back to the hidden afternoon, so it searches the rest of
+    // the day instead
+    assertThat(searchHours(TimeWindow.MORNING, isToday = true, currentHour = 14, windows = shown))
+      .isEqualTo(SearchHours(null, 14, 24))
+    // A hidden built-in falls back to the shown one for the hour
+    assertThat(resolveSelectedWindow(TimeWindow.AFTERNOON.id, shown, currentHour = 9))
+      .isEqualTo(TimeWindow.MORNING)
+  }
+
+  @Test
   fun `other days search the full window`() {
     assertThat(searchHours(TimeWindow.MORNING, isToday = false, currentHour = 14))
       .isEqualTo(SearchHours(TimeWindow.MORNING, 6, 12))

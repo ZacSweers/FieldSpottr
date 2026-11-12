@@ -17,9 +17,13 @@ import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
-import dev.zacsweers.fieldspottr.data.core.outbox
+import dev.zacsweers.fieldspottr.data.core.data
+import dev.zacsweers.fieldspottr.data.core.sender
+import dev.zacsweers.fieldspottr.data.core.write
+import dev.zacsweers.fieldspottr.data.core.writeFetched
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.hours
@@ -32,6 +36,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -56,8 +61,7 @@ class TestFixturesTest {
   fun `an eager data scope settles a fetch before the request returns`() = runTest {
     var fetches = 0
     val data = testDataScope(eager = true)
-    val query =
-      data.query(QueryStore.inMemory(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
+    val query = data.query(QueryStore.inMemory(), Freshness.staleAfter(1.hours)) { ++fetches }
 
     query.requestFetch(force = true).assertSucceeded()
     assertThat(fetches).isEqualTo(1)
@@ -78,8 +82,9 @@ class TestFixturesTest {
   fun `freshness follows virtual time`() = runTest {
     var fetches = 0
     val query =
-      testDataScope(eager = true)
-        .query(QueryStore.inMemory(), fetch = { ++fetches }, Freshness.staleAfter(1.hours))
+      testDataScope(eager = true).query(QueryStore.inMemory(), Freshness.staleAfter(1.hours)) {
+        ++fetches
+      }
     query.requestFetch(force = false)
 
     advanceTimeBy(59.minutes)
@@ -95,11 +100,9 @@ class TestFixturesTest {
   fun `fetch and command failures land in separate lists`() = runTest {
     val data = testDataScope(eager = true)
     val query =
-      data.query(
-        QueryStore.inMemory<Int>(),
-        fetch = { error("fetch failed") },
-        Freshness.staleAfter(1.hours),
-      )
+      data.query(QueryStore.inMemory<Int>(), Freshness.staleAfter(1.hours)) {
+        error("fetch failed")
+      }
 
     query.requestFetch(force = true).assertFailed<IllegalStateException>()
     data.newActionRunner().run { throw IllegalArgumentException("command failed") }
@@ -146,8 +149,13 @@ class TestFixturesTest {
   @Test
   fun `outbox rows are readable by name while offline`() = runTest {
     val sent = mutableListOf<String>()
-    val data = testDataScope(eager = true, online = false)
-    val outbox = data.outbox<String>("notes", send = { payload, _ -> sent += payload })
+    val data =
+      testDataScope(
+        eager = true,
+        online = false,
+        senders = setOf(Notes.sender { payload, _ -> sent += payload }),
+      )
+    val outbox = data.outbox(Notes)
 
     val handle = outbox.enqueue("a")
     handle.assertPending()
@@ -162,17 +170,13 @@ class TestFixturesTest {
   @Test
   fun `advance runs a backoff timer that ends exactly then`() = runTest {
     var attempts = 0
-    val outbox =
-      testDataScope(eager = true)
-        .outbox<String>(
-          "notes",
-          send = { _, _ ->
-            if (++attempts == 1) {
-              error("transient")
-            }
-          },
-          retry = RetryPolicy(maxAttempts = 3) { 10.seconds },
-        )
+    val sender =
+      Notes.sender(retry = RetryPolicy(maxAttempts = 3) { 10.seconds }) { _, _ ->
+        if (++attempts == 1) {
+          error("transient")
+        }
+      }
+    val outbox = testDataScope(eager = true, senders = setOf(sender)).outbox(Notes)
 
     val handle = outbox.enqueue("a")
     assertThat(attempts).isEqualTo(1)
@@ -187,7 +191,8 @@ class TestFixturesTest {
   fun `a test fetch holds calls until released`() = runTest {
     val fetch = TestFetch { 1 }
     val query =
-      testDataScope(eager = true).query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+      testDataScope(eager = true)
+        .query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     fetch.hold()
     val handle = query.requestFetch(force = true)
@@ -204,7 +209,8 @@ class TestFixturesTest {
   fun `a test fetch records a call a newer forced request cancels`() = runTest {
     val fetch = TestFetch { 1 }
     val query =
-      testDataScope(eager = true).query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+      testDataScope(eager = true)
+        .query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     fetch.hold()
     val first = query.requestFetch(force = true)
@@ -222,7 +228,7 @@ class TestFixturesTest {
   fun `a test fetch answers with whatever respond gives now`() = runTest {
     val data = testDataScope(eager = true)
     val fetch = TestFetch { 1 }
-    val query = data.query(QueryStore.inMemory(), fetch, Freshness.staleAfter(1.hours))
+    val query = data.query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
     query.requestFetch(force = true).assertSucceeded()
     fetch.respond = { error("down") }
@@ -238,8 +244,8 @@ class TestFixturesTest {
       testDataScope(eager = true)
         .keyed(
           store = QueryStore.inMemoryByKey(),
-          fetch = fetch,
           freshness = Freshness.staleAfter(1.hours),
+          fetch = fetch,
         )
 
     fetch.hold()
@@ -259,7 +265,7 @@ class TestFixturesTest {
   fun `a recording store shows what a query did to it`() = runTest {
     val data = testDataScope(eager = true)
     val store = RecordingQueryStore<Int>()
-    val query = data.query(store, TestFetch { 1 }, Freshness.staleAfter(1.hours))
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = TestFetch { 1 })
 
     query.requestFetch(force = false).assertSucceeded()
     // Fresh now, so this one checks the stored time and writes nothing
@@ -276,7 +282,7 @@ class TestFixturesTest {
     val store = RecordingQueryStore(backing)
     val fetched = Fetched("new", TestClock.DEFAULT_START + 1.minutes)
 
-    store.writeFetched(fetched.value, fetched.fetchedAt) {
+    store.writeFetched(fetched) { _, _ ->
       // Empties the store under the first attempt, so the update retries and stores without asking
       backing.update { null }
       true
@@ -292,7 +298,7 @@ class TestFixturesTest {
     val store = RecordingQueryStore(QueryStore.inMemory(stored))
     val requested = Fetched("new", TestClock.DEFAULT_START)
 
-    store.writeFetched(requested.value, requested.fetchedAt) { true }
+    store.writeFetched(requested) { _, _ -> true }
 
     assertThat(store.data.first()).isEqualTo(stored)
     assertThat(store.writes).containsExactly(requested)
@@ -303,7 +309,9 @@ class TestFixturesTest {
     val store = RecordingQueryStore(QueryStore.inMemory(Fetched("old", TestClock.DEFAULT_START)))
 
     assertFailsWith<IllegalStateException> {
-      store.writeFetched("new", TestClock.DEFAULT_START + 1.minutes) { error("Store failed") }
+      store.writeFetched("new", TestClock.DEFAULT_START + 1.minutes) { _, _ ->
+        error("Store failed")
+      }
     }
 
     assertThat(store.calls).isEmpty()
@@ -312,7 +320,9 @@ class TestFixturesTest {
   @Test
   fun `a test send holds a payload until released`() = runTest {
     val send = TestSend<String>()
-    val outbox = testDataScope(eager = true).outbox<String>("notes", send, send::revert)
+    val outbox =
+      testDataScope(eager = true, senders = setOf(Notes.sender(send = send)))
+        .outbox(Notes, revert = send::revert)
 
     send.hold("a")
     val handle = outbox.enqueue("a")
@@ -328,14 +338,9 @@ class TestFixturesTest {
   @Test
   fun `a test send fails transiently and then for good`() = runTest {
     val send = TestSend<String>()
+    val sender = Notes.sender(retry = RetryPolicy(maxAttempts = 3) { 1.seconds }, send = send)
     val outbox =
-      testDataScope(eager = true)
-        .outbox<String>(
-          "notes",
-          send,
-          send::revert,
-          retry = RetryPolicy(maxAttempts = 3) { 1.seconds },
-        )
+      testDataScope(eager = true, senders = setOf(sender)).outbox(Notes, revert = send::revert)
 
     send.failTransiently()
     val retried = outbox.enqueue("a")
@@ -356,19 +361,19 @@ class TestFixturesTest {
     val factory = testDataScopeFactory(eager = true, online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val screen = factory.create(owner)
+    val send = TestSend<String>()
+    val screen = factory.create(owner, setOf(Notes.sender(send = send)))
     val app = factory.create(backgroundScope)
 
     screen.newActionRunner().run { error("boom") }
     assertThat(app.actionFailures.take()).hasSize(1)
 
-    val send = TestSend<String>()
-    screen.outbox<String>("notes", send).enqueue("a")
+    screen.outbox(Notes).enqueue("a")
     assertThat(factory.outboxStore<String>("notes").entries().first().map { it.payload })
       .containsExactly("a")
-    // The screen's scope ends, so another owner can run the outbox and send what it left
+    // The screen's scope ends, so another data scope can run the sender and send what it left
     owner.coroutineContext.job.cancelAndJoin()
-    app.outbox<String>("notes", send)
+    factory.create(backgroundScope, setOf(Notes.sender(send = send)))
     factory.online.value = true
     assertThat(send.sent).containsExactly("a")
     factory.assertNoFailures()
@@ -466,4 +471,54 @@ class TestFixturesTest {
     second.await()
     assertThat(send.sent).containsExactly("a", "a")
   }
+
+  @Test
+  fun `a lagging query store shows each change late and a new read at once`() = runTest {
+    val stored = Fetched("a", TestClock.DEFAULT_START)
+    val store = LaggingQueryStore<String>(lag = 1.seconds, writeReturnsAfter = 2.seconds)
+    val seen = mutableListOf<Fetched<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it } }
+    runCurrent()
+
+    val write = async { store.writeFetched(stored) { _, _ -> false } }
+    runCurrent()
+    // Stored at once, and a new read shows it, while the collector and the writer still wait
+    assertThat(store.delegate.data.value).isEqualTo(stored)
+    assertThat(store.data.first()).isEqualTo(stored)
+    assertThat(seen).containsExactly(null)
+    assertThat(write.isCompleted).isFalse()
+
+    advanceTimeBy(1.seconds)
+    runCurrent()
+    assertThat(seen).containsExactly(null, stored)
+    assertThat(write.isCompleted).isFalse()
+    advanceTimeBy(1.seconds)
+    runCurrent()
+    assertThat(write.isCompleted).isTrue()
+  }
+
+  @Test
+  fun `a lagging query store delays every write and clear form`() = runTest {
+    val store = LaggingQueryStore<String>(writeReturnsAfter = 1.seconds)
+    val calls: List<suspend () -> Unit> =
+      listOf(
+        { store.write(Fetched("a", TestClock.DEFAULT_START)) },
+        { store.write("b", TestClock.DEFAULT_START) },
+        { store.writeFetched(Fetched("c", TestClock.DEFAULT_START)) { _, _ -> false } },
+        { store.writeFetched("d", TestClock.DEFAULT_START) { _, _ -> false } },
+        { store.clear() },
+        { store.clearFetched { _, _ -> false } },
+      )
+    for (call in calls) {
+      val running = async { call() }
+      runCurrent()
+      assertThat(running.isCompleted).isFalse()
+      advanceTimeBy(1.seconds)
+      runCurrent()
+      assertThat(running.isCompleted).isTrue()
+    }
+  }
 }
+
+/** The outbox these tests send through. */
+private val Notes = OutboxKey<String>("notes")

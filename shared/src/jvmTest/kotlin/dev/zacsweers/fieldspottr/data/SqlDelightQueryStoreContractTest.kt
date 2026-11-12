@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data
 
-import dev.zacsweers.fieldspottr.DbAreaFeed
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.QueryStoreContract
-import kotlin.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
@@ -14,7 +12,7 @@ import org.junit.Rule
 
 /**
  * The store contract over SQLite through [asQueryStore]. It borrows one row of the area feed table,
- * whose hash column holds the value.
+ * whose hash column holds the value, through the same row encoding as the feed store.
  */
 class SqlDelightQueryStoreContractTest : QueryStoreContract() {
   @get:Rule val temporaryDatabase = TemporaryDatabase()
@@ -24,6 +22,10 @@ class SqlDelightQueryStoreContractTest : QueryStoreContract() {
     val db = runBlocking { temporaryDatabase.db() }
     return db.areaFeedQueryStore(NAME)
   }
+
+  // A new store over the same row, as after a restart
+  override suspend fun TestScope.reopen(store: QueryStore<String>): QueryStore<String> =
+    temporaryDatabase.db().areaFeedQueryStore(NAME)
 
   private companion object {
     const val NAME = "contract"
@@ -47,27 +49,24 @@ internal fun FSDatabase.areaFeedQueryStore(
       // Real threads, the way the app's stores run their blocking calls
       dispatcher = Dispatchers.IO,
       value = { it.hash },
-      fetchedAt = { Instant.fromEpochMilliseconds(it.feedFetchedAt) },
-      write = { value, fetchedAt ->
+      // The feed store's own row encoding, so the contract covers it
+      fetchedAt = { it.storedFetchedAt },
+      invalidated = { it.feedInvalidated != 0L },
+      write = { fetched ->
         queries.upsertAreaFeed(
-          DbAreaFeed(
+          areaFeedRow(
             name = name,
             areaName = name,
-            feedGeneratedAt = null,
-            feedFetchedAt = fetchedAt.toEpochMilliseconds(),
-            hash = value,
+            generatedAt = null,
+            hash = fetched.value,
+            fetchedAt = fetched.fetchedAt,
+            invalidated = fetched.invalidated,
           )
         )
         afterWrite()
       },
       clear = { queries.deleteAreaFeed(name) },
-      invalidate = {
-        transaction {
-          val row = queries.getAreaFeed(name).executeAsOneOrNull() ?: return@transaction
-          queries.upsertAreaFeed(
-            row.copy(feedFetchedAt = QueryStore.INVALIDATED.toEpochMilliseconds())
-          )
-        }
-      },
+      // One UPDATE, so it never loses a write that lands meanwhile
+      invalidate = { queries.invalidateAreaFeed(name) },
     )
 }

@@ -6,6 +6,8 @@ import app.cash.turbine.test
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.write
+import dev.zacsweers.fieldspottr.data.core.writeFetched
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -22,10 +24,19 @@ import kotlinx.coroutines.test.runTest
  * implementation runs these by subclassing this in a test source set, like a store over its own
  * file or table. The fetch times have millisecond precision, so a store that keeps epoch
  * milliseconds passes.
+ *
+ * A store that outlives the process also overrides [reopen], so the contract checks that the
+ * invalidated flag survives a restart.
  */
 abstract class QueryStoreContract {
   /** A new, empty store. */
   protected abstract fun TestScope.newStore(): QueryStore<String>
+
+  /**
+   * A new store over what [store] keeps, like after a restart, or null when [store] keeps nothing
+   * beyond the process. A durable store overrides it.
+   */
+  protected open suspend fun TestScope.reopen(store: QueryStore<String>): QueryStore<String>? = null
 
   @Test
   fun `a new store holds nothing`() = runTest {
@@ -50,12 +61,49 @@ abstract class QueryStoreContract {
   }
 
   @Test
-  fun `invalidate keeps the value and marks it stale`() = runTest {
+  fun `a write replaces a value fetched later`() = runTest {
+    val store = newStore()
+
+    store.write("a", LATER)
+    store.write("b", FETCHED)
+    assertEquals(Fetched("b", FETCHED), store.data.first())
+  }
+
+  @Test
+  fun `a value never fetched reads back with no fetch time`() = runTest {
+    val store = newStore()
+
+    store.write("a", fetchedAt = null)
+    assertEquals(Fetched("a", fetchedAt = null), store.data.first())
+  }
+
+  @Test
+  fun `invalidate keeps the value and its fetch time and sets the flag`() = runTest {
     val store = newStore()
 
     store.write("a", FETCHED)
     store.invalidate()
-    assertEquals(Fetched("a", QueryStore.INVALIDATED), store.data.first())
+    assertEquals(Fetched("a", FETCHED, invalidated = true), store.data.first())
+  }
+
+  @Test
+  fun `a fetch write clears the invalidated flag`() = runTest {
+    val store = newStore()
+
+    store.write("a", FETCHED)
+    store.invalidate()
+    store.writeFetched("b", LATER) { _, _ -> false }
+    assertEquals(Fetched("b", LATER), store.data.first())
+  }
+
+  @Test
+  fun `the invalidated flag survives a reopen`() = runTest {
+    val store = newStore()
+    store.write("a", FETCHED)
+    store.invalidate()
+
+    val reopened = reopen(store) ?: return@runTest
+    assertEquals(Fetched("a", FETCHED, invalidated = true), reopened.data.first())
   }
 
   @Test
@@ -86,7 +134,7 @@ abstract class QueryStoreContract {
       store.write("a", FETCHED)
       assertEquals(Fetched("a", FETCHED), awaitItem())
       store.invalidate()
-      assertEquals(Fetched("a", QueryStore.INVALIDATED), awaitItem())
+      assertEquals(Fetched("a", FETCHED, invalidated = true), awaitItem())
       store.clear()
       assertNull(awaitItem())
     }
@@ -96,19 +144,22 @@ abstract class QueryStoreContract {
   fun `a fetch write fills an empty store without asking`() = runTest {
     val store = newStore()
 
-    store.writeFetched("a", FETCHED) { error("Nothing is stored to keep") }
+    store.writeFetched("a", FETCHED) { _, _ -> error("Nothing is stored to keep") }
     assertEquals(Fetched("a", FETCHED), store.data.first())
   }
 
   @Test
   fun `a fetch write keeps what is stored when asked to`() = runTest {
     val store = newStore()
-    val asked = mutableListOf<Instant>()
+    val asked = mutableListOf<Pair<Instant?, Boolean>>()
 
     store.write("a", LATER)
-    store.writeFetched("b", FETCHED) { storedAt -> true.also { asked += storedAt } }
-    assertEquals(Fetched("a", LATER), store.data.first())
-    assertEquals(LATER, asked.distinct().single())
+    store.invalidate()
+    store.writeFetched("b", FETCHED) { storedAt, invalidated ->
+      true.also { asked += storedAt to invalidated }
+    }
+    assertEquals(Fetched("a", LATER, invalidated = true), store.data.first())
+    assertEquals(LATER to true, asked.distinct().single())
   }
 
   @Test
@@ -116,7 +167,7 @@ abstract class QueryStoreContract {
     val store = newStore()
 
     store.write("a", FETCHED)
-    store.writeFetched("b", LATER) { false }
+    store.writeFetched("b", LATER) { _, _ -> false }
     assertEquals(Fetched("b", LATER), store.data.first())
   }
 
@@ -124,19 +175,19 @@ abstract class QueryStoreContract {
   fun `a fetch clear leaves an empty store empty without asking`() = runTest {
     val store = newStore()
 
-    store.clearFetched { error("Nothing is stored to keep") }
+    store.clearFetched { _, _ -> error("Nothing is stored to keep") }
     assertNull(store.data.first())
   }
 
   @Test
   fun `a fetch clear keeps what is stored when asked to`() = runTest {
     val store = newStore()
-    val asked = mutableListOf<Instant>()
+    val asked = mutableListOf<Pair<Instant?, Boolean>>()
 
     store.write("a", LATER)
-    store.clearFetched { storedAt -> true.also { asked += storedAt } }
+    store.clearFetched { storedAt, invalidated -> true.also { asked += storedAt to invalidated } }
     assertEquals(Fetched("a", LATER), store.data.first())
-    assertEquals(LATER, asked.distinct().single())
+    assertEquals(LATER to false, asked.distinct().single())
   }
 
   @Test
@@ -144,7 +195,7 @@ abstract class QueryStoreContract {
     val store = newStore()
 
     store.write("a", FETCHED)
-    store.clearFetched { false }
+    store.clearFetched { _, _ -> false }
     assertNull(store.data.first())
 
     // The store takes writes again
@@ -160,16 +211,12 @@ abstract class QueryStoreContract {
     val releaseOlder = CompletableDeferred<Unit>()
     val freshness = Freshness.staleAfter(1.hours)
     val older =
-      data.query(
-        store,
-        freshness = freshness,
-        fetch = {
-          olderRead.complete(Unit)
-          releaseOlder.await()
-          "older"
-        },
-      )
-    val newer = data.query(store, freshness = freshness, fetch = { "newer" })
+      data.query(store, freshness) {
+        olderRead.complete(Unit)
+        releaseOlder.await()
+        "older"
+      }
+    val newer = data.query(store, freshness) { "newer" }
 
     // The older fetch reads the server first, and the newer one stores its value meanwhile
     val first = older.requestFetch(force = true)
@@ -180,6 +227,33 @@ abstract class QueryStoreContract {
     first.awaitSucceeded()
 
     assertEquals(Fetched("newer", FETCHED + 1.minutes), store.data.first())
+  }
+
+  @Test
+  fun `a fetch replaces a newer value once it was invalidated`() = runTest {
+    val data = testDataScope(clock = testClock(FETCHED))
+    val store = newStore()
+    val olderRead = CompletableDeferred<Unit>()
+    val releaseOlder = CompletableDeferred<Unit>()
+    val freshness = Freshness.staleAfter(1.hours)
+    val older =
+      data.query(store, freshness) {
+        olderRead.complete(Unit)
+        releaseOlder.await()
+        "older"
+      }
+
+    val first = older.requestFetch(force = true)
+    olderRead.await()
+    // A newer value lands and is invalidated while the older fetch still runs. Without the flag,
+    // the older fetch would keep it.
+    data.clock.shift(2.minutes)
+    store.write("newer", FETCHED + 1.minutes)
+    store.invalidate()
+    releaseOlder.complete(Unit)
+    first.awaitSucceeded()
+
+    assertEquals(Fetched("older", FETCHED), store.data.first())
   }
 
   private companion object {

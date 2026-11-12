@@ -27,7 +27,7 @@ class FavoritesRepositoryTest {
   private lateinit var data: TestDataScope
 
   private fun TestScope.repository(online: Boolean = true): FavoritesRepository {
-    data = testDataScope(online = online)
+    data = testDataScope(online = online, senders = setOf(favoritesSender(api)))
     return FavoritesRepository(data, QueryStore.inMemory(), api)
   }
 
