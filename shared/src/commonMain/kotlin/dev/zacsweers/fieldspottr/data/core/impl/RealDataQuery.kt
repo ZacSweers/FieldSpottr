@@ -11,9 +11,12 @@ import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
+import dev.zacsweers.fieldspottr.data.core.QueryState
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
 import dev.zacsweers.fieldspottr.data.core.runCatchingCancellable
+import dev.zacsweers.fieldspottr.data.core.sameFetched
+import dev.zacsweers.fieldspottr.data.core.sameState
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
@@ -28,27 +31,37 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
  * [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. Its
- * watcher runs in [scope] while anyone collects [data]. [holds] keeps whatever owns this query
+ * watcher runs in [scope] while anyone collects [state]. [holds] keeps whatever owns this query
  * alive, such as the per-key entry inside a keyed query, for as long as the watcher or a request
  * still needs it.
  */
-@OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
+@OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class, ExperimentalCoroutinesApi::class)
 internal class RealDataQuery<T>(
   private val store: QueryStore<T>,
   private val fetch: suspend () -> T,
@@ -66,8 +79,10 @@ internal class RealDataQuery<T>(
   private val online: StateFlow<Boolean> = MutableStateFlow(true),
   /** How long automatic fetches hold off after failures, as [holdOffWindow] describes. */
   private val retry: RetryPolicy,
-  /** When automatic fetches may run again after failures, as [DataQuery.data] describes. */
+  /** When automatic fetches may run again after failures, as [DataQuery.state] describes. */
   private val holdOff: FetchHoldOff = FetchHoldOff.inMemory(),
+  /** A staleness rule the query's owner adds, like a keyed set's invalidateAll(). */
+  private val staleMark: StaleMark = StaleMark.None,
   private val holds: QueryHolds = QueryHolds.None,
 ) : DataQuery<T> {
   private val actions = RealActionRunner(scope, ::report)
@@ -84,43 +99,217 @@ internal class RealDataQuery<T>(
   private val lastInvalidation = AtomicInt(0)
   // The start ticket of the newest fetch that wrote. Only moves forward.
   private val lastWrite = AtomicInt(0)
-  // How many observers collect data, and the watcher that runs while any do. Updated by
+  // How many observers collect state, and the watcher that runs while any do. Updated by
   // compare-and-set only.
   private val watching = AtomicReference(Watching(observers = 0, watcher = null))
+  // What the fetches are doing, whether one is writing, and the write that settled the last one.
+  // Only commands on this query's key change it. status is a view of it.
+  private val progress = MutableStateFlow(Progress<T>(FetchStatus.Idle))
 
   /**
-   * The store's values, from one collection of the store per observer. Each observer checks the
-   * first value it gets, since the data can go stale between observers, as [checkOnSubscribe]
-   * describes. The check is a command of its own, so an observer that leaves after one value, like
-   * `first()`, still started it. The first observer then starts the watcher, which can wait for
-   * that check, as [watch] describes.
+   * The store's values with the status that applies to them, from one collection of the store per
+   * observer, as [StateObserver] describes. Each observer checks the first value it gets, since the
+   * data can go stale between observers, as [checkOnSubscribe] describes. The check is a command of
+   * its own, so an observer that leaves after one value, like `first()`, still started it. The
+   * first observer then starts the watcher, which can wait for that check, as [watch] describes.
    */
-  override val data: Flow<Fetched<T>?> = flow {
-    // Read before the store, so a quiet key at both ends means no command ran around the read
-    val submitted = submissions.load()
-    val idle = actions.isIdle(ordering)
-    var counted = false
-    try {
-      store.data.collect { current ->
-        if (!counted) {
-          counted = true
-          val quiet = idle && submissions.load() == submitted
-          val check = checkOnSubscribe(current, quiet)
-          if (check != null) {
-            holds.holdUntilSettled(check)
-          }
-          startWatching(check, current)
-        }
-        emit(current)
-      }
-    } finally {
-      if (counted) {
-        stopWatching()
-      }
-    }
+  override val state: Flow<QueryState<T>> = flow { StateObserver().observe(this) }
+
+  override val stored: Flow<Fetched<T>?> = store.data.distinctUntilChanged(::sameFetched)
+
+  override val status: StateFlow<FetchStatus> = StatusView(progress)
+
+  /** Sets [status], which ends a write phase and drops the write record. */
+  private fun setStatus(next: FetchStatus) {
+    progress.value = Progress(next)
   }
 
-  override val stored: Flow<Fetched<T>?> = store.data
+  /**
+   * One collector of [state]. It merges three things in one coroutine: its own read of the store,
+   * the query's [progress], and the end of its first check.
+   *
+   * The status it shows is the status of [progress], with two exceptions. When its first value was
+   * stale or absent and it queued a check, it shows `Fetching` until the check settles or a fetch
+   * or a write shows in [progress].
+   *
+   * While a fetch writes, some values are that write's value. One is a value with a fetch time or
+   * flag other than those of the value shown. Another is any value with the running fetch's own
+   * time, a collector's first value included. Such a value shows as `Idle` at once, never beside
+   * `Fetching`. A change over the same stored value, like an optimistic change, shows with the
+   * status as it is. That holds even while the write waits for the store.
+   *
+   * Once the write settles, the write's record holds what the store showed right after it, read by
+   * the fetch when observers were counted. When this collector's latest value is the same, it shows
+   * that value with the new status. Otherwise its read lags the write, so it shows the record's
+   * value and starts its read again, and drops what the old read still delivers. Without a record
+   * it starts its read again and shows the new status with the first value of that read. So it
+   * never shows `Idle` before the data of the fetch that set it.
+   */
+  private inner class StateObserver {
+    // Read before the store, so a quiet key at both ends means no command ran around the read
+    private val submitted = submissions.load()
+    private val idle = actions.isIdle(ordering)
+    // The newest write record this collector has lined up with. One that settled before its first
+    // read began is in that read.
+    private var handled: Wrote<T>? = progress.value.wrote
+    // Bumped to start the store read again. Values from an earlier read are dropped.
+    private val reads = MutableStateFlow(0)
+    // This collector's first check, set when its first status shows Fetching on its behalf
+    private val speculation = MutableStateFlow<Operation?>(null)
+    private var counted = false
+    private var speculative = false
+    // Set once this collector showed the value of the write in progress, so it shows Idle
+    private var wroteEarly = false
+    // Set while a new read must deliver its first value before a new status shows
+    private var rereading = false
+    // The newest value from the current read, which may not be shown yet
+    private var latest: Fetched<T>? = null
+    private var shown: QueryState<T>? = null
+
+    suspend fun observe(out: FlowCollector<QueryState<T>>) {
+      try {
+        merge(
+            reads.flatMapLatest { read -> store.data.map { StateEvent.Value(it, read) } },
+            progress.map { StateEvent.Progressed },
+            speculation.filterNotNull().take(1).map { check ->
+              check.state.first { it is OperationState.Terminal }
+              StateEvent.Checked
+            },
+          )
+          .collect { event ->
+            when (event) {
+              is StateEvent.Value -> onValue(event, out)
+              StateEvent.Progressed -> onProgress(out)
+              StateEvent.Checked -> {
+                // A failed check keeps its error, and the query's progress reaches this collector
+                speculation.value = null
+                speculative = false
+                onProgress(out)
+              }
+            }
+          }
+      } finally {
+        if (counted) {
+          stopWatching()
+        }
+      }
+    }
+
+    private suspend fun onValue(event: StateEvent.Value<T>, out: FlowCollector<QueryState<T>>) {
+      if (event.read != reads.value) {
+        return
+      }
+      latest = event.value
+      if (!counted) {
+        first(event.value, out)
+        return
+      }
+      rereading = false
+      val current = progress.value
+      if (
+        current.writing &&
+          (!sameStamp(event.value, shown?.fetched) || current.isWriteOf(event.value))
+      ) {
+        wroteEarly = true
+      }
+      val wrote = current.wrote
+      if (wrote != null && wrote !== handled) {
+        settle(wrote, current, out)
+      } else {
+        show(latest, current, out)
+      }
+    }
+
+    /** Runs the check for the first value, starts the watcher, and shows the value at once. */
+    private suspend fun first(value: Fetched<T>?, out: FlowCollector<QueryState<T>>) {
+      counted = true
+      val quiet = idle && submissions.load() == submitted
+      val check = checkOnSubscribe(value, quiet)
+      if (check != null) {
+        holds.holdUntilSettled(check)
+      }
+      startWatching(check, value)
+      if (check != null && isStale(value)) {
+        speculative = true
+        speculation.value = check
+      }
+      val current = progress.value
+      // A first value that carries the running fetch's time is that fetch's write, so it shows Idle
+      if (current.isWriteOf(value)) {
+        wroteEarly = true
+      }
+      show(value, current, out)
+      // A write that settled while the first read ran may be missing from it
+      val wrote = current.wrote
+      if (wrote != null && wrote !== handled) {
+        settle(wrote, current, out)
+      }
+    }
+
+    private suspend fun onProgress(out: FlowCollector<QueryState<T>>) {
+      if (!counted) {
+        return
+      }
+      val current = progress.value
+      val wrote = current.wrote
+      if (current.status is FetchStatus.Fetching) {
+        speculative = false
+      }
+      if (!current.writing) {
+        wroteEarly = false
+      }
+      when {
+        wrote != null && wrote !== handled -> settle(wrote, current, out)
+        // The new read's first value shows the status then
+        rereading -> Unit
+        else -> show(latest, current, out)
+      }
+    }
+
+    /** Lines this collector up with [wrote], the write that settled the fetch [current] shows. */
+    private suspend fun settle(
+      wrote: Wrote<T>,
+      current: Progress<T>,
+      out: FlowCollector<QueryState<T>>,
+    ) {
+      handled = wrote
+      speculative = false
+      wroteEarly = false
+      when {
+        !wrote.read -> {
+          rereading = true
+          reads.value += 1
+        }
+        sameFetched(latest, wrote.snapshot) -> show(latest, current, out)
+        else -> {
+          latest = wrote.snapshot
+          show(latest, current, out)
+          reads.value += 1
+        }
+      }
+    }
+
+    /** Emits [fetched] with the status [current] shows, unless that is what was shown last. */
+    private suspend fun show(
+      fetched: Fetched<T>?,
+      current: Progress<T>,
+      out: FlowCollector<QueryState<T>>,
+    ) {
+      val status =
+        when {
+          current.writing && wroteEarly -> FetchStatus.Idle
+          speculative && current.status !is FetchStatus.Fetching -> FetchStatus.Fetching(false)
+          else -> current.status
+        }
+      val next = QueryState(fetched, status)
+      val last = shown
+      if (last != null && sameState(last, next)) {
+        return
+      }
+      shown = next
+      out.emit(next)
+    }
+  }
 
   /**
    * Starts a check for an observer whose first value is [current], or returns null when none is
@@ -130,7 +319,7 @@ internal class RealDataQuery<T>(
    * that reads the store again when its turn comes.
    */
   private fun checkOnSubscribe(current: Fetched<T>?, quiet: Boolean): Operation? =
-    if (quiet && !isStale(current?.fetchedAt)) {
+    if (quiet && !isStale(current)) {
       null
     } else {
       autoCheck()
@@ -187,10 +376,10 @@ internal class RealDataQuery<T>(
 
   /**
    * One ordered view of the store for every observer, so each change starts one check however many
-   * observers see it. A value that goes away, or keeps only local changes with
-   * [QueryStore.UNFETCHED], is checked again after the work already queued, so a clear during a
-   * fetch's write gets a check after that write. An invalidated value keeps its data and waits for
-   * the next collect, as [invalidate] promises. The watcher also checks again on each reconnect, as
+   * observers see it. A value that goes away, or drops to one that was never fetched, like local
+   * changes alone, is checked again after the work already queued, so a clear during a fetch's
+   * write gets a check after that write. An invalidated value keeps its data and waits for the next
+   * collect, as [invalidate] promises. The watcher also checks again on each reconnect, as
    * [watchNetwork] describes.
    *
    * The first observer saw [seen] and made [check], or no check for fresh data. Without a check,
@@ -268,7 +457,10 @@ internal class RealDataQuery<T>(
     }
   }
 
-  /** Whether [current] has lost the fetched data that [previous] showed. */
+  /**
+   * Whether [current] has lost the fetched data that [previous] showed: it went away, or it dropped
+   * to a value that was never fetched, like local changes over a truth that a capped store evicted.
+   */
   private fun lostFetch(previous: Fetched<T>?, current: Fetched<T>?): Boolean {
     if (previous == null) {
       return false
@@ -276,11 +468,8 @@ internal class RealDataQuery<T>(
     if (current == null) {
       return true
     }
-    return current.fetchedAt == QueryStore.UNFETCHED && previous.fetchedAt != QueryStore.UNFETCHED
+    return current.fetchedAt == null && previous.fetchedAt != null
   }
-
-  override val status: StateFlow<FetchStatus>
-    field = MutableStateFlow<FetchStatus>(FetchStatus.Idle)
 
   override fun requestFetch(force: Boolean): Operation =
     if (force) {
@@ -335,7 +524,7 @@ internal class RealDataQuery<T>(
       block()
     } finally {
       if (status.value is FetchStatus.Fetching) {
-        status.value = FetchStatus.Idle
+        setStatus(FetchStatus.Idle)
       }
     }
   }
@@ -435,7 +624,7 @@ internal class RealDataQuery<T>(
 
   /** Whether a check of [kind] fetches, from the stored time, the hold-off and the last status. */
   private suspend fun needsFetch(kind: CheckKind): Boolean {
-    val stale = isStale(store.data.first()?.fetchedAt)
+    val stale = isStale(store.data.first())
     return when (kind) {
       CheckKind.Requested -> stale
       CheckKind.Automatic -> stale && !holdOff.holdsOff(clock.now(), online.value)
@@ -461,7 +650,7 @@ internal class RealDataQuery<T>(
       fetchOnce(forced = true)
       return
     }
-    status.value = FetchStatus.Fetching(forced = false)
+    setStatus(FetchStatus.Fetching(forced = false))
     var failure: Throwable? = null
     coroutineScope {
       // Undispatched, so a fetch that never suspends finishes in the check's own dispatch
@@ -480,7 +669,7 @@ internal class RealDataQuery<T>(
       attempt.invokeOnCompletion { check.wake() }
       check.awaitWake()
       if (check.isReplaced) {
-        status.value = FetchStatus.Fetching(forced = true)
+        setStatus(FetchStatus.Fetching(forced = true))
         attempt.cancelAndJoin()
       }
     }
@@ -492,13 +681,37 @@ internal class RealDataQuery<T>(
     failure?.let { throw it }
   }
 
-  private fun isStale(at: Instant?): Boolean {
-    if (at == null || at <= QueryStore.INVALIDATED) {
+  /**
+   * Whether [fetched] is stale: nothing stored, never fetched, invalidated, fetched ahead of the
+   * clock, or stale by [staleMark] or [freshness].
+   */
+  private fun isStale(fetched: Fetched<T>?): Boolean {
+    val at = fetched?.fetchedAt
+    if (at == null || fetched.invalidated) {
       return true
     }
     val now = clock.now()
     // A time in the future means the clock moved back or the record is bad
-    return at > now || freshness.isStale(at, now)
+    return at > now || staleMark.isStale(at, now) || freshness.isStale(at, now)
+  }
+
+  /**
+   * Ends a successful fetch's write phase: sets `Idle` with a record of the write, so each
+   * collector of [state] can line its value up with it, as [StateObserver] describes. While any
+   * observer is counted, the record holds what the store shows right after the write. A read that
+   * fails leaves the record without it, and collectors then read again on their own.
+   */
+  private suspend fun settleWrite() {
+    var read = false
+    var snapshot: Fetched<T>? = null
+    if (watching.load().observers > 0) {
+      runCatchingCancellable { store.data.first() }
+        .onSuccess {
+          read = true
+          snapshot = it
+        }
+    }
+    progress.value = Progress(FetchStatus.Idle, wrote = Wrote(snapshot, read))
   }
 
   /**
@@ -508,6 +721,9 @@ internal class RealDataQuery<T>(
    * which a forced takeover prevents. A replaceable fetch already taken over never calls [fetch]. A
    * failed fetch sets [status] before the hold-off, so an [Error] from [retry] cannot hide the
    * fetch's own failure.
+   *
+   * From the write until [settleWrite], [progress] shows a write phase, so collectors of [state]
+   * show a value with a new fetch time or flag as this write's, never beside `Fetching`.
    */
   private suspend fun fetchOnce(
     forced: Boolean,
@@ -515,13 +731,14 @@ internal class RealDataQuery<T>(
     replaceable: Check? = null,
   ) {
     if (replaceable == null) {
-      status.value = FetchStatus.Fetching(forced)
+      setStatus(FetchStatus.Fetching(forced))
     }
     try {
       if (replaceable != null && replaceable.isReplaced) {
         throw CancellationException("Replaced by a forced fetch")
       }
       val started = tickets.incrementAndFetch()
+      val markToken = staleMark.fetchStarted()
       val fetchedAt = clock.now()
       val value = fetch()
       // A fetch superseded while it ran never writes, even one whose fetch ignored cancellation
@@ -529,18 +746,23 @@ internal class RealDataQuery<T>(
       if (replaceable != null && !replaceable.commit()) {
         throw CancellationException("Replaced by a forced fetch")
       }
+      progress.value = Progress(progress.value.status, writing = true, writingAt = fetchedAt)
       // A fetch also never overwrites data that another writer put in the store meanwhile with a
       // newer fetch time, like a second query's fetch or a sent change the server already holds.
       // The store checks and writes in one update, so such a write cannot land between the two. An
-      // equal time is this fetch's own or as new, so it is replaced. A fetch time ahead of the
-      // clock is a bad record, which isStale treats as stale, so the fetch replaces that too.
-      store.writeFetched(value, fetchedAt) { storedAt ->
-        storedAt > fetchedAt && storedAt <= clock.now()
+      // equal time is this fetch's own or as new, so it is replaced. A value never fetched or
+      // invalidated is stale, so the fetch replaces it. A fetch time ahead of the clock is a bad
+      // record, which isStale treats as stale, so the fetch replaces that too.
+      // The Fetched form, which every store overrides, so a store that delegates the other members
+      // still sees this write
+      store.writeFetched(Fetched(value, fetchedAt)) { storedAt, invalidated ->
+        !invalidated && storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
       }
       // Kept data is newer still, so an invalidation requested before this fetch started may skip
       lastWrite.update { maxOf(it, started) }
+      staleMark.fetchWritten(markToken, fetchedAt, clock.now())
       holdOff.succeeded(clock.now())
-      status.value = FetchStatus.Idle
+      settleWrite()
     } catch (t: Throwable) {
       // Replaced by a forced fetch, whose check sets the status from here on
       if (replaceable != null && !replaceable.commit()) {
@@ -549,11 +771,11 @@ internal class RealDataQuery<T>(
       // Stopped by its owner, or replaced by a newer forced fetch that starts only after this one
       // ends and then sets its own status
       if (!currentCoroutineContext().isActive) {
-        status.value = FetchStatus.Idle
+        setStatus(FetchStatus.Idle)
         throw t
       }
       // Set before the hold-off, so the status names this failure whatever the policy does
-      status.value = FetchStatus.Failed(t)
+      setStatus(FetchStatus.Failed(t))
       if (automatic) {
         try {
           holdOff.failed(clock.now(), offline = !online.value) { failures ->
@@ -679,6 +901,66 @@ internal class RealDataQuery<T>(
 
   private class Watching(val observers: Int, val watcher: Job?)
 }
+
+/**
+ * What a query's fetches are doing. [writing] is true while a successful fetch writes and reads
+ * back what it wrote, and [writingAt] is that fetch's time. [wrote] is the record of the write that
+ * settled the last fetch, or null when the last change to [status] was something else. Each
+ * instance is new, so a state flow of it emits every change.
+ */
+private class Progress<T>(
+  val status: FetchStatus,
+  val writing: Boolean = false,
+  val writingAt: Instant? = null,
+  val wrote: Wrote<T>? = null,
+) {
+  /** Whether [value] carries the time of the fetch that writes now, so it is that write's value. */
+  fun isWriteOf(value: Fetched<*>?): Boolean =
+    writing && value != null && !value.invalidated && value.fetchedAt == writingAt
+}
+
+/**
+ * A fetch's write, settled. When [read] is true, [snapshot] is what the store showed right after
+ * it. When false, the fetch did not read the store back, since no observer was counted or the read
+ * failed.
+ */
+private class Wrote<T>(val snapshot: Fetched<T>?, val read: Boolean)
+
+/** What one collector of [DataQuery.state] reacts to. */
+private sealed interface StateEvent<out T> {
+  /** A value from the collector's read number [read] of the store. */
+  class Value<T>(val value: Fetched<T>?, val read: Int) : StateEvent<T>
+
+  /** The query's progress changed. The collector reads the newest. */
+  data object Progressed : StateEvent<Nothing>
+
+  /** The collector's first check settled. */
+  data object Checked : StateEvent<Nothing>
+}
+
+/** [DataQuery.status] as a view of a query's progress, so the two never disagree. */
+@OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+private class StatusView(private val progress: StateFlow<Progress<*>>) : StateFlow<FetchStatus> {
+  override val value: FetchStatus
+    get() = progress.value.status
+
+  override val replayCache: List<FetchStatus>
+    get() = listOf(value)
+
+  override suspend fun collect(collector: FlowCollector<FetchStatus>): Nothing {
+    progress.map { it.status }.distinctUntilChanged().collect(collector)
+    // State flows never complete, so neither does this view
+    awaitCancellation()
+  }
+}
+
+/** Whether [a] and [b] are both absent, or have the same fetch time and invalidated flag. */
+private fun sameStamp(a: Fetched<*>?, b: Fetched<*>?): Boolean =
+  if (a == null || b == null) {
+    a == null && b == null
+  } else {
+    a.fetchedAt == b.fetchedAt && a.invalidated == b.invalidated
+  }
 
 /** The first pause before the watcher collects a failed store again. */
 private val STORE_RETRY_FIRST = 1.seconds

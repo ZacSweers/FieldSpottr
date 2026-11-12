@@ -10,6 +10,7 @@ import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.data
 import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.optimisticStore
 import dev.zacsweers.fieldspottr.data.core.values

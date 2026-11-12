@@ -110,9 +110,13 @@ class HandleRetentionTest {
   fun `a query does not keep a failed automatic check after a later refresh`() = runTest {
     val state = MutableStateFlow<Fetched<String>?>(Fetched("old", TestClock.DEFAULT_START))
     val store =
-      QueryStore.of(state, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        state,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     var thrown: ResponseException? = null
     val fetch =
       TestFetch<String> {

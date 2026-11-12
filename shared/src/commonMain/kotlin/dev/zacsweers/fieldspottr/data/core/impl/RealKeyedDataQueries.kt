@@ -7,16 +7,21 @@ import dev.zacsweers.fieldspottr.data.core.FetchStatus
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.KeyedDataQueries
 import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.QueryState
 import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.AtomicLong
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.decrementAndFetch
 import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
+import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.collections.immutable.PersistentMap
+import kotlinx.collections.immutable.PersistentSet
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.collections.immutable.persistentMapOf
+import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -29,20 +34,41 @@ internal val KeyedDataQueries<*, *>.keysHeld: Int
 internal val KeyedDataQueries<*, *>.holdOffsHeld: Int
   get() = (this as RealKeyedDataQueries<*, *>).holdOffsHeld
 
+/** How many keys the newest invalidateAll() remembers. For tests, which cannot see the set. */
+internal val KeyedDataQueries<*, *>.keysRemembered: Int
+  get() = (this as RealKeyedDataQueries<*, *>).keysRemembered
+
 /**
- * What a key's query gets from its set, beside the holds on its entry: the hold-off record, which
- * outlives the query.
+ * What a key's query gets from its set, beside the holds on its entry: the hold-off record and the
+ * [KeyedDataQueries.invalidateAll] rule, which both outlive the query.
  */
-internal class KeyContext(val holds: QueryHolds, val holdOff: FetchHoldOff)
+internal class KeyContext(
+  val holds: QueryHolds,
+  val holdOff: FetchHoldOff,
+  val staleMark: StaleMark,
+)
+
+/**
+ * The newest [KeyedDataQueries.invalidateAll] call: its clock time [at], its [ticket], and the keys
+ * that have written a fetch started after it that the time rule alone would still read as stale.
+ * The mark no longer covers those keys.
+ */
+private class AllInvalidated<K : Any>(
+  val at: Instant,
+  val ticket: Long,
+  val refreshed: PersistentSet<K>,
+)
 
 /**
  * [KeyedDataQueries] that builds each key's query with [build] on first use and drops it once no
  * caller and no unfinished work holds it, as [KeyEntry] describes. [build] gets the holds the query
- * takes on its entry, and records this set keeps for the key across queries.
+ * takes on its entry, and records this set keeps for the key across queries. [clock] times
+ * [invalidateAll] calls.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealKeyedDataQueries<K : Any, T>(
-  private val build: (key: K, context: KeyContext) -> RealDataQuery<T>
+  private val clock: Clock,
+  private val build: (key: K, context: KeyContext) -> RealDataQuery<T>,
 ) : KeyedDataQueries<K, T> {
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val entries = AtomicReference(persistentHashMapOf<K, KeyEntry<T>>())
@@ -50,6 +76,10 @@ internal class RealKeyedDataQueries<K : Any, T>(
   // query, so a query rebuilt inside the window or after a decline still holds off. Updated by
   // compare-and-set only.
   private val holdOffs = AtomicReference(HoldOffs<K>())
+  // The newest invalidateAll() call, or null before the first. Updated by compare-and-set only.
+  private val allInvalidated = AtomicReference<AllInvalidated<K>?>(null)
+  // Orders invalidateAll() calls and fetch starts across keys, since clock times can tie
+  private val tickets = AtomicLong(0)
 
   val keysHeld: Int
     get() = entries.load().size
@@ -58,10 +88,14 @@ internal class RealKeyedDataQueries<K : Any, T>(
   val holdOffsHeld: Int
     get() = holdOffs.load().size
 
-  override fun data(key: K): Flow<Fetched<T>?> = flow {
+  /** How many keys the newest invalidateAll() remembers. For tests, which check the set's bound. */
+  val keysRemembered: Int
+    get() = allInvalidated.load()?.refreshed?.size ?: 0
+
+  override fun state(key: K): Flow<QueryState<T>> = flow {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.data)
+      emitAll(entry.query.state)
     } finally {
       entry.release()
     }
@@ -103,6 +137,25 @@ internal class RealKeyedDataQueries<K : Any, T>(
     }
   }
 
+  /**
+   * Records the call first, so a key whose query is built or dropped while the keys in use are
+   * listed is covered either way. A new record forgets which keys fetched since the last call. The
+   * record with the higher ticket wins, so an older call on another thread that stores last never
+   * undoes a newer one.
+   */
+  override fun invalidateAll(): Operation {
+    val ticket = tickets.incrementAndFetch()
+    val record = AllInvalidated<K>(clock.now(), ticket, persistentSetOf())
+    allInvalidated.update { current ->
+      if (current != null && current.ticket > ticket) {
+        current
+      } else {
+        record
+      }
+    }
+    return invalidate(entries.load().keys)
+  }
+
   override fun requestFetchAll(force: Boolean): Operation = requestFetch(entries.load().keys, force)
 
   /** The entry for [key], held until [KeyEntry.release]. Builds it on first use. */
@@ -127,7 +180,63 @@ internal class RealKeyedDataQueries<K : Any, T>(
   }
 
   /** What [key]'s query gets from this set, with [holds] on its entry. */
-  private fun contextFor(key: K, holds: QueryHolds): KeyContext = KeyContext(holds, KeyHoldOff(key))
+  private fun contextFor(key: K, holds: QueryHolds): KeyContext =
+    KeyContext(holds, KeyHoldOff(key), KeyStaleMark(key))
+
+  /**
+   * [key]'s view of [allInvalidated]. Until a fetch that started after the newest call writes, the
+   * key's data counts as stale when it was fetched at or before the call's time, or when that time
+   * is ahead of the clock, since a clock set back cannot order the two. A fetch that started after
+   * the call and writes a value that this time rule still reads as stale, which only a clock set
+   * back or a tie can cause, is remembered. From then on the key's data is judged by freshness
+   * alone. So the set remembers no keys while the clock moves forward. Before the first call,
+   * fetches take no tickets and nothing is tracked.
+   *
+   * The set remembers at most [MAX_REMEMBERED_KEYS] keys. When a new one would pass that cap, it
+   * forgets the key remembered longest ago, and the time rule applies to that key again. So its
+   * data counts as stale and its next check fetches once more. The cap costs an extra fetch, never
+   * stale data shown as fresh.
+   */
+  private inner class KeyStaleMark(private val key: K) : StaleMark {
+    override fun fetchStarted(): Long =
+      if (allInvalidated.load() == null) {
+        0
+      } else {
+        tickets.incrementAndFetch()
+      }
+
+    override fun fetchWritten(started: Long, fetchedAt: Instant, now: Instant) {
+      allInvalidated.update { current ->
+        val remembers =
+          current != null &&
+            started > current.ticket &&
+            key !in current.refreshed &&
+            byTime(current, fetchedAt, now)
+        if (remembers) {
+          var refreshed = current.refreshed.adding(key)
+          // Insertion ordered, so the first is the key remembered longest ago
+          if (refreshed.size > MAX_REMEMBERED_KEYS) {
+            refreshed = refreshed.removing(refreshed.first())
+          }
+          AllInvalidated(current.at, current.ticket, refreshed)
+        } else {
+          current
+        }
+      }
+    }
+
+    override fun isStale(fetchedAt: Instant, now: Instant): Boolean {
+      val current = allInvalidated.load() ?: return false
+      if (key in current.refreshed) {
+        return false
+      }
+      return byTime(current, fetchedAt, now)
+    }
+
+    /** The time rule alone: fetched at or before the call, or the call ahead of the clock. */
+    private fun byTime(current: AllInvalidated<K>, fetchedAt: Instant, now: Instant): Boolean =
+      fetchedAt <= current.at || current.at > now
+  }
 
   private fun remove(key: K, entry: KeyEntry<T>) {
     entries.update {
@@ -207,6 +316,12 @@ private class HoldOffs<K>(
 
 /** The most declined hold-off records a keyed set keeps, as [HoldOffs] describes. */
 internal const val MAX_DECLINED_HOLD_OFFS = 1024
+
+/**
+ * The most keys an [KeyedDataQueries.invalidateAll] record remembers as fetched after it, as the
+ * set's stale mark describes. A key it forgets counts as stale again.
+ */
+internal const val MAX_REMEMBERED_KEYS = 1024
 
 /**
  * A key's query and what holds it: each caller from acquire to release, the query's watcher while

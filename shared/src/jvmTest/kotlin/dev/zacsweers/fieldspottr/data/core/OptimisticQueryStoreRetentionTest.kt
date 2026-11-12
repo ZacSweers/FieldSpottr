@@ -40,9 +40,13 @@ class OptimisticQueryStoreRetentionTest {
     // What the store emits, which the test moves by hand, like a store whose emissions run late
     val emitted = MutableStateFlow(stored.value)
     val base =
-      QueryStore.of(emitted, clear = stored::clearFetched) { value, fetchedAt, keepsStored ->
-        stored.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        emitted,
+        clear = stored::clearFetched,
+        write = { fetched, keepsStored ->
+          stored.writeFetched(fetched, keepsStored)
+        },
+      )
     fun DataScope.posts() =
       optimisticStores<String, Post, Star>(
         name = "posts",
@@ -60,7 +64,9 @@ class OptimisticQueryStoreRetentionTest {
     post.mutate(Star(true)).awaitSucceeded()
     val bodies = List(8) { "$it".repeat(1 shl 20) }
     for (i in bodies.indices) {
-      post.writeFetched(Post(bodies[i]), fetchedAt[i]) { storedAt -> storedAt > fetchedAt[i] }
+      post.writeFetched(Post(bodies[i]), fetchedAt[i]) { storedAt, _ ->
+        storedAt != null && storedAt > fetchedAt[i]
+      }
     }
     assertThat(stored.value)
       .isEqualTo(Fetched(Post(bodies.last(), starred = true), fetchedAt.last()))

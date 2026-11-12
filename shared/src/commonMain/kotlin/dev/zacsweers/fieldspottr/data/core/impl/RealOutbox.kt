@@ -279,6 +279,7 @@ internal class RealOutbox<E>(
       row?.let { drain(it.key) }
     }
 
+  // Its caller does not own the command, so the handle cannot cancel it
   override fun discard(id: EntryId): Operation =
     actions.run(Ordering.Keyed(Row(this, id))) {
       val row = checkNotNull(store.entry(id).first()) { "$id is gone" }

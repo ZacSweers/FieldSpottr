@@ -10,6 +10,8 @@ import assertk.assertions.isFalse
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.write
+import dev.zacsweers.fieldspottr.data.core.writeFetched
 import dev.zacsweers.fieldspottr.fileSqliteDriver
 import dev.zacsweers.fieldspottr.sqliteDriverProperties
 import java.util.Collections
@@ -118,7 +120,8 @@ class SqlDelightQueryStoreConflictTest {
       val saw = Collections.synchronizedList(mutableListOf<Instant>())
       val fetch =
         async(Dispatchers.IO) {
-          store.writeFetched("newer", NEWER) { storedAt ->
+          store.writeFetched("newer", NEWER) { stored, _ ->
+            val storedAt = checkNotNull(stored)
             saw += storedAt
             storedAt > NEWER
           }
@@ -166,7 +169,8 @@ class SqlDelightQueryStoreConflictTest {
       val firstSaw = Collections.synchronizedList(mutableListOf<Instant>())
       val first =
         async(Dispatchers.IO) {
-          store.writeFetched(nameOf(paused), paused) { storedAt ->
+          store.writeFetched(nameOf(paused), paused) { stored, _ ->
+            val storedAt = checkNotNull(stored)
             firstSaw += storedAt
             // Only the first attempt waits
             if (firstSaw.size == 1) {
@@ -182,7 +186,8 @@ class SqlDelightQueryStoreConflictTest {
       val secondSaw = Collections.synchronizedList(mutableListOf<Instant>())
       val second =
         async(Dispatchers.IO) {
-          store.writeFetched(nameOf(during), during) { storedAt ->
+          store.writeFetched(nameOf(during), during) { stored, _ ->
+            val storedAt = checkNotNull(stored)
             secondSaw += storedAt
             secondRead.countDown()
             storedAt > during

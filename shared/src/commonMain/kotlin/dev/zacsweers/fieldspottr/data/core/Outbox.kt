@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
  * pause, so a broken policy never drops a change. A throw from [maxDelay] is reported too, and the
  * outbox then sets no bound on its waits.
  *
- * A policy also sets how long a query's own fetches hold off after they fail, as [DataQuery.data]
+ * A policy also sets how long a query's own fetches hold off after they fail, as [DataQuery.state]
  * describes. There `attempt` counts the failures in a row. A null wait stops the query's own
  * fetches until a fetch the caller requests succeeds. An [Exception] from either member goes to the
  * query's failure handler, and the query holds off for [maxDelay], or for 1 hour when that has no

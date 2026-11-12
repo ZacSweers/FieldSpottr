@@ -47,7 +47,7 @@ interface DataScope {
    * moves that part to an I/O dispatcher with `withContext`.
    *
    * @param retry sets how long the fetches the query starts on its own hold off after failures, as
-   *   [DataQuery.data] describes. Null uses the factory's `fetchRetry` policy.
+   *   [DataQuery.state] describes. Null uses the factory's `fetchRetry` policy.
    * @param onFailure hears every failure this query reports, failed fetches included. Null uses the
    *   factory's handlers.
    */
@@ -210,7 +210,7 @@ interface DataScope {
        * next row on its key sends. The default retries every failure with no attempt limit.
        *
        * [fetchRetry] sets for every query built without a policy of its own how long the fetches it
-       * starts on its own hold off after failures, as [DataQuery.data] describes. When it declines
+       * starts on its own hold off after failures, as [DataQuery.state] describes. When it declines
        * a failure, the query fetches on its own again only after a requested fetch succeeds. The
        * default waits 1 second after the first failure in a row, doubles the wait up to 1 minute,
        * and never declines.

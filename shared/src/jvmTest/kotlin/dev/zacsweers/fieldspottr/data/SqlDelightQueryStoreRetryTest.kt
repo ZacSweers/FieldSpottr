@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.write
 import java.sql.SQLException
 import kotlin.test.Test
 import kotlin.test.assertFailsWith

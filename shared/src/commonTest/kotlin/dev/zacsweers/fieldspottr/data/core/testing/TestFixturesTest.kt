@@ -19,7 +19,10 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
+import dev.zacsweers.fieldspottr.data.core.data
 import dev.zacsweers.fieldspottr.data.core.outbox
+import dev.zacsweers.fieldspottr.data.core.write
+import dev.zacsweers.fieldspottr.data.core.writeFetched
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.hours
@@ -32,6 +35,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -276,7 +280,7 @@ class TestFixturesTest {
     val store = RecordingQueryStore(backing)
     val fetched = Fetched("new", TestClock.DEFAULT_START + 1.minutes)
 
-    store.writeFetched(fetched.value, fetched.fetchedAt) {
+    store.writeFetched(fetched) { _, _ ->
       // Empties the store under the first attempt, so the update retries and stores without asking
       backing.update { null }
       true
@@ -292,7 +296,7 @@ class TestFixturesTest {
     val store = RecordingQueryStore(QueryStore.inMemory(stored))
     val requested = Fetched("new", TestClock.DEFAULT_START)
 
-    store.writeFetched(requested.value, requested.fetchedAt) { true }
+    store.writeFetched(requested) { _, _ -> true }
 
     assertThat(store.data.first()).isEqualTo(stored)
     assertThat(store.writes).containsExactly(requested)
@@ -303,7 +307,9 @@ class TestFixturesTest {
     val store = RecordingQueryStore(QueryStore.inMemory(Fetched("old", TestClock.DEFAULT_START)))
 
     assertFailsWith<IllegalStateException> {
-      store.writeFetched("new", TestClock.DEFAULT_START + 1.minutes) { error("Store failed") }
+      store.writeFetched("new", TestClock.DEFAULT_START + 1.minutes) { _, _ ->
+        error("Store failed")
+      }
     }
 
     assertThat(store.calls).isEmpty()
@@ -465,5 +471,52 @@ class TestFixturesTest {
     send.release("a")
     second.await()
     assertThat(send.sent).containsExactly("a", "a")
+  }
+
+  @Test
+  fun `a lagging query store shows each change late and a new read at once`() = runTest {
+    val stored = Fetched("a", TestClock.DEFAULT_START)
+    val store = LaggingQueryStore<String>(lag = 1.seconds, writeReturnsAfter = 2.seconds)
+    val seen = mutableListOf<Fetched<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it } }
+    runCurrent()
+
+    val write = async { store.writeFetched(stored) { _, _ -> false } }
+    runCurrent()
+    // Stored at once, and a new read shows it, while the collector and the writer still wait
+    assertThat(store.delegate.data.value).isEqualTo(stored)
+    assertThat(store.data.first()).isEqualTo(stored)
+    assertThat(seen).containsExactly(null)
+    assertThat(write.isCompleted).isFalse()
+
+    advanceTimeBy(1.seconds)
+    runCurrent()
+    assertThat(seen).containsExactly(null, stored)
+    assertThat(write.isCompleted).isFalse()
+    advanceTimeBy(1.seconds)
+    runCurrent()
+    assertThat(write.isCompleted).isTrue()
+  }
+
+  @Test
+  fun `a lagging query store delays every write and clear form`() = runTest {
+    val store = LaggingQueryStore<String>(writeReturnsAfter = 1.seconds)
+    val calls: List<suspend () -> Unit> =
+      listOf(
+        { store.write(Fetched("a", TestClock.DEFAULT_START)) },
+        { store.write("b", TestClock.DEFAULT_START) },
+        { store.writeFetched(Fetched("c", TestClock.DEFAULT_START)) { _, _ -> false } },
+        { store.writeFetched("d", TestClock.DEFAULT_START) { _, _ -> false } },
+        { store.clear() },
+        { store.clearFetched { _, _ -> false } },
+      )
+    for (call in calls) {
+      val running = async { call() }
+      runCurrent()
+      assertThat(running.isCompleted).isFalse()
+      advanceTimeBy(1.seconds)
+      runCurrent()
+      assertThat(running.isCompleted).isTrue()
+    }
   }
 }

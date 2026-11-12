@@ -103,9 +103,13 @@ class FailureHandlerTest {
       emitAll(state)
     }
     val store =
-      QueryStore.of(flaky, clear = state::clearFetched) { value, fetchedAt, keepsStored ->
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        flaky,
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     val factory = testDataScopeFactory(clock = testClock(START))
     val fetch = TestFetch { 2 }
     val query =
@@ -203,9 +207,10 @@ class FailureHandlerTest {
         stored,
         clear = stored::clearFetched,
         invalidate = { error("invalidate failed") },
-      ) { value, fetchedAt, keepsStored ->
-        stored.writeFetched(value, fetchedAt, keepsStored)
-      }
+        write = { fetched, keepsStored ->
+          stored.writeFetched(fetched, keepsStored)
+        },
+      )
     val query =
       data.query(store, Freshness.staleAfter(1.hours), onFailure = own) {
         error("fetch failed")

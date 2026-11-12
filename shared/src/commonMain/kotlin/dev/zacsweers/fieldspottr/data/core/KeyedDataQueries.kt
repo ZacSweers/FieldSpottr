@@ -4,7 +4,9 @@ package dev.zacsweers.fieldspottr.data.core
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 
 /**
  * Queries addressed by key, from [DataScope.keyed]. Nothing here hands out the [DataQuery] itself,
@@ -13,10 +15,10 @@ import kotlinx.coroutines.flow.flowOf
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface KeyedDataQueries<K : Any, T> {
   /**
-   * [key]'s stored value and fetch time. Collecting this may fetch, like [DataQuery.data]. Use
-   * [stored] to watch without starting any work.
+   * [key]'s stored value with the fetch status that applies to it. Collecting this may fetch, as
+   * [DataQuery.state] describes. Use [stored] to watch without starting any work.
    */
-  fun data(key: K): Flow<Fetched<T>?>
+  fun state(key: K): Flow<QueryState<T>>
 
   /**
    * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
@@ -37,11 +39,15 @@ interface KeyedDataQueries<K : Any, T> {
 
   /**
    * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
-   * keeps the key's query but starts no work.
+   * keeps the key's query but starts no work. It skips a value that is the same as the one before,
+   * as [DataQuery.stored] does.
    */
   fun stored(key: K): Flow<Fetched<T>?>
 
-  /** [key]'s fetch status. Collecting it keeps the key's query but starts no fetch. */
+  /**
+   * [key]'s fetch status, as [DataQuery.status] describes. Collecting it keeps the key's query but
+   * starts no fetch.
+   */
   fun status(key: K): Flow<FetchStatus>
 
   /** [FetchStatus.Failed] if any key failed, else [FetchStatus.Fetching] if any is fetching. */
@@ -81,11 +87,32 @@ interface KeyedDataQueries<K : Any, T> {
     Operation.all(keys.distinct().map { invalidate(it) })
 
   /**
+   * Marks the data of every key stale without fetching, including keys this set cannot list. Keys
+   * in use now, with a collector or with work queued or running, are invalidated through their
+   * queries, as [invalidate] does. For every other key, this set records the time of the call, and
+   * a value fetched at or before that time counts as stale. A fetch in flight now has an earlier
+   * fetch time, so its result counts as stale too.
+   *
+   * The record lives in memory for the rest of the process. The owner of a store that outlives the
+   * process, and needs those keys stale after a restart, also marks its own rows, like by setting
+   * their invalidated flag. The handle settles once the keys in use are marked.
+   */
+  fun invalidateAll(): Operation
+
+  /**
    * [requestFetch] for every key in use now, with a collector or with work queued or running. The
    * handle settles once every request has, failed if any failed.
    */
   fun requestFetchAll(force: Boolean): Operation
 }
+
+/**
+ * [key]'s values from [KeyedDataQueries.state] without the status. Collecting this may fetch, as
+ * [DataQuery.state] describes, and it emits when the stored value, its fetch time or its flag
+ * changes.
+ */
+fun <K : Any, T> KeyedDataQueries<K, T>.data(key: K): Flow<Fetched<T>?> =
+  state(key).map { it.fetched }.distinctUntilChanged(::sameFetched)
 
 /** [KeyedDataQueries.requestFetch] for [key] with `force = true`: fetches now. */
 fun <K : Any, T> KeyedDataQueries<K, T>.refresh(key: K): Operation = requestFetch(key, force = true)

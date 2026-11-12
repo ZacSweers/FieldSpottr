@@ -509,10 +509,11 @@ class OptimisticQueryStoreTest {
   @Test
   fun `a key the base evicts while a change waits fetches again on screen`() = runTest {
     data = testDataScope(clock = testClock(START))
+    val base = QueryStore.inMemoryByKey<String, List<String>>()
     val stores =
       data.optimisticStores<String, List<String>, Add>(
         name = "tagsByItem",
-        base = QueryStore.inMemoryByKey(maxEntries = 1),
+        base = base,
         apply = ::addOnce,
         send = { _, add, id -> send(add, id) },
       )
@@ -527,8 +528,10 @@ class OptimisticQueryStoreTest {
       stores.mutate("x", Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("x", "b"))
 
-      // Fetching y evicts x's truth, which leaves only the waiting change
-      queries.requestFetch("y", force = false).awaitSucceeded()
+      // The in-memory store never evicts a collected key, so another writer removes x's truth,
+      // which
+      // leaves only the waiting change
+      base("x").clear()
       assertThat(awaitItem()?.value).isEqualTo(listOf("b"))
       // x is on screen, so it fetches again, as it would had its value gone away
       assertThat(awaitItem()?.value).isEqualTo(listOf("x", "b"))
@@ -736,15 +739,17 @@ class OptimisticQueryStoreTest {
     val gate = CompletableDeferred<Unit>()
     // A base whose write of the fetched value stalls, like a slow file
     val base =
-      QueryStore.of(truth.data, clear = truth::clearFetched, invalidate = { truth.invalidate() }) {
-        value,
-        fetchedAt,
-        keepsStored ->
-        if (value == listOf("old")) {
-          gate.await()
-        }
-        truth.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        truth.data,
+        clear = truth::clearFetched,
+        invalidate = { truth.invalidate() },
+        write = { fetched, keepsStored ->
+          if (fetched.value == listOf("old")) {
+            gate.await()
+          }
+          truth.writeFetched(fetched, keepsStored)
+        },
+      )
     val store =
       data.optimisticStore<List<String>, Add>(
         name = "tags",
@@ -870,14 +875,15 @@ class OptimisticQueryStoreTest {
       QueryStore.of(
         state,
         clear = state::clearFetched,
-        invalidate = { state.update { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
-      ) { value, fetchedAt, keepsStored ->
-        // Pauses the commit's write, which comes after its read of the truth
-        if (commitWriting.complete(Unit)) {
-          finishCommit.await()
-        }
-        state.writeFetched(value, fetchedAt, keepsStored)
-      }
+        invalidate = { state.update { it?.copy(invalidated = true) } },
+        write = { fetched, keepsStored ->
+          // Pauses the commit's write, which comes after its read of the truth
+          if (commitWriting.complete(Unit)) {
+            finishCommit.await()
+          }
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
     val store =
       data.optimisticStore<List<String>, Add>(
         name = "tags",
@@ -894,7 +900,7 @@ class OptimisticQueryStoreTest {
     invalidated.await()
     handle.awaitSucceeded()
 
-    assertThat(state.value).isEqualTo(Fetched(listOf("a", "b"), QueryStore.INVALIDATED))
+    assertThat(state.value).isEqualTo(Fetched(listOf("a", "b"), START, invalidated = true))
     data.assertNoFailures()
   }
 
@@ -958,7 +964,7 @@ class OptimisticQueryStoreTest {
     val backing = QueryStore.inMemory(Fetched(listOf("a"), START))
     val diskFull = IllegalStateException("Disk full")
     val failingWrites =
-      QueryStore.of(backing.data, clear = backing::clearFetched) { _, _, _ -> throw diskFull }
+      QueryStore.of(backing.data, clear = backing::clearFetched, write = { _, _ -> throw diskFull })
     val store =
       data.optimisticStore<List<String>, Add>(
         name = "tags",
@@ -1122,9 +1128,10 @@ class OptimisticQueryStoreTest {
           }
           row.clearFetched(keepsStored)
         },
-      ) { value, fetchedAt, keepsStored ->
-        row.writeFetched(value, fetchedAt, keepsStored)
-      }
+        write = { fetched, keepsStored ->
+          row.writeFetched(fetched, keepsStored)
+        },
+      )
     val store =
       data.optimisticStore<String, SetText>(
         name = "note",
@@ -1162,14 +1169,18 @@ class OptimisticQueryStoreTest {
     val commitWriting = CompletableDeferred<Unit>()
     val finishCommit = CompletableDeferred<Unit>()
     val base =
-      QueryStore.of(row, clear = row::clearFetched) { value, fetchedAt, keepsStored ->
-        // Pauses the commit's write, which comes after its read of the truth
-        if (value == "SAVED") {
-          commitWriting.complete(Unit)
-          finishCommit.await()
-        }
-        row.writeFetched(value, fetchedAt, keepsStored)
-      }
+      QueryStore.of(
+        row,
+        clear = row::clearFetched,
+        write = { fetched, keepsStored ->
+          // Pauses the commit's write, which comes after its read of the truth
+          if (fetched.value == "SAVED") {
+            commitWriting.complete(Unit)
+            finishCommit.await()
+          }
+          row.writeFetched(fetched, keepsStored)
+        },
+      )
     val store =
       data.optimisticStore<String, SetText>(
         name = "note",
@@ -1269,7 +1280,7 @@ class OptimisticQueryStoreTest {
 
     // The server has the change, and the next fetch brings it
     assertThat(send.sent).containsExactly(Add("b"))
-    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a"), QueryStore.INVALIDATED))
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a"), START, invalidated = true))
     assertThat(store.data.first()?.value).isEqualTo(listOf("a"))
     assertThat(store.pending.first()).isEmpty()
     // The view and the commit both met the throw, and it is reported once for the change

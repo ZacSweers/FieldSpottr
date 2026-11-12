@@ -6,6 +6,7 @@ import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.KeepsStored
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
@@ -532,9 +533,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
       val current = base.store.data.first()
       val sent = state.value.slice(key)?.committed.orEmpty()
-      // A truth fetched after the send read the server with the change in it
-      val fetchedSinceSend = { storedAt: Instant -> storedAt > sentAt }
-      val alreadyFetched = current != null && fetchedSinceSend(current.fetchedAt)
+      // A truth fetched after the send read the server with the change in it. The write below
+      // still replaces one that was invalidated since, as every conditional write does.
+      val fetchedSinceSend: KeepsStored = { storedAt, invalidated ->
+        !invalidated && storedAt != null && storedAt > sentAt
+      }
+      val alreadyFetched = current?.fetchedAt?.let { it > sentAt } == true
       val replaced = result is Delivery.Replaced
       val next =
         when {
@@ -576,7 +580,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         if (next == null) {
           base.store.clearFetched(fetchedSinceSend)
         } else {
-          base.store.writeFetched(next.value, next.fetchedAt, fetchedSinceSend)
+          base.store.writeFetched(next, fetchedSinceSend)
         }
       }
       // The store holds this record's value now, which tells views that it holds every change
@@ -719,7 +723,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     // The newest record whose change the store holds. Every record up to it is in the truth.
     val held = sent.indexOfLast { it.isHeldBy(stored) }
     val missing = sent.filterIndexed { index, record ->
-      index > held && (stored == null || stored.fetchedAt <= record.sentAt)
+      index > held && stored?.fetchedAt.let { it == null || it <= record.sentAt }
     }
     val answer = missing.indexOfLast { it.replaced && it.hasValue }
     var result =
@@ -765,12 +769,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * [stored] with [mutation] applied, keeping its fetch time, or [QueryStore.UNFETCHED] over
-   * nothing stored. Null when the change removes the value. Throws what [apply] throws.
+   * [stored] with [mutation] applied, keeping its fetch time and invalidated flag, or never fetched
+   * over nothing stored. Null when the change removes the value. Throws what [apply] throws.
    */
   private fun applied(stored: Fetched<T>?, mutation: M): Fetched<T>? {
     val value = apply(stored?.value, mutation) ?: return null
-    return Fetched(value, stored?.fetchedAt ?: QueryStore.UNFETCHED)
+    return stored?.copy(value = value) ?: Fetched(value, fetchedAt = null)
   }
 
   /**
@@ -860,20 +864,16 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * record shows. So the truth takes those changes too, as [withSent] puts them back, and a
      * restart still shows them.
      */
-    override suspend fun writeFetched(
-      value: T,
-      fetchedAt: Instant,
-      keepsStored: (storedAt: Instant) -> Boolean,
-    ) {
-      land(Fetched(value, fetchedAt), keepsStored)
-      prune(key, fetchedAt)
+    override suspend fun writeFetched(fetched: Fetched<T>, keepsStored: KeepsStored) {
+      land(fetched, keepsStored)
+      prune(key, fetched.fetchedAt)
     }
 
     /**
      * [writeFetched] for a value that is gone. It has no fetch time to tell which sends it may have
      * missed, so it counts as older than all of them, and every change on record goes back on top.
      */
-    override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
+    override suspend fun clearFetched(keepsStored: KeepsStored) {
       land(null, keepsStored)
     }
 
@@ -882,14 +882,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * folded in, unless [keepsStored] says the truth should stay. The truth's own conditional write
      * or removal checks again, for a writer that shares the base store without this lock.
      */
-    private suspend fun land(fetched: Fetched<T>?, keepsStored: (storedAt: Instant) -> Boolean) {
+    private suspend fun land(fetched: Fetched<T>?, keepsStored: KeepsStored) {
       awaitStored(key)
       base.lock.withLock {
-        val storedAt = truth.data.first()?.fetchedAt
-        if (storedAt == null || !keepsStored(storedAt)) {
+        val stored = truth.data.first()
+        if (stored == null || !keepsStored(stored.fetchedAt, stored.invalidated)) {
+          // A value never fetched counts as older than every send, like a value that is gone
           val sentSince =
-            state.value.slice(key)?.committed.orEmpty().filter {
-              fetched == null || it.sentAt >= fetched.fetchedAt
+            state.value.slice(key)?.committed.orEmpty().filter { record ->
+              fetched?.fetchedAt.let { it == null || record.sentAt >= it }
             }
           val next = withSent(fetched, sentSince)
           // Before the write, so views count every change on record as in the folded truth both
@@ -908,7 +909,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           if (next == null) {
             truth.clearFetched(keepsStored)
           } else {
-            truth.writeFetched(next.value, next.fetchedAt, keepsStored)
+            truth.writeFetched(next, keepsStored)
           }
         }
       }

@@ -6,6 +6,30 @@ import kotlin.time.Duration
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+
+/**
+ * A query's stored value with the fetch status that applies to it, from [DataQuery.state].
+ * [fetched] is null while nothing is stored.
+ */
+data class QueryState<out T>(val fetched: Fetched<T>?, val status: FetchStatus) {
+  /** The stored value, or null while nothing is stored. */
+  val value: T?
+    get() = fetched?.value
+
+  /** When the value was fetched, or null while nothing is stored or it was never fetched. */
+  val fetchedAt: Instant?
+    get() = fetched?.fetchedAt
+}
+
+/** Maps the value and keeps the other fields. */
+inline fun <T, R> QueryState<T>.map(transform: (T) -> R): QueryState<R> =
+  QueryState(fetched?.let { Fetched(transform(it.value), it.fetchedAt, it.invalidated) }, status)
+
+/** Whether [a] and [b] show the same thing: the same status and the same value by [sameFetched]. */
+internal fun sameState(a: QueryState<*>, b: QueryState<*>): Boolean =
+  a.status == b.status && sameFetched(a.fetched, b.fetched)
 
 /** What a query's fetches are doing, from [DataQuery.status]. */
 sealed interface FetchStatus {
@@ -31,7 +55,7 @@ sealed interface FetchStatus {
 sealed interface Freshness {
   /**
    * Whether data fetched at [fetchedAt] is stale at [now]. The query treats a [fetchedAt] ahead of
-   * [now] as stale before it asks.
+   * [now] as stale before it asks, and so is a value that was never fetched or was invalidated.
    */
   fun isStale(fetchedAt: Instant, now: Instant): Boolean
 
@@ -47,7 +71,7 @@ sealed interface Freshness {
     val NeverStale: Freshness = FixedFreshness(Duration.INFINITE)
 
     /**
-     * Stale as soon as fetched, so every collect of [DataQuery.data] fetches again unless a fetch
+     * Stale as soon as fetched, so every collect of [DataQuery.state] fetches again unless a fetch
      * is already in flight, and so does every unforced request. For data that must be checked on
      * every visit.
      */
@@ -76,22 +100,23 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
  * [DataScope.query].
  *
  * ```
- * collecting data -------------+
+ * collecting state ------------+
  *                              +--> joins a fetch in flight, or checks the stored
- * requestFetch(force = false) -+    fetch time against freshness and the clock
+ * requestFetch(force = false) -+    value against freshness and the clock
  *                                   | stale
  *                                   v
  *                                 unforced fetch() --+
  *                                   ^ cancelled and  |
  *                                   | replaced       v
- * requestFetch(force = true) --> forced fetch() --> store.writeFetched(value, ...) --> data
- *   joins a running forced          |
- *   fetch                           +--> status: Fetching, then Idle or Failed
+ * requestFetch(force = true) --> forced fetch() --> store.writeFetched(value, ...) --> state
+ *   joins a running forced          |                                                    ^
+ *   fetch                           +--> status: Fetching, then Idle or Failed ----------+
  * ```
  *
  * Checks, fetches and invalidations run one at a time on the query's own key, so a check never
  * races a fetch. `fetchedAt` is the clock time just before the fetch. A fetch never writes over
- * data with a newer fetch time, like a value another writer stored while it ran.
+ * data with a newer fetch time that is not invalidated and not ahead of the clock, like a value
+ * another writer stored while it ran.
  *
  * A forced request that arrives while an unforced fetch runs cancels that fetch before it writes
  * and runs a forced fetch in its place. The unforced request's handle follows the forced fetch, so
@@ -102,13 +127,33 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface DataQuery<T> {
   /**
-   * The stored value and when it was fetched, or null before the first fetch.
+   * The stored value, null before the first fetch, with the fetch status that applies to it. For a
+   * screen that shows the data and a loading or error state together. [data] is the same values
+   * without the status.
    *
    * Collecting this may fetch. Each collector checks freshness on the first value it reads, even
-   * one that takes one value and leaves, like `first()`, and fetches when the data is stale. Each
-   * collector reads the store once. Collectors share one queued check. When a stored value goes
-   * away, one check runs however many collectors see it. Use [stored] to watch the same values
-   * without starting work.
+   * one that takes one value and leaves, like `first()`, and fetches when the data is stale.
+   * Collectors share one queued check. When a stored value goes away, one check runs however many
+   * collectors see it. Use [stored] to watch the same values without starting work.
+   *
+   * The first value comes at once and never waits for the check. When it is stale or absent and
+   * this collector queued a check, its status shows [FetchStatus.Fetching], and it shows [status]
+   * again if the check then decides not to fetch. A fresh first value shows [status] as it is,
+   * unless it already is the write of a fetch that still runs. Then it shows `Idle`, so no
+   * collector ever shows a fetch's data beside that fetch's `Fetching`.
+   *
+   * The status here is [status] as it applies to the value beside it, so the two can differ for a
+   * moment. After a fetch succeeds, this never shows `Idle` before it shows that fetch's data, even
+   * when the store delivers the write after [status] turns `Idle`. A refresh shows `(v1, Idle)`,
+   * then `(v1, Fetching)`, then `(v2, Idle)`. A failed fetch shows `(v1, Fetching)`, then `(v1,
+   * Failed)`. To line a fetch's data up with its status, the query reads the store once more after
+   * each fetch that writes while anyone collects this, and a collector whose own read lags behind
+   * that read starts its read again.
+   *
+   * It emits only when something a screen shows has changed: the value, its fetch time or
+   * invalidated flag, or the status. A value counts as unchanged by the rule of [Fetched]: the same
+   * fetch time and flag, and values equal by `==`. So a store that emits equal values again, like a
+   * database, emits nothing new here.
    *
    * After a fetch that the query started on its own fails, the next ones it starts on its own hold
    * off for a window. Those are fetches for a collector and the recheck after the stored value goes
@@ -140,15 +185,20 @@ interface DataQuery<T> {
    * the policy declined it, so a collector that arrives after a reconnect fetches at once. Offline,
    * the query still fetches, so a first load fails fast and shows [FetchStatus.Failed].
    */
-  val data: Flow<Fetched<T>?>
+  val state: Flow<QueryState<T>>
 
   /**
-   * The values [data] shows, without checking freshness or fetching. For readers that must not
-   * start work, like a background job that only reports.
+   * The stored values, without checking freshness or fetching. For readers that must not start
+   * work, like a background job that only reports. It skips a value that is the same as the one
+   * before, by the rule [state] describes.
    */
   val stored: Flow<Fetched<T>?>
 
-  /** What this query's fetches are doing. */
+  /**
+   * What this query's fetches are doing now. Collecting it starts no work and reads no store. It
+   * can run ahead of the status in [state] for a moment, since [state] holds a status until the
+   * value it applies to arrives.
+   */
   val status: StateFlow<FetchStatus>
 
   /**
@@ -174,6 +224,14 @@ interface DataQuery<T> {
    */
   fun invalidate(): Operation
 }
+
+/**
+ * The values of [DataQuery.state] without the status, or null before the first fetch. Collecting it
+ * runs the freshness check and may fetch, as [DataQuery.state] describes. It emits when the stored
+ * value, its fetch time or its invalidated flag changes.
+ */
+val <T> DataQuery<T>.data: Flow<Fetched<T>?>
+  get() = state.map { it.fetched }.distinctUntilChanged(::sameFetched)
 
 /** [DataQuery.requestFetch] with `force = true`: fetches now, as a pull to refresh asks. */
 fun <T> DataQuery<T>.refresh(): Operation = requestFetch(force = true)

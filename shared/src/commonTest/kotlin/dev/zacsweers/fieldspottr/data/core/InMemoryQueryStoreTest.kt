@@ -12,7 +12,9 @@ import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 class InMemoryQueryStoreTest {
@@ -25,7 +27,7 @@ class InMemoryQueryStoreTest {
 
   @Test
   fun `a stale seed shows at once and still fetches`() = runTest {
-    val store = QueryStore.inMemory(Fetched("cached", QueryStore.INVALIDATED))
+    val store = QueryStore.inMemory(Fetched("cached", fetchedAt = null))
     // Readable without collecting
     assertThat(store.data.value?.value).isEqualTo("cached")
     fetch.hold()
@@ -72,7 +74,7 @@ class InMemoryQueryStoreTest {
     val store = QueryStore.inMemory(Fetched("a", START))
 
     store.invalidate()
-    assertThat(store.data.value).isEqualTo(Fetched("a", QueryStore.INVALIDATED))
+    assertThat(store.data.value).isEqualTo(Fetched("a", START, invalidated = true))
     store.clear()
     assertThat(store.data.value).isEqualTo(null)
     // Nothing to mark stale once empty
@@ -100,6 +102,73 @@ class InMemoryQueryStoreTest {
     // a was fetched longest ago, so storing b drops it
     assertThat(stores("a").data.value).isEqualTo(null)
     assertThat(stores("b").data.value?.value).isEqualTo("b")
+  }
+
+  @Test
+  fun `a keyed store holds every collected key over its cap and trims once one leaves`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
+    val a = backgroundScope.launch { stores("a").data.collect {} }
+    val b = backgroundScope.launch { stores("b").data.collect {} }
+    runCurrent()
+
+    stores("a").write("a", START)
+    stores("b").write("b", START + 1.hours)
+    assertThat(stores.size).isEqualTo(2)
+    assertThat(stores("a").data.value).isEqualTo(Fetched("a", START))
+
+    // A is the older and nobody collects it now, so it goes
+    a.cancel()
+    runCurrent()
+    assertThat(stores.size).isEqualTo(1)
+    assertThat(stores("a").data.value).isEqualTo(null)
+    assertThat(stores("b").data.value).isEqualTo(Fetched("b", START + 1.hours))
+    b.cancel()
+  }
+
+  @Test
+  fun `a keyed store drops a key nobody collects as before`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
+    val b = backgroundScope.launch { stores("b").data.collect {} }
+    runCurrent()
+
+    stores("a").write("a", START)
+    stores("b").write("b", START + 1.hours)
+    // B is collected and a is not, so a goes although it is the only key over the cap
+    assertThat(stores.size).isEqualTo(1)
+    assertThat(stores("a").data.value).isEqualTo(null)
+
+    stores("c").write("c", START + 2.hours)
+    // C was just written, and b is collected, so neither goes
+    assertThat(stores.size).isEqualTo(2)
+    b.cancel()
+    runCurrent()
+    // B is the older of the two that nobody collects now
+    assertThat(stores("b").data.value).isEqualTo(null)
+    assertThat(stores("c").data.value).isEqualTo(Fetched("c", START + 2.hours))
+  }
+
+  @Test
+  fun `a keyed store that nobody collects drops the oldest key on each write`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 2)
+
+    stores("a").write("a", START)
+    stores("b").write("b", START + 1.hours)
+    stores("c").write("c", START + 2.hours)
+
+    assertThat(stores.size).isEqualTo(2)
+    assertThat(stores("a").data.value).isEqualTo(null)
+  }
+
+  @Test
+  fun `a reader that takes one value leaves its key unpinned`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
+    stores("a").write("a", START)
+
+    assertThat(stores("a").data.first()).isEqualTo(Fetched("a", START))
+    stores("b").write("b", START + 1.hours)
+
+    assertThat(stores.size).isEqualTo(1)
+    assertThat(stores("a").data.value).isEqualTo(null)
   }
 
   private companion object {

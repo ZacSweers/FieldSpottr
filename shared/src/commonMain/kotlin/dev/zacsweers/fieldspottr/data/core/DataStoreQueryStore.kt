@@ -27,33 +27,34 @@ import okio.SYSTEM
 fun <T> DataStore<Fetched<T>?>.asQueryStore(): QueryStore<T> =
   QueryStore.of(
     data,
+    write = { fetched, keepsStored ->
+      updateData { current ->
+        if (current != null && keepsStored(current.fetchedAt, current.invalidated)) {
+          current
+        } else {
+          fetched
+        }
+      }
+    },
     clear = { keepsStored ->
       updateData { current ->
-        if (current != null && keepsStored(current.fetchedAt)) {
+        if (current != null && keepsStored(current.fetchedAt, current.invalidated)) {
           current
         } else {
           null
         }
       }
     },
-    invalidate = { updateData { it?.copy(fetchedAt = QueryStore.INVALIDATED) } },
-  ) { value, fetchedAt, keepsStored ->
-    updateData { current ->
-      if (current != null && keepsStored(current.fetchedAt)) {
-        current
-      } else {
-        Fetched(value, fetchedAt)
-      }
-    }
-  }
+    invalidate = { updateData { it?.copy(invalidated = true) } },
+  )
 
 /**
  * A DataStore file that holds one fetched value, for [asQueryStore] or [QueryStore.inFile]. The
- * value is written as JSON through [json] beside its fetch time, so the data stays fresh across
- * restarts. An unreadable file reads as empty, so the next collect fetches. DataStore allows one
- * active instance per file, so build it once per process, and does its file I/O in [scope], so give
- * it a dispatcher that suits blocking I/O, like the app scope plus an I/O dispatcher. Cancelling
- * [scope] releases the file.
+ * value is written as JSON through [json] beside its fetch time and invalidated flag, so the data
+ * stays fresh, or stale, across restarts. An unreadable file reads as empty, so the next collect
+ * fetches. DataStore allows one active instance per file, so build it once per process, and does
+ * its file I/O in [scope], so give it a dispatcher that suits blocking I/O, like the app scope plus
+ * an I/O dispatcher. Cancelling [scope] releases the file.
  */
 fun <T> fetchedDataStore(
   scope: CoroutineScope,
@@ -89,8 +90,12 @@ inline fun <reified T> QueryStore.Companion.inFile(
   fileSystem: FileSystem = FileSystem.SYSTEM,
 ): QueryStore<T> = inFile(scope, path, serializer<T>(), json, fileSystem)
 
-/** The fetched value and its fetch time in epoch milliseconds, as the file holds them. */
-@Serializable private class FetchedRecord<T>(val fetchedAt: Long, val value: T)
+/**
+ * The fetched value, its fetch time in epoch milliseconds or null when it was never fetched, and
+ * its invalidated flag, as the file holds them.
+ */
+@Serializable
+private class FetchedRecord<T>(val fetchedAt: Long?, val value: T, val invalidated: Boolean = false)
 
 /**
  * Reads and writes a [FetchedRecord] as JSON. A blank file, which a cleared store leaves behind,
@@ -113,14 +118,18 @@ private class FetchedSerializer<T>(serializer: KSerializer<T>, private val json:
       } catch (e: IllegalArgumentException) {
         throw CorruptionException("Unreadable fetched value", e)
       }
-    return Fetched(stored.value, Instant.fromEpochMilliseconds(stored.fetchedAt))
+    return Fetched(
+      stored.value,
+      stored.fetchedAt?.let(Instant::fromEpochMilliseconds),
+      stored.invalidated,
+    )
   }
 
   override suspend fun writeTo(t: Fetched<T>?, sink: BufferedSink) {
     if (t == null) {
       return
     }
-    val stored = FetchedRecord(t.fetchedAt.toEpochMilliseconds(), t.value)
+    val stored = FetchedRecord(t.fetchedAt?.toEpochMilliseconds(), t.value, t.invalidated)
     sink.writeUtf8(json.encodeToString(record, stored))
   }
 }

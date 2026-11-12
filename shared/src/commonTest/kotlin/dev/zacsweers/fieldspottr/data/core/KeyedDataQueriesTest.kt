@@ -10,10 +10,13 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_DECLINED_HOLD_OFFS
+import dev.zacsweers.fieldspottr.data.core.impl.MAX_REMEMBERED_KEYS
 import dev.zacsweers.fieldspottr.data.core.impl.holdOffsHeld
 import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
+import dev.zacsweers.fieldspottr.data.core.impl.keysRemembered
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import kotlin.test.Test
@@ -168,15 +171,37 @@ class KeyedDataQueriesTest {
 
   @Test
   fun `a key the store drops fetches again while collected`() = runTest {
-    val values = values(store = QueryStore.inMemoryByKey(maxEntries = 1))
+    val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
+    val values = values(store = stores)
 
     backgroundScope.launch { values.data("a").collect {} }
+    backgroundScope.launch { values.data("b").collect {} }
     values.data("a").first { it != null }
-    // Storing b drops a, and a's collector fetches it again
     values.data("b").first { it != null }
+    // Another writer removes a's value, so a's collector fetches it again at once
+    stores("a").clear()
     values.data("a").first { it?.value == "a#2" }
-    assertThat(fetch.calls).containsExactly("a", "b", "a")
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("a")).isEqualTo(2)
+    assertThat(fetch.callCount("b")).isEqualTo(1)
   }
+
+  @Test
+  fun `two keys collected over an in-memory cap of one fetch once each and stay stored`() =
+    runTest {
+      val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
+      val values = values(store = stores)
+
+      backgroundScope.launch { values.data("a").collect {} }
+      backgroundScope.launch { values.data("b").collect {} }
+      testScheduler.runCurrent()
+      advanceTimeBy(1.minutes)
+
+      // Collected keys are never dropped, so neither write evicts the other key
+      assertThat(fetch.calls).containsExactlyInAnyOrder("a", "b")
+      assertThat(stores("a").data.value?.value).isEqualTo("a#1")
+      assertThat(stores("b").data.value?.value).isEqualTo("b#1")
+    }
 
   @Test
   fun `invalidating an uncollected key makes its next collect fetch`() = runTest {
@@ -268,6 +293,124 @@ class KeyedDataQueriesTest {
       .isInstanceOf<OperationState.Failed>()
     assertThat(values.requestFetch(emptyList(), force = true).await())
       .isEqualTo(OperationState.Succeeded)
+  }
+
+  @Test
+  fun `invalidateAll marks keys in use and keys not in use stale`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    val values = values(store = stores)
+    values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
+    testScheduler.runCurrent()
+    backgroundScope.launch { values.data("a").collect {} }
+    testScheduler.runCurrent()
+
+    assertThat(values.invalidateAll().await()).isEqualTo(OperationState.Succeeded)
+    // A is in use, so its store is marked. B was not, so only the set's record covers it.
+    assertThat(stores("a").data.value).isEqualTo(Fetched("a#1", START, invalidated = true))
+    assertThat(stores("b").data.value).isEqualTo(Fetched("b#1", START))
+    advanceTimeBy(1.minutes)
+    assertThat(values.data("b").first { it?.value == "b#2" }?.fetchedAt)
+      .isEqualTo(START + 1.minutes)
+    testScheduler.runCurrent()
+
+    // Fetched after the call, so the record leaves it fresh
+    values.data("b").first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("b")).isEqualTo(2)
+    // A's collector leaves invalidated data for the next collect, as invalidate does
+    assertThat(fetch.callCount("a")).isEqualTo(1)
+  }
+
+  @Test
+  fun `invalidateAll covers a key whose query was built after the call`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    stores("c").write("cached", START - 1.minutes)
+    val values = values(store = stores)
+
+    values.invalidateAll().await()
+    // Built only now, and fresh by its own freshness
+    values.fetchIfStale("c").await()
+    assertThat(fetch.callCount("c")).isEqualTo(1)
+    assertThat(stores("c").data.value).isEqualTo(Fetched("c#1", START))
+  }
+
+  @Test
+  fun `invalidateAll marks the result of a fetch in flight stale`() = runTest {
+    val values = values()
+    fetch.hold()
+    val request = values.fetchIfStale("a")
+    testScheduler.runCurrent()
+    assertThat(fetch.running).isEqualTo(1)
+
+    advanceTimeBy(1.seconds)
+    values.invalidateAll()
+    fetch.release()
+    request.awaitSucceeded()
+    // Its fetch time is before the call, so the next unforced request fetches again
+    values.fetchIfStale("a").await()
+    assertThat(fetch.callCount("a")).isEqualTo(2)
+  }
+
+  @Test
+  fun `a key that fetched after invalidateAll stays fresh when the clock is set back`() = runTest {
+    val values = values()
+    values.invalidateAll().await()
+    data.clock.shift(-10.minutes)
+
+    values.fetchIfStale("a").await()
+    assertThat(fetch.callCount("a")).isEqualTo(1)
+    // The time rule alone would read its fetch as stale, so the set remembers it
+    assertThat(values.keysRemembered).isEqualTo(1)
+    // Fetched a moment ago, inside the 1 hour window
+    values.fetchIfStale("a").await()
+    assertThat(fetch.callCount("a")).isEqualTo(1)
+  }
+
+  @Test
+  fun `invalidateAll remembers no keys while the clock moves forward`() = runTest {
+    val values = values()
+    values.invalidateAll().await()
+    advanceTimeBy(1.seconds)
+
+    repeat(100) { values.fetchIfStale("key$it").await() }
+
+    assertThat(fetch.calls).hasSize(100)
+    assertThat(values.keysRemembered).isEqualTo(0)
+    // Fetched after the call, so the time rule alone leaves them fresh
+    repeat(100) { values.fetchIfStale("key$it").await() }
+    assertThat(fetch.calls).hasSize(100)
+  }
+
+  @Test
+  fun `invalidateAll remembers a bounded number of keys and a forgotten one is stale again`() =
+    runTest {
+      val values = values()
+      values.invalidateAll().await()
+      data.clock.shift(-30.minutes)
+
+      repeat(MAX_REMEMBERED_KEYS + 1) { values.fetchIfStale("key$it").await() }
+      assertThat(values.keysRemembered).isEqualTo(MAX_REMEMBERED_KEYS)
+
+      // The first key was forgotten, so the mark reads its fetch as stale and it fetches again
+      values.fetchIfStale("key0").await()
+      assertThat(fetch.callCount("key0")).isEqualTo(2)
+      // A key still remembered stays fresh
+      values.fetchIfStale("key${MAX_REMEMBERED_KEYS}").await()
+      assertThat(fetch.callCount("key${MAX_REMEMBERED_KEYS}")).isEqualTo(1)
+    }
+
+  @Test
+  fun `a newer invalidateAll forgets the keys the last one remembered`() = runTest {
+    val values = values()
+    values.invalidateAll().await()
+    data.clock.shift(-10.minutes)
+    values.fetchIfStale("a").await()
+    assertThat(values.keysRemembered).isEqualTo(1)
+
+    values.invalidateAll().await()
+    assertThat(values.keysRemembered).isEqualTo(0)
+    values.fetchIfStale("a").await()
+    assertThat(fetch.callCount("a")).isEqualTo(2)
   }
 
   @Test

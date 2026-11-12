@@ -321,7 +321,7 @@ private class RealDataScope(
       }
     // Guarded once for the set, so every key's query shares it
     val own = onFailure?.let(::guarded)
-    return RealKeyedDataQueries { key, context ->
+    return RealKeyedDataQueries(factory.clock) { key, context ->
       val keyFetch: suspend () -> T =
         if (permits == null) {
           { fetch(key) }
@@ -336,6 +336,7 @@ private class RealDataScope(
         retry,
         own,
         holdOff = context.holdOff,
+        staleMark = context.staleMark,
         holds = context.holds,
       )
     }
@@ -444,8 +445,8 @@ private class RealDataScope(
   /**
    * A query in this scope that hears the factory's network state. It reports to [onFailure], which
    * is already guarded, or to the factory's handlers when that is null, and holds off by [retry],
-   * or by the factory's `fetchRetry` when that is null. A keyed set passes the [holdOff] record it
-   * keeps per key, and [holds] on the key's entry.
+   * or by the factory's `fetchRetry` when that is null. A keyed set passes the [holdOff] record and
+   * the [staleMark] rule it keeps per key, and [holds] on the key's entry.
    */
   private fun <T> newQuery(
     store: QueryStore<T>,
@@ -454,6 +455,7 @@ private class RealDataScope(
     retry: RetryPolicy?,
     onFailure: ((Throwable) -> Unit)?,
     holdOff: FetchHoldOff = FetchHoldOff.inMemory(),
+    staleMark: StaleMark = StaleMark.None,
     holds: QueryHolds = QueryHolds.None,
   ) =
     RealDataQuery(
@@ -467,6 +469,7 @@ private class RealDataScope(
       online = factory.online,
       retry = retry ?: factory.fetchRetry,
       holdOff = holdOff,
+      staleMark = staleMark,
       holds = holds,
     )
 }

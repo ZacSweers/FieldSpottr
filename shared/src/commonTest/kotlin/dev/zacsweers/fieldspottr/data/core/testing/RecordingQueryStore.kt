@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data.core.testing
 
 import dev.zacsweers.fieldspottr.data.core.Fetched
+import dev.zacsweers.fieldspottr.data.core.KeepsStored
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore.Call.Clear
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore.Call.Invalidate
@@ -28,7 +29,8 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
   QueryStore<T> {
   /** One call the store received. */
   sealed interface Call<out T> {
-    data class Write<T>(val value: T, val fetchedAt: Instant) : Call<T>
+    data class Write<T>(val value: T, val fetchedAt: Instant?, val invalidated: Boolean = false) :
+      Call<T>
 
     data object Invalidate : Call<Nothing>
 
@@ -52,7 +54,7 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
   val writes: List<Fetched<T>>
     get() = calls.mapNotNull { call ->
       when (call) {
-        is Call.Write -> Fetched(call.value, call.fetchedAt)
+        is Call.Write -> Fetched(call.value, call.fetchedAt, call.invalidated)
         else -> null
       }
     }
@@ -72,16 +74,12 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
   }
 
   /**
-   * Recorded as a [Write] of [value] once the delegate returns, whatever [keepsStored] answered.
+   * Recorded as a [Write] of [fetched] once the delegate returns, whatever [keepsStored] answered.
    * The delegate may ask it more than once, so no single answer tells what the store kept.
    */
-  override suspend fun writeFetched(
-    value: T,
-    fetchedAt: Instant,
-    keepsStored: (storedAt: Instant) -> Boolean,
-  ) {
-    delegate.writeFetched(value, fetchedAt, keepsStored)
-    recorded.update { it.adding(Write(value, fetchedAt)) }
+  override suspend fun writeFetched(fetched: Fetched<T>, keepsStored: KeepsStored) {
+    delegate.writeFetched(fetched, keepsStored)
+    recorded.update { it.adding(Write(fetched.value, fetched.fetchedAt, fetched.invalidated)) }
   }
 
   override suspend fun invalidate() {
@@ -90,7 +88,7 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
   }
 
   /** Recorded as a [Clear] once the delegate returns, whatever [keepsStored] answered. */
-  override suspend fun clearFetched(keepsStored: (storedAt: Instant) -> Boolean) {
+  override suspend fun clearFetched(keepsStored: KeepsStored) {
     delegate.clearFetched(keepsStored)
     recorded.update { it.adding(Clear) }
   }

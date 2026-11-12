@@ -161,7 +161,7 @@ class OptimisticQueryStoreScaleTest {
       assertThat(emitted.getValue(key).size).isEqualTo(before.getValue(key))
     }
     assertThat(emitted.getValue(mutated))
-      .isEqualTo(listOf(null, Fetched(listOf(mutated), QueryStore.UNFETCHED)))
+      .isEqualTo(listOf(null, Fetched(listOf(mutated), fetchedAt = null)))
     // The change shows, then the commit, and the idempotence check applies it once more
     assertThat(mutatedApplies.load()).isEqualTo(3)
     failures.assertNone()

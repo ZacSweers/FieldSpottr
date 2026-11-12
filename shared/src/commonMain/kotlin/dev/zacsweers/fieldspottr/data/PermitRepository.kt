@@ -16,6 +16,7 @@ import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
+import dev.zacsweers.fieldspottr.data.core.KeepsStored
 import dev.zacsweers.fieldspottr.data.core.OnPrevious
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
@@ -72,8 +73,10 @@ import kotlinx.serialization.json.Json
 private val REPO_DATA_REFRESH_INTERVAL = 1.hours
 private val REFRESHING_MESSAGE_DELAY = 300.milliseconds
 private const val LAST_AREAS_FETCH_AT = "last_areas_fetch_at"
+private const val LAST_AREAS_INVALIDATED = "last_areas_invalidated"
 private const val LAST_AREAS_APP_VERSION = "last_areas_app_version"
 private const val LAST_MANIFEST_FETCH_AT = "last_manifest_fetch_at"
+private const val LAST_MANIFEST_INVALIDATED = "last_manifest_invalidated"
 private const val LAST_MANIFEST_APP_VERSION = "last_manifest_app_version"
 
 // Really abstracted just for Metro testing
@@ -189,6 +192,7 @@ internal constructor(
       db = db,
       io = io,
       fetchedAtKey = LAST_AREAS_FETCH_AT,
+      invalidatedKey = LAST_AREAS_INVALIDATED,
       appVersionKey = LAST_AREAS_APP_VERSION,
       decode = ::decodeAreas,
     ) {
@@ -209,6 +213,7 @@ internal constructor(
       db = db,
       io = io,
       fetchedAtKey = LAST_MANIFEST_FETCH_AT,
+      invalidatedKey = LAST_MANIFEST_INVALIDATED,
       appVersionKey = LAST_MANIFEST_APP_VERSION,
       decode = ::decodeManifest,
     ) {
@@ -507,23 +512,33 @@ internal constructor(
 
   /**
    * The stored feed for [area], read from the area feed table. Its permits are written in the same
-   * transaction as its row there.
+   * transaction as its row there. It takes only a downloaded feed, since the permits table keeps
+   * its rows. A feed with no fetch time is stored as never fetched, as [areaFeedRow] describes.
+   * Invalidating sets the row's flag in one UPDATE.
    */
   private fun feedStore(area: AvailabilityManifestArea): QueryStore<AreaFeed> {
     val name = area.resolvedAreaName
     return QueryStore.of(
-      data = flow {
-          emitAll(db.await().fsdbQueries.getAreaFeed(name).asFlow().mapToOneOrNull(io))
-        }
+      data =
+        flow { emitAll(db.await().fsdbQueries.getAreaFeed(name).asFlow().mapToOneOrNull(io)) }
           // A row for another hash came from an older manifest, so it counts as nothing stored
           .map { row -> row?.takeIf { it.hash == area.hash }?.toFetched() },
+      write = { fetched, keepsStored ->
+        withContext(io) {
+          db
+            .await()
+            .replaceAreaFeed(
+              area,
+              fetched.value,
+              fetched.fetchedAt,
+              fetched.invalidated,
+              keepsStored,
+            )
+        }
+      },
       clear = { keepsStored -> withContext(io) { db.await().clearAreaFeed(area, keepsStored) } },
       invalidate = { withContext(io) { db.await().invalidateAreaFeed(name) } },
-    ) { feed, fetchedAt, keepsStored ->
-      withContext(io) {
-        db.await().replaceAreaFeed(area, feed, fetchedAt.toEpochMilliseconds(), keepsStored)
-      }
-    }
+    )
   }
 
   private suspend fun hasAnyPermits(): Boolean {
@@ -543,7 +558,7 @@ internal constructor(
         .replaceAreaFeed(
           manifestArea,
           AreaFeed(hash = manifestArea.hash, generatedAt = feed.generatedAt, rows = feed.rows),
-          fetchedAt,
+          Instant.fromEpochMilliseconds(fetchedAt),
         )
     }
   }
@@ -551,13 +566,16 @@ internal constructor(
   /**
    * Replaces [area]'s permits and its feed row in one transaction, unless [keepsStored] says the
    * feed stored now for this manifest should stay. A row for another hash counts as nothing stored,
-   * as the feed store reads it.
+   * as the feed store reads it. The row keeps [fetchedAt], null when the feed was never fetched,
+   * and [invalidated] as its flag. The area's last update time moves only with a real fetch time,
+   * so a feed never fetched leaves the last download time as it was.
    */
   private suspend fun FSDatabase.replaceAreaFeed(
     area: AvailabilityManifestArea,
     feed: AreaFeed,
-    fetchedAt: Long,
-    keepsStored: (storedAt: Instant) -> Boolean = { false },
+    fetchedAt: Instant?,
+    invalidated: Boolean = false,
+    keepsStored: KeepsStored = { _, _ -> false },
   ) {
     val rows = checkNotNull(feed.rows) { "Only a downloaded feed has rows" }
     val areaName = area.resolvedAreaName
@@ -565,9 +583,7 @@ internal constructor(
       // Another writer, like an invalidate, can still land between the read and the writes
       transactionRetryingConflicts {
         val stored = fsdbQueries.getAreaFeed(areaName).executeAsOneOrNull()
-        if (
-          stored != null && stored.hash == area.hash && keepsStored(stored.toFetched().fetchedAt)
-        ) {
+        if (stored != null && stored.hash == area.hash && stored.keeps(keepsStored)) {
           return@transactionRetryingConflicts
         }
         fsdbQueries.deleteAreaPermits(areaName)
@@ -606,14 +622,17 @@ internal constructor(
             )
           )
         }
-        fsdbQueries.updateAreaOp(DbArea(areaName, fetchedAt))
+        if (fetchedAt != null) {
+          fsdbQueries.updateAreaOp(DbArea(areaName, fetchedAt.toEpochMilliseconds()))
+        }
         fsdbQueries.upsertAreaFeed(
-          DbAreaFeed(
+          areaFeedRow(
             name = areaName,
             areaName = areaName,
-            feedGeneratedAt = feed.generatedAt ?: area.generatedAt,
-            feedFetchedAt = fetchedAt,
+            generatedAt = feed.generatedAt ?: area.generatedAt,
             hash = area.hash,
+            fetchedAt = fetchedAt,
+            invalidated = invalidated,
           )
         )
       }
@@ -627,15 +646,13 @@ internal constructor(
    */
   private suspend fun FSDatabase.clearAreaFeed(
     area: AvailabilityManifestArea,
-    keepsStored: (storedAt: Instant) -> Boolean,
+    keepsStored: KeepsStored,
   ) {
     val areaName = area.resolvedAreaName
     feedWrites.withLock {
       transactionRetryingConflicts {
         val stored = fsdbQueries.getAreaFeed(areaName).executeAsOneOrNull()
-        if (
-          stored != null && stored.hash == area.hash && keepsStored(stored.toFetched().fetchedAt)
-        ) {
+        if (stored != null && stored.hash == area.hash && stored.keeps(keepsStored)) {
           return@transactionRetryingConflicts
         }
         fsdbQueries.deleteAreaPermits(areaName)
@@ -644,23 +661,71 @@ internal constructor(
     }
   }
 
+  /**
+   * Sets [name]'s invalidated flag in one UPDATE, so it never loses a write that lands meanwhile.
+   */
   private suspend fun FSDatabase.invalidateAreaFeed(name: String) {
-    transactionRetryingConflicts {
-      val row =
-        fsdbQueries.getAreaFeed(name).executeAsOneOrNull() ?: return@transactionRetryingConflicts
-      val stale = row.copy(feedFetchedAt = QueryStore.INVALIDATED.toEpochMilliseconds())
-      fsdbQueries.upsertAreaFeed(stale)
-    }
+    transactionRetryingConflicts { fsdbQueries.invalidateAreaFeed(name) }
   }
+
+  /** Whether the stored row stays, from its fetch time and flag alone. */
+  private fun DbAreaFeed.keeps(keepsStored: KeepsStored): Boolean =
+    keepsStored(storedFetchedAt, feedInvalidated != 0L)
 
   private fun DbAreaFeed.toFetched(): Fetched<AreaFeed> =
     Fetched(
       AreaFeed(hash = hash, generatedAt = feedGeneratedAt, rows = null),
-      Instant.fromEpochMilliseconds(feedFetchedAt),
+      storedFetchedAt,
+      invalidated = feedInvalidated != 0L,
     )
 
   private data object SyncKey
 }
+
+/**
+ * An area feed row. The feedFetchedAt column came before values with no fetch time and cannot hold
+ * null, so a row for a value that was never fetched sets feedNeverFetched and keeps 0 in
+ * feedFetchedAt, which [storedFetchedAt] never reads. Every reader and writer of the table's fetch
+ * time goes through these two, so the encoding stays here.
+ */
+internal fun areaFeedRow(
+  name: String,
+  areaName: String,
+  generatedAt: Long?,
+  hash: String,
+  fetchedAt: Instant?,
+  invalidated: Boolean,
+): DbAreaFeed =
+  DbAreaFeed(
+    name = name,
+    areaName = areaName,
+    feedGeneratedAt = generatedAt,
+    feedFetchedAt = fetchedAt?.toEpochMilliseconds() ?: 0L,
+    hash = hash,
+    feedInvalidated =
+      if (invalidated) {
+        1L
+      } else {
+        0L
+      },
+    feedNeverFetched =
+      if (fetchedAt == null) {
+        1L
+      } else {
+        0L
+      },
+  )
+
+/**
+ * The row's fetch time, or null when it holds a value never fetched, as [areaFeedRow] writes it.
+ */
+internal val DbAreaFeed.storedFetchedAt: Instant?
+  get() =
+    if (feedNeverFetched != 0L) {
+      null
+    } else {
+      Instant.fromEpochMilliseconds(feedFetchedAt)
+    }
 
 /**
  * An area's feed as its query sees it. [rows] is set on a fresh download and null when read back,
