@@ -79,3 +79,5 @@ fastlane/report.xml
 
 fastlane/release_notes.txt
 fastlane/metadata/android/en-US/changelogs/default.txt
+
+.claude/worktrees
