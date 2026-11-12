@@ -15,10 +15,10 @@ import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * An outbox send the test controls, with a revert that records too. Pass them as `send = send,
- * revert = send::revert`. Each attempt records its payload, waits while that payload is held, then
- * throws what [failure] returns or records the payload as sent. Every record is safe to write from
- * any thread.
+ * An outbox send the test controls, with a revert that records too. Pass the send to the sender as
+ * `key.sender(send = send)` and the revert to the handle as `outbox(key, revert = send::revert)`.
+ * Each attempt records its payload, waits while that payload is held, then throws what [failure]
+ * returns or records the payload as sent. Every record is safe to write from any thread.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class TestSend<E> : suspend (E, EntryId) -> Unit {
@@ -96,7 +96,8 @@ class TestSend<E> : suspend (E, EntryId) -> Unit {
     delivered.update { it.adding(payload) }
   }
 
-  suspend fun revert(payload: E) {
+  /** Records [payload] as reverted. It takes the row's id too, as a handle's revert does. */
+  suspend fun revert(payload: E, @Suppress("UNUSED_PARAMETER") id: EntryId) {
     undone.update { it.adding(payload) }
   }
 }

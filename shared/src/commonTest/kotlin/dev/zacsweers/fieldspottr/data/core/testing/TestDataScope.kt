@@ -7,6 +7,7 @@ import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.InMemoryOutboxStores
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
+import dev.zacsweers.fieldspottr.data.core.OutboxSender
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
 import kotlin.time.Duration.Companion.minutes
@@ -54,15 +55,18 @@ internal constructor(
   override val backlog: Flow<OutboxBacklog>
     get() = delegate.backlog
 
-  /** A data scope over [scope], which owns how long its work lives. */
-  override fun create(scope: CoroutineScope): TestDataScope {
+  /**
+   * A data scope over [scope], which owns how long its work lives. It drains the outbox of each of
+   * [senders] from now on, as [DataScope.Factory.create] describes.
+   */
+  override fun create(scope: CoroutineScope, senders: Set<OutboxSender<*>>): TestDataScope {
     val target =
       if (dispatcher == null) {
         scope
       } else {
         scope + dispatcher
       }
-    return TestDataScope(delegate.create(target), this)
+    return TestDataScope(delegate.create(target, senders), this)
   }
 
   /** The rows of the outbox called [name], the same rows that outbox reads and writes. */
@@ -172,8 +176,8 @@ fun TestScope.testDataScopeFactory(
 }
 
 /**
- * A [TestDataScope] over this test's `backgroundScope`, so its work ends with the test. The
- * parameters are those of [testDataScopeFactory].
+ * A [TestDataScope] over this test's `backgroundScope`, so its work ends with the test. It drains
+ * the outbox of each of [senders]. The other parameters are those of [testDataScopeFactory].
  */
 fun TestScope.testDataScope(
   eager: Boolean = false,
@@ -182,5 +186,7 @@ fun TestScope.testDataScope(
   scheduler: OutboxScheduler = OutboxScheduler.None,
   retry: RetryPolicy = RetryPolicy.exponential(),
   fetchRetry: RetryPolicy = RetryPolicy.exponential(initial = 1.seconds, max = 1.minutes),
+  senders: Set<OutboxSender<*>> = emptySet(),
 ): TestDataScope =
-  testDataScopeFactory(eager, clock, online, scheduler, retry, fetchRetry).create(backgroundScope)
+  testDataScopeFactory(eager, clock, online, scheduler, retry, fetchRetry)
+    .create(backgroundScope, senders)

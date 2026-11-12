@@ -12,21 +12,21 @@ import dev.zacsweers.fieldspottr.di.FSGraph
 import dev.zacsweers.metro.createGraphFactory
 
 /**
- * Builds the graph and configures WorkManager on demand, so the drain worker gets the graph's
- * outbox owners. The manifest removes WorkManager's automatic initializer for that.
+ * Builds the graph and configures WorkManager on demand, so the drain worker gets the graph's app
+ * data scope. The manifest removes WorkManager's automatic initializer for that.
  */
 class FieldSpottrApplication : Application(), Configuration.Provider {
 
   internal lateinit var fsGraph: FSGraph
 
   // WorkManager asks for this on its first use, which the graph's scheduler defers until a row
-  // waits, so the graph exists by then. Reading the owner set constructs the owners not built yet,
-  // and their outboxes start draining.
+  // waits, so the graph exists by then. Reading the app data scope creates it if needed, and it
+  // drains every outbox sender in the graph.
   override val workManagerConfiguration: Configuration
     get() =
       Configuration.Builder()
         .setWorkerFactory(
-          OutboxDrainWorkerFactory(fsGraph.dataScopeFactory) { fsGraph.outboxOwners }
+          OutboxDrainWorkerFactory(fsGraph.dataScopeFactory) { fsGraph.appDataScope }
         )
         .build()
 

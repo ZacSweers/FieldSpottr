@@ -53,14 +53,13 @@ class OptimisticQueryStoreLocalChangeTest {
             stores = SlowReturningOutboxStores(),
             clock = Clock.System,
           )
-          .create(scope)
+          .create(scope, setOf(Count.exchangingSender { _, _ -> error("Offline") }))
       // Not idempotent, so a change applied twice shows in the count
       val count =
-        data.optimisticStore<Int, Increment>(
-          name = "count",
+        data.optimisticStore(
+          Count,
           base = QueryStore.inMemory(Fetched(0, START)),
           apply = { current, increment -> (current ?: 0) + increment.by },
-          exchange = { _, _ -> error("Offline") },
         )
       val made = AtomicInteger(0)
       // Each value seen, with how many changes had been made when it arrived
@@ -92,6 +91,8 @@ class OptimisticQueryStoreLocalChangeTest {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     try {
       val dropped = mutableListOf<String>()
+      // Each round has its own outbox, and the data scope drains them all from its creation
+      val keys = List(TAG_ROUNDS) { OutboxKey<Tag>("tags$it") }
       val data =
         DataScope.Factory(
             onFailure = TestFailures(),
@@ -99,11 +100,11 @@ class OptimisticQueryStoreLocalChangeTest {
             stores = SlowInsertStores(),
             clock = Clock.System,
           )
-          .create(scope)
+          .create(scope, keys.mapTo(mutableSetOf()) { key -> key.sender { _, _ -> } })
       repeat(TAG_ROUNDS) { round ->
         val tags =
           data.optimisticStore<List<String>, Tag>(
-            name = "tags$round",
+            keys[round],
             base = QueryStore.inMemory(Fetched(emptyList(), START)),
             apply = { current, tag ->
               val list = current.orEmpty()
@@ -113,7 +114,6 @@ class OptimisticQueryStoreLocalChangeTest {
                 list + tag.tag
               }
             },
-            send = { _, _ -> },
           )
         val seen = CopyOnWriteArrayList<List<String>>()
         val collector = scope.launch { tags.data.collect { seen += it?.value.orEmpty() } }
@@ -145,9 +145,9 @@ class OptimisticQueryStoreLocalChangeTest {
     override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
       val rows = delegate.open(name, serializer)
       return object : OutboxStore<E> by rows {
-        override suspend fun insert(key: String, payload: E): EntryId {
+        override suspend fun insert(id: EntryId, key: String, payload: E) {
           delay(2.milliseconds)
-          return rows.insert(key, payload)
+          rows.insert(id, key, payload)
         }
       }
     }
@@ -162,10 +162,9 @@ class OptimisticQueryStoreLocalChangeTest {
     override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
       val rows = delegate.open(name, serializer)
       return object : OutboxStore<E> by rows {
-        override suspend fun insert(key: String, payload: E): EntryId {
-          val id = rows.insert(key, payload)
+        override suspend fun insert(id: EntryId, key: String, payload: E) {
+          rows.insert(id, key, payload)
           delay(2.milliseconds)
-          return id
         }
       }
     }
@@ -257,6 +256,12 @@ class OptimisticQueryStoreLocalChangeTest {
     try {
       val stores = LaggingOutboxStores()
       val rejected = MutableStateFlow(false)
+      val key = OutboxKey<KeyedMutation<Unit, Tag>>("tags$round")
+      val sender = key.sender { change, _ ->
+        if (rejected.value) {
+          throw PermanentFailure("Rejected ${change.mutation}")
+        }
+      }
       val sets =
         DataScope.Factory(
             onFailure = {},
@@ -264,9 +269,9 @@ class OptimisticQueryStoreLocalChangeTest {
             stores = stores,
             clock = Clock.System,
           )
-          .create(scope)
+          .create(scope, setOf(sender))
           .optimisticStores<Unit, List<String>, Tag>(
-            name = "tags$round",
+            key,
             base = { QueryStore.inMemory(Fetched(emptyList(), START)) },
             apply = { current, tag ->
               val list = current.orEmpty()
@@ -274,11 +279,6 @@ class OptimisticQueryStoreLocalChangeTest {
                 list
               } else {
                 list + tag.tag
-              }
-            },
-            send = { _, tag, _ ->
-              if (rejected.value) {
-                throw PermanentFailure("Rejected $tag")
               }
             },
           )
@@ -298,5 +298,6 @@ class OptimisticQueryStoreLocalChangeTest {
     const val TAGS = 50
     const val TAG_ROUNDS = 20
     val START: Instant = Instant.fromEpochSeconds(1_700_000_000)
+    val Count = OutboxKey.replying<Increment, Int>("count")
   }
 }

@@ -70,10 +70,10 @@ class UnreadableRowTest {
           stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem),
           clock = testClock(),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(ChangesOutbox.sender { _, _ -> }))
 
     // Nothing collects the outbox's entries
-    data.outbox<Change>("changes", send = { _, _ -> })
+    data.outbox(ChangesOutbox)
     bothReported.await()
 
     assertThat(failures.all.filterIsInstance<UnreadableEntryException>().map { it.id })
@@ -82,9 +82,8 @@ class UnreadableRowTest {
 
   @Test
   fun `an optimistic store leaves an old row out and keeps showing its data`() = runTest {
-    // As a KeyedMutation for a single store, whose key is Unit
-    val payload = """{"key":{},"mutation":$OLD_CHANGE,"token":"t"}"""
-    writeLog("groups", OutboxLog.Row("old", key = "{}", payload, status = "queued"))
+    // A single store's row holds the change itself, on the order key every row shares
+    writeLog("groups", OutboxLog.Row("old", key = "", OLD_CHANGE, status = "queued"))
     val failures = TestFailures()
     val data =
       DataScope.Factory(
@@ -93,11 +92,11 @@ class UnreadableRowTest {
           stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem),
           clock = testClock(),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Groups.sender { _, _ -> }))
     val truth = QueryStore.inMemory(Fetched(setOf("x"), testClock().now()))
     val groups =
-      data.optimisticStore<Set<String>, Change>(
-        name = "groups",
+      data.optimisticStore(
+        Groups,
         base = truth,
         apply = { current, change ->
           if (change.on) {
@@ -106,7 +105,6 @@ class UnreadableRowTest {
             current.orEmpty() - change.group
           }
         },
-        send = { _, _ -> },
       )
 
     assertThat(groups.data.first()?.value).isEqualTo(setOf("x"))
@@ -119,7 +117,7 @@ class UnreadableRowTest {
 
   @Test
   fun `optimistic stores leave an old row out of every key and report it once`() = runTest {
-    val payload = """{"key":"k","mutation":$OLD_CHANGE,"token":"t"}"""
+    val payload = """{"key":"k","mutation":$OLD_CHANGE}"""
     writeLog("groups", OutboxLog.Row("old", key = "\"k\"", payload, status = "queued"))
     val failures = TestFailures()
     val data =
@@ -129,13 +127,12 @@ class UnreadableRowTest {
           stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem),
           clock = testClock(),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(GroupsByKey.sender { _, _ -> }))
     val groups =
-      data.optimisticStores<String, Set<String>, Change>(
-        name = "groups",
-        base = QueryStore.inMemoryByKey(),
+      data.optimisticStores(
+        GroupsByKey,
+        base = QueryStore.inMemoryByKey<String, Set<String>>(),
         apply = { current, change -> current.orEmpty() + change.group },
-        send = { _, _, _ -> },
       )
 
     assertThat(groups.pendingCount.first()).isEqualTo(0)
@@ -165,9 +162,9 @@ class UnreadableRowTest {
           },
           clock = testClock(),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Labelled.sender(store = store) { _, _ -> }))
 
-    data.outbox("labelled", store, send = { _, _ -> })
+    data.outbox(Labelled)
 
     assertThat(reported.await().outbox).isEqualTo("labelled")
   }
@@ -178,6 +175,13 @@ class UnreadableRowTest {
       writeUtf8(Json.encodeToString(OutboxLog.serializer(), OutboxLog(rows.toList())))
     }
   }
+
+  private companion object {
+    val Groups = OutboxKey<Change>("groups")
+    val GroupsByKey = OutboxKey<KeyedMutation<String, Change>>("groups")
+    /** An outbox over a store of its own, which a store set opened as `changes`. */
+    val Labelled = OutboxKey<Change>("labelled")
+  }
 }
 
 /** A payload class whose field `on` was called `enabled` before. */
@@ -185,6 +189,9 @@ class UnreadableRowTest {
 
 /** A [Change] as the version before the rename stored it, which no longer decodes. */
 internal const val OLD_CHANGE = """{"group":"a","enabled":true}"""
+
+/** The outbox called `changes`, whose stored rows hold [Change]s. */
+private val ChangesOutbox = OutboxKey<Change>("changes")
 
 /**
  * Checks an outbox called `changes` over [stores], which hold row [old] on key `k` in a format the
@@ -195,6 +202,7 @@ internal const val OLD_CHANGE = """{"group":"a","enabled":true}"""
 internal suspend fun TestScope.assertUnreadableRowIsHandled(stores: OutboxStores, old: EntryId) {
   val failures = TestFailures()
   val reported = CompletableDeferred<UnreadableEntryException>()
+  val send = TestSend<Change>()
   val data =
     DataScope.Factory(
         onFailure = { failure ->
@@ -206,9 +214,8 @@ internal suspend fun TestScope.assertUnreadableRowIsHandled(stores: OutboxStores
         stores = stores,
         clock = testClock(),
       )
-      .create(backgroundScope)
-  val send = TestSend<Change>()
-  val outbox = data.outbox<Change>("changes", send, send::revert)
+      .create(backgroundScope, setOf(ChangesOutbox.sender(send = send)))
+  val outbox = data.outbox(ChangesOutbox, revert = send::revert)
 
   val sameKey = outbox.enqueue(Change("b", on = true), key = "k")
   val otherKey = outbox.enqueue(Change("c", on = false), key = "other")

@@ -48,13 +48,12 @@ class OptimisticQueryStoreRetentionTest {
         },
       )
     fun DataScope.posts() =
-      optimisticStores<String, Post, Star>(
-        name = "posts",
+      optimisticStores(
+        PostsOutbox,
         base = { base },
         apply = { post, star -> post?.copy(starred = star.starred) },
-        send = { _, _, _ -> },
       )
-    val posts = scopes.create(owner).posts()
+    val posts = scopes.create(owner, setOf(PostsOutbox.sender { _, _ -> })).posts()
     val post = posts("p")
 
     // Eight refreshes read the server before the edit reached it, and land after its send in the
@@ -86,10 +85,14 @@ class OptimisticQueryStoreRetentionTest {
     // A reopened set, which has no records, shows the edit from the stored body
     owner.cancel()
     owner.coroutineContext.job.join()
-    val reopened = scopes.create(backgroundScope).posts()("p")
+    val reopened =
+      scopes.create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> })).posts()("p")
     assertThat(reopened.data.first()?.value).isEqualTo(Post(bodies.last(), starred = true))
     scopes.assertNoFailures()
   }
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+
+private val PostsOutbox =
+  OutboxKey<KeyedMutation<String, OptimisticQueryStoreRetentionTest.Star>>("posts")

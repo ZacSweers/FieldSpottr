@@ -9,6 +9,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
@@ -39,8 +40,9 @@ class OutboxStoresTest {
   @Test
   fun `in memory stores never encode a payload`() = runTest {
     val send = TestSend<String>()
-    val data = testDataScope()
-    val outbox = data.outbox("notes", UnencodableSerializer, send = send)
+    val notes = OutboxKey("notes", UnencodableSerializer)
+    val data = testDataScope(senders = setOf(notes.sender(send = send)))
+    val outbox = data.outbox(notes)
 
     assertThat(outbox.enqueue("a").await()).isEqualTo(OperationState.Succeeded)
     assertThat(send.sent).containsExactly("a")
@@ -48,21 +50,24 @@ class OutboxStoresTest {
   }
 
   @Test
-  fun `a second running outbox on one name fails`() = runTest {
-    val data = testDataScope()
-    data.outbox<String>("notes", send = { _, _ -> })
+  fun `a second running sender on one name fails`() = runTest {
+    val factory = testDataScopeFactory()
+    factory.create(backgroundScope, setOf(Notes.sender { _, _ -> }))
 
-    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send = { _, _ -> }) }
+    assertFailsWith<IllegalStateException> {
+      factory.create(backgroundScope, setOf(Notes.sender { _, _ -> }))
+    }
   }
 
   @Test
   fun `an outbox over a store of its own sends the rows already in it`() = runTest {
     val send = TestSend<String>()
-    val data = testDataScope()
     val store = inMemoryOutboxStore<String>()
-    store.insert("k", "a")
+    store.insertNew("k", "a")
+    val rows = OutboxKey<String>("store")
+    val data = testDataScope(senders = setOf(rows.sender(store = store, send = send)))
 
-    val outbox = data.outbox("store", store, send = send)
+    val outbox = data.outbox(rows)
 
     outbox.entries.first { it.isEmpty() }
     assertThat(send.sent).containsExactly("a")
@@ -75,13 +80,13 @@ class OutboxStoresTest {
     val scopes = testDataScopeFactory(online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val first = scopes.create(owner).outbox<String>("notes", send = send)
+    val first = scopes.create(owner, setOf(Notes.sender(send = send))).outbox(Notes)
     first.enqueue("a")
     // Offline, so the row waits
     first.entries.first { it.isNotEmpty() }
     owner.coroutineContext.job.cancelAndJoin()
 
-    val second = scopes.create(backgroundScope).outbox<String>("notes", send = send)
+    val second = scopes.create(backgroundScope, setOf(Notes.sender(send = send))).outbox(Notes)
     scopes.online.value = true
 
     second.entries.first { it.isEmpty() }
@@ -95,7 +100,7 @@ class OutboxStoresTest {
     fileSystem.createDirectories(directory)
     val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
 
-    stores.open("../outside", String.serializer()).insert("k", "a")
+    stores.open("../outside", String.serializer()).insertNew("k", "a")
 
     assertThat(fileSystem.exists("/outside.outbox".toPath())).isFalse()
     assertThat(fileSystem.list(directory).map { it.name }).containsExactly("..%2Foutside.outbox")
@@ -109,7 +114,7 @@ class OutboxStoresTest {
     val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
 
     val store = stores.open("notes", String.serializer())
-    store.insert("k", "a")
+    store.insertNew("k", "a")
 
     assertThat(stores.open("notes", String.serializer())).isSameInstanceAs(store)
   }
@@ -128,7 +133,7 @@ class OutboxStoresTest {
         )
         .open("notes", String.serializer())
 
-    store.insert("k", "hello")
+    store.insertNew("k", "hello")
 
     assertThat(store.entries().first().single().payload).isEqualTo("hello")
     val log =
@@ -162,3 +167,6 @@ private object UnencodableSerializer : KSerializer<String> {
 
   override fun deserialize(decoder: Decoder): String = error("Decoded a payload")
 }
+
+/** The outbox most of these tests open. */
+private val Notes = OutboxKey<String>("notes")

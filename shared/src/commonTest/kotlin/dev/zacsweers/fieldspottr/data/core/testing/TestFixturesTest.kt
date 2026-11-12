@@ -17,10 +17,11 @@ import dev.zacsweers.fieldspottr.data.core.Fetched
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
 import dev.zacsweers.fieldspottr.data.core.data
-import dev.zacsweers.fieldspottr.data.core.outbox
+import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.write
 import dev.zacsweers.fieldspottr.data.core.writeFetched
 import kotlin.test.Test
@@ -148,8 +149,13 @@ class TestFixturesTest {
   @Test
   fun `outbox rows are readable by name while offline`() = runTest {
     val sent = mutableListOf<String>()
-    val data = testDataScope(eager = true, online = false)
-    val outbox = data.outbox<String>("notes", send = { payload, _ -> sent += payload })
+    val data =
+      testDataScope(
+        eager = true,
+        online = false,
+        senders = setOf(Notes.sender { payload, _ -> sent += payload }),
+      )
+    val outbox = data.outbox(Notes)
 
     val handle = outbox.enqueue("a")
     handle.assertPending()
@@ -164,17 +170,13 @@ class TestFixturesTest {
   @Test
   fun `advance runs a backoff timer that ends exactly then`() = runTest {
     var attempts = 0
-    val outbox =
-      testDataScope(eager = true)
-        .outbox<String>(
-          "notes",
-          send = { _, _ ->
-            if (++attempts == 1) {
-              error("transient")
-            }
-          },
-          retry = RetryPolicy(maxAttempts = 3) { 10.seconds },
-        )
+    val sender =
+      Notes.sender(retry = RetryPolicy(maxAttempts = 3) { 10.seconds }) { _, _ ->
+        if (++attempts == 1) {
+          error("transient")
+        }
+      }
+    val outbox = testDataScope(eager = true, senders = setOf(sender)).outbox(Notes)
 
     val handle = outbox.enqueue("a")
     assertThat(attempts).isEqualTo(1)
@@ -318,7 +320,9 @@ class TestFixturesTest {
   @Test
   fun `a test send holds a payload until released`() = runTest {
     val send = TestSend<String>()
-    val outbox = testDataScope(eager = true).outbox<String>("notes", send, send::revert)
+    val outbox =
+      testDataScope(eager = true, senders = setOf(Notes.sender(send = send)))
+        .outbox(Notes, revert = send::revert)
 
     send.hold("a")
     val handle = outbox.enqueue("a")
@@ -334,14 +338,9 @@ class TestFixturesTest {
   @Test
   fun `a test send fails transiently and then for good`() = runTest {
     val send = TestSend<String>()
+    val sender = Notes.sender(retry = RetryPolicy(maxAttempts = 3) { 1.seconds }, send = send)
     val outbox =
-      testDataScope(eager = true)
-        .outbox<String>(
-          "notes",
-          send,
-          send::revert,
-          retry = RetryPolicy(maxAttempts = 3) { 1.seconds },
-        )
+      testDataScope(eager = true, senders = setOf(sender)).outbox(Notes, revert = send::revert)
 
     send.failTransiently()
     val retried = outbox.enqueue("a")
@@ -362,19 +361,19 @@ class TestFixturesTest {
     val factory = testDataScopeFactory(eager = true, online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val screen = factory.create(owner)
+    val send = TestSend<String>()
+    val screen = factory.create(owner, setOf(Notes.sender(send = send)))
     val app = factory.create(backgroundScope)
 
     screen.newActionRunner().run { error("boom") }
     assertThat(app.actionFailures.take()).hasSize(1)
 
-    val send = TestSend<String>()
-    screen.outbox<String>("notes", send).enqueue("a")
+    screen.outbox(Notes).enqueue("a")
     assertThat(factory.outboxStore<String>("notes").entries().first().map { it.payload })
       .containsExactly("a")
-    // The screen's scope ends, so another owner can run the outbox and send what it left
+    // The screen's scope ends, so another data scope can run the sender and send what it left
     owner.coroutineContext.job.cancelAndJoin()
-    app.outbox<String>("notes", send)
+    factory.create(backgroundScope, setOf(Notes.sender(send = send)))
     factory.online.value = true
     assertThat(send.sent).containsExactly("a")
     factory.assertNoFailures()
@@ -520,3 +519,6 @@ class TestFixturesTest {
     }
   }
 }
+
+/** The outbox these tests send through. */
+private val Notes = OutboxKey<String>("notes")

@@ -60,6 +60,14 @@ class OptimisticQueryStoreTransitionTest {
     val network = MutableStateFlow(online)
     val server = mutableListOf("a")
     val rejected = mutableSetOf<String>()
+    val sender = TagsOutbox.exchangingSender { change, _ ->
+      val tag = change.mutation
+      if (tag.name in rejected) {
+        throw PermanentFailure("Rejected ${tag.name}")
+      }
+      server += tag.name
+      server.toList()
+    }
     val sets =
       DataScope.Factory(
           onFailure = failures,
@@ -67,20 +75,13 @@ class OptimisticQueryStoreTransitionTest {
           stores = lag.stores(),
           clock = clock,
         )
-        .create(CoroutineScope(scope.backgroundScope.coroutineContext + owner))
-        .optimisticStores<Unit, List<String>, Tag>(
-          name = "tags",
+        .create(CoroutineScope(scope.backgroundScope.coroutineContext + owner), setOf(sender))
+        .optimisticStores(
+          TagsOutbox,
           base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
           apply = { current, tag ->
             check(!tag.boom) { "boom" }
             current.orEmpty() + tag.name
-          },
-          exchange = { _, tag, _ ->
-            if (tag.name in rejected) {
-              throw PermanentFailure("Rejected ${tag.name}")
-            }
-            server += tag.name
-            server.toList()
           },
         )
     val tags = sets(Unit)
@@ -286,5 +287,6 @@ class OptimisticQueryStoreTransitionTest {
 
   private companion object {
     val START: Instant = Instant.fromEpochSeconds(1_700_000_000)
+    val TagsOutbox = OutboxKey.replying<KeyedMutation<Unit, Tag>, List<String>>("tags")
   }
 }

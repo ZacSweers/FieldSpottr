@@ -14,8 +14,6 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -52,8 +50,14 @@ data class OutboxLog(val rows: List<Row> = emptyList()) {
     val reverted: Boolean = false,
     /** Epoch millis when the current backoff ends. */
     val retryAt: Long? = null,
-    /** Epoch millis once sent or discarded. Pruned after keepSettledFor. */
+    /** Epoch millis once the row is done. Pruned after keepSettledFor. */
     val settledAt: Long? = null,
+    /** Whether the outbox's handle has committed this sent row. */
+    val committed: Boolean = false,
+    /** Epoch millis when the send finished. */
+    val sentAt: Long? = null,
+    /** The server's encoded answer, kept until the row is committed. */
+    val reply: String? = null,
   )
 }
 
@@ -133,6 +137,10 @@ class DataStoreOutboxStores(
   private val payloadFormat: SerialFormat = DefaultPayloadFormat,
   private val fileSystem: FileSystem = FileSystem.SYSTEM,
 ) : OutboxStores {
+  // Answers live in the same rows as payloads, so they use the same format
+  override fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
+    serializer.asCodec(payloadFormat)
+
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val opened =
     AtomicReference(persistentHashMapOf<String, OpenedStore<Lazy<DataStoreOutboxStore<*>>>>())
@@ -207,7 +215,6 @@ private const val HEX = "0123456789ABCDEF"
  * own. A row that does not decode, like one stored before its payload class changed, is left out of
  * [entries], [entry] and [heads], and handed on through [onUndecodable]. It stays in the file.
  */
-@OptIn(ExperimentalUuidApi::class)
 class DataStoreOutboxStore<E>(
   /** From [outboxDataStore], or one the app wires itself. */
   private val dataStore: DataStore<OutboxLog>,
@@ -218,9 +225,8 @@ class DataStoreOutboxStore<E>(
   // The rows this store failed to decode, so reads skip them without decoding again
   private val undecodable = UndecodableRows()
 
-  override suspend fun insert(key: String, payload: E): EntryId {
-    // List order is send order. The Uuid identifies the row everywhere.
-    val id = EntryId(Uuid.random().toString())
+  override suspend fun insert(id: EntryId, key: String, payload: E) {
+    // List order is send order. The id identifies the row everywhere.
     val row =
       OutboxLog.Row(
         id = id.value,
@@ -230,16 +236,19 @@ class DataStoreOutboxStore<E>(
       )
     currentCoroutineContext().ensureActive()
     // updateData runs one transform at a time, so the whole log changes atomically. It runs to the
-    // end once started, so a caller cancelled meanwhile still gets the id of the row it stored, and
-    // a throw always means nothing was stored.
+    // end once started, so a caller cancelled meanwhile still stored its row, and a throw always
+    // means nothing was stored.
     withContext(NonCancellable) {
-      dataStore.updateData { log -> OutboxLog(rows = log.rows.filterNot { it.isExpired() } + row) }
+      dataStore.updateData { log ->
+        val kept = log.rows.filterNot { it.isExpired() }
+        require(kept.none { it.id == id.value }) { "Row ${id.value} is already stored" }
+        OutboxLog(rows = kept + row)
+      }
     }
-    return id
   }
 
   override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
-    val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.status.isSettled }
+    val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.isDone }
     var written = false
     dataStore.updateData { log ->
       val index = log.rows.indexOfFirst { it.id == entry.id.value }
@@ -262,6 +271,9 @@ class DataStoreOutboxStore<E>(
           reverted = entry.reverted,
           retryAt = entry.retryAt?.toEpochMilliseconds(),
           settledAt = settledAt,
+          committed = entry.committed,
+          sentAt = entry.sentAt?.toEpochMilliseconds(),
+          reply = entry.reply,
         )
       log.copy(rows = rows)
     }
@@ -272,6 +284,15 @@ class DataStoreOutboxStore<E>(
     dataStore.data
       .map { log -> log.rows.filter { it.settledAt == null }.mapNotNull { it.toEntryOrNull() } }
       .distinctUntilChanged()
+
+  // Decodes only the key's rows that are not done
+  override suspend fun owed(key: String): List<OutboxEntry<E>> =
+    dataStore.data
+      .first()
+      .rows
+      .filter { it.key == key && it.settledAt == null }
+      .mapNotNull { it.toEntryOrNull() }
+      .filter { it.isOwed }
 
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> =
     dataStore.data
@@ -322,7 +343,7 @@ class DataStoreOutboxStore<E>(
 
   /**
    * This row as an entry, or null when its payload does not decode. A row known not to decode is
-   * skipped without decoding. A row neither Sent nor Discarded that fails to decode is recorded in
+   * skipped without decoding. A row that is not done and fails to decode is recorded in
    * [undecodable].
    */
   private fun OutboxLog.Row.toEntryOrNull(): OutboxEntry<E>? {
@@ -332,7 +353,7 @@ class DataStoreOutboxStore<E>(
     val decoded = codec.decodeCatching(payload)
     val failure = decoded.exceptionOrNull()
     if (failure != null) {
-      if (!OutboxStatus(status, cause).isSettled) {
+      if (settledAt == null) {
         undecodable.found(id, failure)
       }
       return null
@@ -346,6 +367,9 @@ class DataStoreOutboxStore<E>(
       lastError = lastError,
       reverted = reverted,
       retryAt = retryAt?.let { Instant.fromEpochMilliseconds(it) },
+      committed = committed,
+      sentAt = sentAt?.let { Instant.fromEpochMilliseconds(it) },
+      reply = reply,
     )
   }
 }

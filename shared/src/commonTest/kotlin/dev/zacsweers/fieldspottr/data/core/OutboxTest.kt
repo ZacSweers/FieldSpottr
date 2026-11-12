@@ -15,6 +15,7 @@ import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
 import dev.zacsweers.fieldspottr.data.core.impl.timersHeld
+import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
@@ -24,6 +25,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -55,20 +57,46 @@ class OutboxTest {
   private val send = TestSend<String>()
   private lateinit var data: TestDataScope
 
+  /**
+   * The handle on outbox [Changes] in a new [data] scope, whose sender sends with [send] by
+   * [retry]. [apply] runs for every enqueue, and [send] records each revert.
+   */
   private fun TestScope.outbox(
     online: Boolean = true,
     retry: RetryPolicy = RetryPolicy(maxAttempts = 3) { 1.seconds },
+    apply: suspend (payload: String, id: EntryId) -> Unit = { _, _ -> },
   ): Outbox<String> {
-    data = testDataScope(clock = testClock(START), online = online)
-    return data.outbox<String>("test", send, send::revert, retry)
+    data =
+      testDataScope(
+        clock = testClock(START),
+        online = online,
+        senders = setOf(Changes.sender(retry = retry, send = send)),
+      )
+    return data.outbox(Changes, apply = apply, revert = send::revert)
   }
+
+  /**
+   * A data scope whose outbox [Rows] keeps its rows in [rows] and sends them with [send] by
+   * [retry], or by the factory's policy when that is null.
+   */
+  private fun TestScope.dataOver(
+    rows: OutboxStore<String>,
+    online: Boolean = true,
+    retry: RetryPolicy? = null,
+    clock: TestClock = testClock(),
+  ): TestDataScope =
+    testDataScope(
+      clock = clock,
+      online = online,
+      senders = setOf(Rows.sender(store = rows, retry = retry, send = send)),
+    )
 
   @Test
   fun `an enqueued row applies its change before it inserts and sends`() = runTest {
-    val outbox = outbox()
     var applied = false
+    val outbox = outbox(apply = { _, _ -> applied = true })
 
-    val handle = outbox.enqueue("a") { applied = true }
+    val handle = outbox.enqueue("a")
 
     assertThat(handle.await()).isEqualTo(OperationState.Succeeded)
     assertThat(applied).isTrue()
@@ -94,9 +122,9 @@ class OutboxTest {
 
   @Test
   fun `a failed apply inserts nothing and fails the handle`() = runTest {
-    val outbox = outbox()
+    val outbox = outbox(apply = { _, _ -> error("apply failed") })
 
-    val handle = outbox.enqueue("a") { error("apply failed") }
+    val handle = outbox.enqueue("a")
 
     assertThat(handle.await()).isInstanceOf<OperationState.Failed>()
     assertThat(outbox.entries.first()).isEmpty()
@@ -203,13 +231,15 @@ class OutboxTest {
     // Stores nothing and throws, like a full disk
     val full =
       object : OutboxStore<String> by rows {
-        override suspend fun insert(key: String, payload: String): EntryId =
+        override suspend fun insert(id: EntryId, key: String, payload: String): Unit =
           throw IllegalStateException("Disk full")
       }
     var applied = false
-    val outbox = testDataScope().outbox("full", full, send = send, revert = { applied = false })
+    val outbox =
+      dataOver(full)
+        .outbox(Rows, apply = { _, _ -> applied = true }, revert = { _, _ -> applied = false })
 
-    val handle = outbox.enqueue("a") { applied = true }
+    val handle = outbox.enqueue("a")
     handle.awaitFailed<IllegalStateException>()
 
     // Nothing was stored, so the stored milestone failed too
@@ -237,7 +267,7 @@ class OutboxTest {
     val scopes = testDataScopeFactory(online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val outbox = scopes.create(owner).outbox<String>("notes", send = send)
+    val outbox = scopes.create(owner, setOf(Notes.sender(send = send))).outbox(Notes)
     owner.cancel()
 
     val handle = outbox.enqueue("a")
@@ -252,7 +282,7 @@ class OutboxTest {
     val scopes = testDataScopeFactory(online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val handle = scopes.create(owner).outbox<String>("notes", send = send).enqueue("a")
+    val handle = scopes.create(owner, setOf(Notes.sender(send = send))).outbox(Notes).enqueue("a")
     scopes.outboxStore<String>("notes").entries().first { it.isNotEmpty() }
 
     owner.cancel()
@@ -273,8 +303,8 @@ class OutboxTest {
           throw IllegalStateException("Corrupt row")
         }
       }
-    val data = testDataScope()
-    val outbox = data.outbox("unreadable", unreadable, send = send)
+    val data = dataOver(unreadable)
+    val outbox = data.outbox(Rows)
 
     // A failed read says nothing about the row, so it never settles the handle
     outbox.enqueue("a").awaitSucceeded()
@@ -320,9 +350,7 @@ class OutboxTest {
           return wrote
         }
       }
-    val outbox =
-      testDataScope()
-        .outbox("slow", slow, send = send, retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+    val outbox = dataOver(slow, retry = RetryPolicy(maxAttempts = 3) { 5.minutes }).outbox(Rows)
     val a = outbox.enqueue("a", key = "k")
     val b = outbox.enqueue("b", key = "k")
     published.await()
@@ -347,7 +375,10 @@ class OutboxTest {
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
     var undone = 0
-    val outbox = scopes.create(owner).outbox("pausing", pausing, send = send, revert = { undone++ })
+    val outbox =
+      scopes
+        .create(owner, setOf(Rows.sender(store = pausing, send = send)))
+        .outbox(Rows, revert = { _, _ -> undone++ })
     outbox.enqueue("a")
     val id = rows.entries().first { it.isNotEmpty() }.single().id
 
@@ -371,7 +402,10 @@ class OutboxTest {
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
     var undone = 0
-    scopes.create(owner).outbox("pausing", pausing, send = send, revert = { undone++ }).enqueue("a")
+    scopes
+      .create(owner, setOf(Rows.sender(store = pausing, send = send)))
+      .outbox(Rows, revert = { _, _ -> undone++ })
+      .enqueue("a")
 
     pausing.written.await()
     owner.cancel()
@@ -381,7 +415,9 @@ class OutboxTest {
 
     // A fresh owner sees the row as failed and reverted, and a discard does not undo it twice
     val fresh =
-      scopes.create(backgroundScope).outbox("rows", rows, send = send, revert = { undone++ })
+      scopes
+        .create(backgroundScope, setOf(Rows.sender(store = rows, send = send)))
+        .outbox(Rows, revert = { _, _ -> undone++ })
     val id = rows.entries().first().single().id
     fresh.discard(id).awaitSucceeded()
     assertThat(undone).isEqualTo(1)
@@ -390,7 +426,7 @@ class OutboxTest {
   @Test
   fun `a store that fails to report its rows once still sends them`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    rows.insert("k", "a")
+    rows.insertNew("k", "a")
     var failNextRead = true
     // The watcher reads the heads
     val flaky =
@@ -403,9 +439,9 @@ class OutboxTest {
           emitAll(rows.heads())
         }
       }
-    val data = testDataScope()
+    val data = dataOver(flaky)
 
-    data.outbox("flaky", flaky, send = send)
+    data.outbox(Rows)
     testScheduler.runCurrent()
     data.actionFailures.assertSingle<IllegalStateException>()
     testScheduler.advanceTimeBy(1.minutes)
@@ -431,7 +467,7 @@ class OutboxTest {
           emitAll(rows.entry(id))
         }
       }
-    val outbox = testDataScope().outbox("slowView", slowView, send = send, revert = send::revert)
+    val outbox = dataOver(slowView).outbox(Rows, revert = send::revert)
     val original = outbox.enqueue("a")
     testScheduler.runCurrent()
 
@@ -462,8 +498,7 @@ class OutboxTest {
           return updated
         }
       }
-    val outbox =
-      testDataScope().outbox("slowFailure", slowFailure, send = send, revert = send::revert)
+    val outbox = dataOver(slowFailure).outbox(Rows, revert = send::revert)
     val original = outbox.enqueue("a")
     failedShown.await()
 
@@ -493,8 +528,8 @@ class OutboxTest {
           return rows.update(entry, expected)
         }
       }
-    data = testDataScope(clock = testClock(START))
-    val outbox = data.outbox("failingRequeue", failingRequeue, send = send, revert = send::revert)
+    data = dataOver(failingRequeue, clock = testClock(START))
+    val outbox = data.outbox(Rows, revert = send::revert)
     outbox.enqueue("a")
     testScheduler.runCurrent()
     // Backing off after the failed attempt, and offline, so nothing else touches the row
@@ -517,8 +552,9 @@ class OutboxTest {
       testDataScope(
         clock = testClock(START),
         retry = RetryPolicy.exponential(retryable = { it !is IllegalArgumentException }),
+        senders = setOf(Changes.sender(send = send)),
       )
-    val outbox = data.outbox<String>("test", send, send::revert)
+    val outbox = data.outbox(Changes, revert = send::revert)
 
     val first = outbox.enqueue("a", key = "k")
     val second = outbox.enqueue("b", key = "k")
@@ -551,15 +587,8 @@ class OutboxTest {
           return rows.head(key)
         }
       }
-    val data = testDataScope()
-    val outbox =
-      data.outbox(
-        "slowRead",
-        slowRead,
-        send = send,
-        revert = send::revert,
-        retry = RetryPolicy(maxAttempts = 1) { 1.seconds },
-      )
+    val data = dataOver(slowRead, retry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+    val outbox = data.outbox(Rows, revert = send::revert)
     testScheduler.runCurrent()
 
     // The drain for the new row pauses in its read of the head
@@ -620,7 +649,7 @@ class OutboxTest {
   @Test
   fun `a drain whose read of the head fails tries again on its own`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    val id = rows.insert("k", "a")
+    val id = rows.insertNew("k", "a")
     var failNextRead = true
     // The drain reads its key's head, and the watcher reads every head without this
     val flaky =
@@ -640,7 +669,7 @@ class OutboxTest {
   @Test
   fun `a drain whose claim of the head fails tries again on its own`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    val id = rows.insert("k", "a")
+    val id = rows.insertNew("k", "a")
     var failClaim = true
     val flaky =
       object : OutboxStore<String> by rows {
@@ -658,8 +687,8 @@ class OutboxTest {
 
   /** The drain fails once with the watcher healthy, so no new row or reconnect starts another. */
   private fun TestScope.assertDrainRecovers(rows: OutboxStore<String>, id: EntryId) {
-    val data = testDataScope()
-    val handle = data.outbox("rows", rows, send = send).operation(id)
+    val data = dataOver(rows)
+    val handle = data.outbox(Rows).operation(id)
     testScheduler.runCurrent()
     data.actionFailures.assertSingle<IllegalStateException>()
     handle.assertPending()
@@ -673,7 +702,7 @@ class OutboxTest {
   @Test
   fun `an enqueue and a reconnect send while the watcher pauses after a store failure`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    rows.insert("stored", "a")
+    rows.insertNew("stored", "a")
     var failNextRead = true
     // The watcher reads the heads
     val flaky =
@@ -686,8 +715,8 @@ class OutboxTest {
           emitAll(rows.heads())
         }
       }
-    val data = testDataScope()
-    val outbox = data.outbox("flaky", flaky, send = send)
+    val data = dataOver(flaky)
+    val outbox = data.outbox(Rows)
     testScheduler.runCurrent()
     data.actionFailures.assertSingle<IllegalStateException>()
 
@@ -739,7 +768,7 @@ class OutboxTest {
   }
 
   @Test
-  fun `an outbox that fails to build leaves its name to the same owner`() = runTest {
+  fun `a data scope whose outbox fails to build leaves its name free`() = runTest {
     val rows = InMemoryOutboxStores()
     var failToOpen = true
     val stores =
@@ -759,14 +788,54 @@ class OutboxTest {
 
         override suspend fun clearAll() = rows.clearAll()
       }
-    val data = DataScope.Factory(onFailure = {}, stores = stores).create(backgroundScope)
+    val factory = DataScope.Factory(onFailure = {}, stores = stores)
+    val senders = setOf(Notes.sender(send = send))
 
-    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send) }
-    data.outbox<String>("notes", send).enqueue("a").awaitSucceeded()
+    assertFailsWith<IllegalStateException> { factory.create(backgroundScope, senders) }
+    factory.create(backgroundScope, senders).outbox(Notes).enqueue("a").awaitSucceeded()
 
     assertThat(send.sent).containsExactly("a")
-    // Once built, it still keeps the name from a second outbox
-    assertFailsWith<IllegalStateException> { data.outbox<String>("notes", send) }
+    // Once built, it still keeps the name from a second data scope
+    assertFailsWith<IllegalStateException> { factory.create(backgroundScope, senders) }
+  }
+
+  @Test
+  fun `two senders with one name in one data scope throw`() = runTest {
+    val other = TestSend<String>()
+
+    assertFailsWith<IllegalArgumentException> {
+      testDataScope(senders = setOf(Notes.sender(send = send), Notes.sender(send = other)))
+    }
+  }
+
+  @Test
+  fun `a name whose sender runs in another data scope is free once that scope ends`() = runTest {
+    val scopes = testDataScopeFactory()
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    scopes.create(owner, setOf(Notes.sender(send = send)))
+
+    assertFailsWith<IllegalStateException> {
+      scopes.create(backgroundScope, setOf(Notes.sender(send = send)))
+    }
+    owner.cancel()
+    runCurrent()
+
+    scopes
+      .create(backgroundScope, setOf(Notes.sender(send = send)))
+      .outbox(Notes)
+      .enqueue("a")
+      .awaitSucceeded()
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
+  fun `a handle needs a sender for its key and takes one handle per key`() = runTest {
+    val data = testDataScope(senders = setOf(Notes.sender(send = send)))
+
+    assertFailsWith<IllegalStateException> { data.outbox(Changes) }
+    data.outbox(Notes)
+    assertFailsWith<IllegalStateException> { data.outbox(Notes) }
   }
 
   @Test
@@ -777,7 +846,7 @@ class OutboxTest {
     val scopes = testDataScopeFactory()
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    val outbox = scopes.create(owner).outbox("rows", rows, send = send)
+    val outbox = scopes.create(owner, setOf(Rows.sender(store = rows, send = send))).outbox(Rows)
 
     val handle = outbox.enqueue("a")
 
@@ -788,7 +857,8 @@ class OutboxTest {
     assertThat(outbox.operation(id).awaitFailed<PermanentFailure>()).isSameInstanceAs(rejected)
     // A later owner, like after a restart, knows only the stored text
     owner.cancel()
-    val later = scopes.create(backgroundScope).outbox("rows", rows, send = send)
+    val later =
+      scopes.create(backgroundScope, setOf(Rows.sender(store = rows, send = send))).outbox(Rows)
     val reattached = later.operation(id).awaitFailed<PermanentFailure>()
     assertThat(reattached.message).isEqualTo(rejected.toString())
     scopes.assertNoFailures()
@@ -864,15 +934,20 @@ class OutboxTest {
   @Test
   fun `a deadline far ahead waits no longer than the policy's bound`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    val id = rows.insert("k", "a")
+    val id = rows.insertNew("k", "a")
     val row = checkNotNull(rows.entry(id).first())
     // Written while the device clock was an hour ahead
     rows.update(row.copy(attempts = 1, retryAt = START + 1.hours), OutboxStatus.Queued)
     val factory = testDataScopeFactory(clock = testClock(START))
     val outbox =
       factory
-        .create(backgroundScope)
-        .outbox("rows", rows, send = send, retry = RetryPolicy.exponential(max = 5.minutes))
+        .create(
+          backgroundScope,
+          setOf(
+            Rows.sender(store = rows, retry = RetryPolicy.exponential(max = 5.minutes), send = send)
+          ),
+        )
+        .outbox(Rows)
     val handle = outbox.operation(id)
     runCurrent()
 
@@ -903,10 +978,10 @@ class OutboxTest {
   @Test
   fun `a row another writer inserts is sent`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    testDataScope().outbox("rows", rows, send = send)
+    dataOver(rows).outbox(Rows)
     runCurrent()
 
-    rows.insert("k", "a")
+    rows.insertNew("k", "a")
     runCurrent()
 
     assertThat(send.sent).containsExactly("a")
@@ -916,7 +991,7 @@ class OutboxTest {
   @Test
   fun `handles whose rows another writer discards settle cancelled`() = runTest {
     val rows = inMemoryOutboxStore<String>()
-    val outbox = testDataScope(online = false).outbox("rows", rows, send = send)
+    val outbox = dataOver(rows, online = false).outbox(Rows)
     val a = outbox.enqueue("a", key = "k")
     val b = outbox.enqueue("b", key = "k")
     val c = outbox.enqueue("c", key = "other")
@@ -936,7 +1011,7 @@ class OutboxTest {
   @Test
   fun `handles of rows a logout clears settle cancelled`() = runTest {
     val scopes = testDataScopeFactory(online = false)
-    val outbox = scopes.create(backgroundScope).outbox<String>("notes", send = send)
+    val outbox = scopes.create(backgroundScope, setOf(Notes.sender(send = send))).outbox(Notes)
     val a = outbox.enqueue("a", key = "k")
     val b = outbox.enqueue("b", key = "k")
     runCurrent()
@@ -970,8 +1045,8 @@ class OutboxTest {
           }
         }
       // Left by an earlier process
-      val id = rows.insert("k", "a")
-      val outbox = testDataScope(online = false).outbox("lagging", lagging, send = send)
+      val id = rows.insertNew("k", "a")
+      val outbox = dataOver(lagging, online = false).outbox(Rows)
       runCurrent()
 
       holdReads = true
@@ -1001,8 +1076,8 @@ class OutboxTest {
             emitAll(rows.entry(id))
           }
         }
-      val data = testDataScope(online = false)
-      val outbox = data.outbox("flaky", flaky, send = send)
+      val data = dataOver(flaky, online = false)
+      val outbox = data.outbox(Rows)
       val a = outbox.enqueue("a", key = "k")
       val b = outbox.enqueue("b", key = "k")
       runCurrent()
@@ -1033,8 +1108,8 @@ class OutboxTest {
           emitAll(rows.entry(id))
         }
       }
-    val data = testDataScope(online = false)
-    val outbox = data.outbox("flaky", flaky, send = send)
+    val data = dataOver(flaky, online = false)
+    val outbox = data.outbox(Rows)
     val a = outbox.enqueue("a", key = "k")
     val b = outbox.enqueue("b", key = "k")
     runCurrent()
@@ -1084,7 +1159,7 @@ class OutboxTest {
       }
     val rejection = PermanentFailure("rejected")
     send.failure = { _, _ -> rejection }
-    val outbox = testDataScope().outbox("slow", slow, send = send, revert = send::revert)
+    val outbox = dataOver(slow).outbox(Rows, revert = send::revert)
 
     val handle = outbox.enqueue("a")
     failedWritten.await()
@@ -1100,7 +1175,8 @@ class OutboxTest {
   fun `a fired timer whose row was discarded elsewhere is dropped`() = runTest {
     val rows = inMemoryOutboxStore<String>()
     send.failure = { _, _ -> IllegalStateException("flaky") }
-    val outbox = testDataScope().outbox("rows", rows, send, send::revert, RetryPolicy { 1.seconds })
+    val outbox =
+      dataOver(rows, retry = RetryPolicy { 1.seconds }).outbox(Rows, revert = send::revert)
     outbox.enqueue("a", key = "k")
     runCurrent()
     val row = rows.entries().first().single()
@@ -1120,8 +1196,8 @@ class OutboxTest {
     runTest {
       val rows = inMemoryOutboxStore<String>()
       send.failure = { _, _ -> IllegalStateException("flaky") }
-      val data = testDataScope()
-      val outbox = data.outbox("rows", rows, send, send::revert, RetryPolicy { 1.seconds })
+      val data = dataOver(rows, retry = RetryPolicy { 1.seconds })
+      val outbox = data.outbox(Rows, revert = send::revert)
       outbox.enqueue("a", key = "k")
       runCurrent()
       val row = rows.entries().first().single()
@@ -1141,5 +1217,9 @@ class OutboxTest {
 
   private companion object {
     val START = Instant.parse("2026-06-10T12:00:00Z")
+    val Changes = OutboxKey<String>("changes")
+    val Notes = OutboxKey<String>("notes")
+    /** The outbox of tests that keep its rows in a store of their own. */
+    val Rows = OutboxKey<String>("rows")
   }
 }

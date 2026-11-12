@@ -100,7 +100,10 @@ private class FixedRetryPolicy(
     }
 }
 
-/** Thrown by send for a rejection that retrying cannot fix. The row fails and its key moves on. */
+/**
+ * Thrown by a sender's send for a rejection that retrying cannot fix. The row fails and its key
+ * moves on.
+ */
 class PermanentFailure(message: String, cause: Throwable? = null) : Exception(message, cause) {
   constructor(cause: Throwable) : this(cause.toString(), cause)
 }
@@ -109,55 +112,98 @@ class PermanentFailure(message: String, cause: Throwable? = null) : Exception(me
  * A row of the outbox [outbox] whose payload this app version cannot decode, like one stored before
  * its payload class changed. [cause] is the decode error. The outbox leaves such a row out, and its
  * store hands each one on once per store instance, as [OutboxStore.onUndecodable] describes. The
- * outbox reports one of these for each to its failure handler.
+ * outbox reports one of these for each to its sender's failure handler.
  */
 class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throwable) :
   Exception("Outbox $outbox cannot decode the payload of row ${id.value}", cause)
 
 /**
- * Writes that must reach the server, kept as rows in a store and sent in order per key. A send that
- * fails transiently backs off by its retry policy and tries again. One that fails for good, or that
- * the policy does not retry, fails its row and runs its revert, so the optimistic change behind it
- * is undone. The outbox reports that failure to its failure handler once. A handle on that row in
- * the same outbox carries the exception in its failure's cause chain, as long as the outbox still
- * remembers it: until the row is retried or discarded, for the newest 64 such rows. A handle from
- * another outbox, like one [operation] returns after a restart, knows only the stored text.
+ * The handle on an outbox: writes that must reach the server, kept as rows in a store and sent in
+ * order per key. [DataScope.outbox] builds it with an [OutboxKey], and the [OutboxSender] for that
+ * key, which the data scope was created with, sends the rows.
  *
+ * The two halves split the work. The sender drains rows from the data scope's creation, also before
+ * any handle exists, like in a background drain after a restart. The handle keeps the local state:
+ * its `apply` makes the optimistic change before the insert, its `revert` undoes the change of a
+ * row that fails for good, and an optimistic store's handle commits each sent change into its
+ * truth.
+ *
+ * A send that fails transiently backs off by its retry policy and tries again. One that fails for
+ * good, or that the policy does not retry, fails its row. The sender's failure handler hears that
+ * failure once. A handle on that row in the same data scope carries the exception in its failure's
+ * cause chain, as long as the outbox still remembers it: until the row is retried or discarded, for
+ * the newest 64 such rows. A handle from another data scope, like one [operation] returns after a
+ * restart, knows only the stored text.
+ *
+ * The sender side, from the data scope's creation:
  * ```
- * enqueue(payload, key) --> apply() --> store.insert --> drain(key), one per key
- *                                                             |
- *                         online, not backing off, sendable row at the head
- *                                                             |
- *                                                             v
- *                                       Sending --> send(payload, id) --> Sent
- *                                                             |
- *                         transient: Queued with retryAt, then a timer drains again
- *                         permanent or not retried: Failed, reported, then revert(payload)
+ * stored row --> drain(key), one per key: online, not backing off, sendable row at the head
+ *                    |
+ *                    v
+ *                 Sending --> send(payload, id)
+ *                    |
+ *   transient: Queued with retryAt, then a timer drains again
+ *   sent, handle ready, no older row on the key owed:
+ *       the handle commits, then Sent and committed
+ *       a commit that throws: Sent, not committed, owed, settled again after a pause
+ *   sent, otherwise: Sent, not committed, the answer kept on the row, owed
+ *   permanent or not retried, handle ready, no older row on the key owed:
+ *       Failed and reverted, then revert(payload, id)
+ *   permanent or not retried, otherwise: Failed, not reverted, owed
  * ```
+ *
+ * The handle side, from the repository:
+ * ```
+ * enqueue(payload, key) --> id --> apply(payload, id) --> store.insert(id) --> drain(key)
+ *
+ * attach --> read the owed rows once --> drain(key) for each key with owed rows --> ready
+ *
+ * a drain of a key with owed rows settles them, oldest first, online or not:
+ *   Sent, not committed: commit with the stored answer, then mark committed
+ *       a commit that throws: stays owed, later rows on the key wait, settled again after a
+ *       pause that doubles while commits keep failing
+ *   Failed, not reverted: mark reverted, then revert(payload, id)
+ * ```
+ *
+ * Until a handle is ready, after its first read of the owed rows, a sent row is written owed and
+ * settled at once, so a commit never overtakes an older owed row on its key.
+ *
+ * The write that marks a row Sent after its send can fail, like on a store error. The row then
+ * stays Sending, the sender's handler hears the failure, and the drain sends the row again with the
+ * same id after a pause that doubles up to 1 minute while the write keeps failing. So the server
+ * must take the id as an idempotency key.
+ *
+ * A sent row that waits for its commit stays in the store, and an optimistic store's data keeps
+ * showing its change until the commit lands. A failed row that waits for its revert stays too. Both
+ * wait until a handle attaches in a data scope with their sender, or until [OutboxStores.clearAll].
+ * A row is done once it is Sent and committed, or Discarded, and only then does the store prune it.
  *
  * Handles follow the row, and [operation] finds one again after a restart. A handle settles with
- * the attempt it follows, so after a retry an earlier handle keeps its own result. When the
- * outbox's scope stops, unsettled handles settle Cancelled and the rows stay for the next outbox.
- * Drains start on enqueue, on reconnect and at startup.
+ * the attempt it follows, so after a retry an earlier handle keeps its own result. When the data
+ * scope's scope stops, unsettled handles settle Cancelled and the rows stay for the next data scope
+ * with the sender. Drains start on enqueue, on reconnect, at the data scope's creation, when a
+ * handle attaches, and after a pause for a key whose commit failed.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface Outbox<E> {
   /**
    * Rows neither Sent nor Discarded, oldest first. A row that cannot be decoded is left out, never
-   * sends and never blocks another row. The failure handler hears of it as an
+   * sends and never blocks another row. The sender's failure handler hears of it as an
    * [UnreadableEntryException], and every other call treats it as absent.
    */
   val entries: Flow<List<OutboxEntry<E>>>
 
   /**
-   * Runs [apply], the optimistic local change, then inserts a row, in one command. Without a [key],
-   * every row shares one order.
+   * Runs the handle's `apply`, the optimistic local change, then inserts a row, in one command. The
+   * row's id is made first, and `apply` gets it, so the handle knows the change by the id its row
+   * will have. Without a [key], every row shares one order.
    *
-   * If apply throws, nothing is inserted and the handle fails. If the insert throws, revert undoes
-   * the change and the handle fails. Once apply returns, the insert finishes even if the outbox's
-   * scope stops. [OutboxOperation.stored] settles once the row is in, before any send.
+   * If apply throws, nothing is inserted and the handle fails. If the insert throws, the handle's
+   * `revert` undoes the change and the handle fails. Once apply returns, the insert finishes even
+   * if the outbox's scope stops. [OutboxOperation.stored] settles once the row is in, before any
+   * send.
    */
-  fun enqueue(payload: E, key: String? = null, apply: suspend () -> Unit = {}): OutboxOperation
+  fun enqueue(payload: E, key: String? = null): OutboxOperation
 
   /**
    * Requeues a failed row with its attempts reset, or ends a backoff early. The handle follows the
@@ -167,7 +213,8 @@ interface Outbox<E> {
 
   /**
    * Discards a queued or failed row and reverts its optimistic change, unless that already
-   * happened. Fails instead when the drainer has already taken the row, or when there is no row.
+   * happened. Fails instead when the drainer has already taken the row, when the row is sent, or
+   * when there is no row.
    */
   fun discard(id: EntryId): Operation
 
@@ -187,6 +234,9 @@ interface Outbox<E> {
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OutboxOperation : Operation {
+  /** The id of the row this handle follows. The outbox makes it before the insert. */
+  val id: EntryId
+
   /**
    * Whether the change reached the store. It succeeds once the row is written, so the change will
    * send, and in a durable [OutboxStore] it outlives a restart. It fails when the store rejects the

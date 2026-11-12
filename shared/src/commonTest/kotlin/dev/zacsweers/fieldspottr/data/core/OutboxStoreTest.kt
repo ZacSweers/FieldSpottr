@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.data.core
 import androidx.datastore.core.DataStore
 import dev.zacsweers.fieldspottr.data.core.testing.OutboxStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -110,7 +111,7 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
       )
 
     assertEquals(emptyList(), store.entries().first())
-    store.insert("k", "a")
+    store.insertNew("k", "a")
     assertEquals(listOf("a"), store.entries().first().map { it.payload })
   }
 
@@ -133,7 +134,7 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
   }
 
   @Test
-  fun `an insert whose caller is cancelled as the write commits returns the id`() = runTest {
+  fun `an insert whose caller is cancelled as the write commits still stores the row`() = runTest {
     val directory = "/outbox".toPath()
     lateinit var caller: Job
     // Cancels the caller right after the file write commits, when the row is stored
@@ -152,7 +153,7 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
       )
     var inserted: Result<EntryId>? = null
 
-    caller = backgroundScope.launch { inserted = runCatching { store.insert("k", "a") } }
+    caller = backgroundScope.launch { inserted = runCatching { store.insertNew("k", "a") } }
     caller.join()
 
     val rows = store.entries().first()
@@ -169,8 +170,8 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
       val stores = InMemoryOutboxStores()
       val tags = stores.open("tags", String.serializer())
       val notes = stores.open("notes", String.serializer())
-      val id = tags.insert("k", "a")
-      notes.insert("k", "b")
+      val id = tags.insertNew("k", "a")
+      notes.insertNew("k", "b")
 
       stores.clearAll()
 
@@ -190,11 +191,11 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
         val earlier = CoroutineScope(Job())
         DataStoreOutboxStores(earlier, directory, fileSystem = fileSystem)
           .open("old", String.serializer())
-          .insert("k", "a")
+          .insertNew("k", "a")
         earlier.cancel()
         val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
         val tags = stores.open("tags", String.serializer())
-        val id = tags.insert("k", "b")
+        val id = tags.insertNew("k", "b")
 
         stores.clearAll()
 
@@ -214,8 +215,8 @@ class OutboxStoresClearAllTest {
     val stores = InMemoryOutboxStores()
     val tags = stores.open("tags", String.serializer())
     val notes = stores.open("notes", String.serializer())
-    val id = tags.insert("k", "a")
-    notes.insert("k", "b")
+    val id = tags.insertNew("k", "a")
+    notes.insertNew("k", "b")
 
     stores.clearAll()
 
@@ -235,11 +236,11 @@ class OutboxStoresClearAllTest {
       val earlier = CoroutineScope(Job())
       DataStoreOutboxStores(earlier, directory, fileSystem = fileSystem)
         .open("old", String.serializer())
-        .insert("k", "a")
+        .insertNew("k", "a")
       earlier.cancel()
       val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
       val tags = stores.open("tags", String.serializer())
-      val id = tags.insert("k", "b")
+      val id = tags.insertNew("k", "b")
 
       stores.clearAll()
 

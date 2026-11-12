@@ -28,9 +28,11 @@ class OutboxScaleTest {
   @Test
   fun `draining one key reads a bounded number of rows per row`() = runTest {
     val store = CountingOutboxStore(inMemoryOutboxStore<String>())
-    val data = testDataScope(online = false)
     val send = TestSend<String>()
-    val outbox = data.outbox("store", store, send = send)
+    val rows = OutboxKey<String>("store")
+    val data =
+      testDataScope(online = false, senders = setOf(rows.sender(store = store, send = send)))
+    val outbox = data.outbox(rows)
     val handles = List(ROWS) { outbox.enqueue("p$it", key = "k") }
     handles.forEach { it.stored.awaitSucceeded() }
 

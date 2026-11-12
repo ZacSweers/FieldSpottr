@@ -10,10 +10,13 @@ CREATE TABLE IF NOT EXISTS outboxRow (
   lastError TEXT,
   reverted INTEGER NOT NULL DEFAULT 0,
   retryAt INTEGER,
-  settledAt INTEGER
+  settledAt INTEGER,
+  committed INTEGER NOT NULL DEFAULT 0,
+  sentAt INTEGER,
+  reply TEXT
 );
 
-CREATE INDEX IF NOT EXISTS outboxRow_pending ON outboxRow(outbox, status, seq);
+CREATE INDEX IF NOT EXISTS outboxRow_pending ON outboxRow(outbox, settledAt, seq);
 
 -- Finds one key's rows by status in send order, for heads and nextSendable
 CREATE INDEX IF NOT EXISTS outboxRow_key ON outboxRow(outbox, orderingKey, status, seq);

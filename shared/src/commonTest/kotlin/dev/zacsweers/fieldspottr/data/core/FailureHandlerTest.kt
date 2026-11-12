@@ -69,11 +69,10 @@ class FailureHandlerTest {
   @Test
   fun `an outbox whose handler throws still sends later rows`() = runTest {
     val factory = testDataScopeFactory()
-    val data = factory.create(owner())
     val send = TestSend<String>()
     send.failure = { payload, _ -> PermanentFailure("Rejected $payload").takeIf { payload == "a" } }
-    val outbox =
-      data.outbox<String>("changes", send = send, revert = send::revert, onFailure = throwing)
+    val data = factory.create(owner(), setOf(Changes.sender(onFailure = throwing, send = send)))
+    val outbox = data.outbox(Changes, revert = send::revert, onFailure = throwing)
 
     val a = outbox.enqueue("a", key = "k")
     val b = outbox.enqueue("b", key = "k")
@@ -244,12 +243,12 @@ class FailureHandlerTest {
   }
 
   @Test
-  fun `an outbox's own handler hears a row that fails for good`() = runTest {
+  fun `a sender's own handler hears a row that fails for good`() = runTest {
     val own = TestFailures()
-    val data = testDataScope()
     val send = TestSend<String>()
     send.failPermanently()
-    val outbox = data.outbox<String>("changes", send = send, onFailure = own)
+    val data = testDataScope(senders = setOf(Changes.sender(onFailure = own, send = send)))
+    val outbox = data.outbox(Changes)
 
     outbox.enqueue("a").awaitFailed<PermanentFailure>()
 
@@ -258,16 +257,34 @@ class FailureHandlerTest {
   }
 
   @Test
+  fun `a handle's own handler hears a revert that throws and the sender's hears the send`() =
+    runTest {
+      val handle = TestFailures()
+      val drain = TestFailures()
+      val send = TestSend<String>()
+      send.failPermanently()
+      val data = testDataScope(senders = setOf(Changes.sender(onFailure = drain, send = send)))
+      val broken = IllegalStateException("revert failed")
+      val outbox = data.outbox(Changes, revert = { _, _ -> throw broken }, onFailure = handle)
+
+      outbox.enqueue("a").awaitFailed<PermanentFailure>()
+
+      assertThat(handle.take()).containsExactly(broken)
+      assertThat(drain.take().single()).isInstanceOf<PermanentFailure>()
+      data.assertNoFailures()
+    }
+
+  @Test
   fun `an optimistic store's own handler hears an apply that throws`() = runTest {
     val own = TestFailures()
-    val data = testDataScope(clock = testClock(START))
+    val counts = OutboxKey<String>("counts")
+    val data = testDataScope(clock = testClock(START), senders = setOf(counts.sender { _, _ -> }))
     val broken = IllegalStateException("apply failed")
     val store =
-      data.optimisticStore<Int, String>(
-        name = "counts",
+      data.optimisticStore(
+        counts,
         base = QueryStore.inMemory(Fetched(1, START)),
         apply = { _, _ -> throw broken },
-        send = { _, _ -> },
         onFailure = own,
       )
 
@@ -284,5 +301,6 @@ class FailureHandlerTest {
 
   private companion object {
     val START = Instant.parse("2026-06-10T12:00:00Z")
+    val Changes = OutboxKey<String>("changes")
   }
 }

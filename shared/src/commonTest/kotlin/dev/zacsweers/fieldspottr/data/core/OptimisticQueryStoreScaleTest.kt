@@ -48,10 +48,10 @@ class OptimisticQueryStoreScaleTest {
           stores = stores,
           clock = testClock(),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(TagsByItem.sender { _, _ -> }))
     val tags =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = { current, add ->
           val list = current.orEmpty()
@@ -61,7 +61,6 @@ class OptimisticQueryStoreScaleTest {
             list + add.tag
           }
         },
-        send = { _, _, _ -> },
       )
     val queries =
       data.keyed(store = tags, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
@@ -102,6 +101,7 @@ class OptimisticQueryStoreScaleTest {
   @Test
   fun `a change on one key leaves the views of other keys alone`() = runTest {
     val failures = TestFailures()
+    val mutated = "k0"
     val data =
       DataScope.Factory(
           onFailure = failures,
@@ -109,13 +109,21 @@ class OptimisticQueryStoreScaleTest {
           stores = InMemoryOutboxStores(),
           clock = testClock(),
         )
-        .create(backgroundScope)
-    val mutated = "k0"
+        .create(
+          backgroundScope,
+          setOf(
+            TagsByItem.sender { change, _ ->
+              if (change.key != mutated) {
+                awaitCancellation()
+              }
+            }
+          ),
+        )
     val mutatedApplies = AtomicInt(0)
     val otherApplies = AtomicInt(0)
     val tags =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = { current, add ->
           if (add.tag == mutated) {
@@ -128,11 +136,6 @@ class OptimisticQueryStoreScaleTest {
             list
           } else {
             list + add.tag
-          }
-        },
-        send = { key, _, _ ->
-          if (key != mutated) {
-            awaitCancellation()
           }
         },
       )
@@ -194,5 +197,6 @@ class OptimisticQueryStoreScaleTest {
   private companion object {
     const val KEYS = 20
     const val VIEWS = 100
+    val TagsByItem = OutboxKey<KeyedMutation<String, Add>>("tagsByItem")
   }
 }

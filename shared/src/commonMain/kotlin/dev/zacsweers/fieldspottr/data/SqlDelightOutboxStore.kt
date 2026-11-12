@@ -16,7 +16,7 @@ import dev.zacsweers.fieldspottr.data.core.PayloadCodec
 import dev.zacsweers.fieldspottr.data.core.UndecodableRows
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.decodeCatching
-import dev.zacsweers.fieldspottr.data.core.isSettled
+import dev.zacsweers.fieldspottr.data.core.isDone
 import dev.zacsweers.fieldspottr.data.core.storedCause
 import dev.zacsweers.fieldspottr.data.core.storedName
 import kotlin.concurrent.atomics.AtomicReference
@@ -25,8 +25,6 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
@@ -66,6 +64,10 @@ class SqlDelightOutboxStores(
     io: CoroutineDispatcher,
     payloadFormat: SerialFormat = DefaultPayloadFormat,
   ) : this({ queries }, io, payloadFormat)
+
+  // Answers live in the same rows as payloads, so they use the same format
+  override fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
+    serializer.asCodec(payloadFormat)
 
   // One store per name, so every outbox over a name shares what its store knows about rows that do
   // not decode, and each such row is reported once. Updated by compare-and-set only. Nothing
@@ -107,7 +109,6 @@ class SqlDelightOutboxStores(
  * payload class changed, is left out of [entries], [entry] and [heads], and handed on through
  * [onUndecodable]. It stays in the table.
  */
-@OptIn(ExperimentalUuidApi::class)
 class SqlDelightOutboxStore<E>(
   private val queries: suspend () -> OutboxRowQueries,
   private val outbox: String,
@@ -120,12 +121,11 @@ class SqlDelightOutboxStore<E>(
   // The rows this store cannot decode, found by its reads
   private val undecodable = UndecodableRows()
 
-  override suspend fun insert(key: String, payload: E): EntryId {
+  override suspend fun insert(id: EntryId, key: String, payload: E) {
     currentCoroutineContext().ensureActive()
-    // seq orders the rows. The Uuid identifies the row everywhere.
-    val id = EntryId(Uuid.random().toString())
-    // Runs to the end once started, so a caller cancelled meanwhile still gets the id of the row it
-    // stored, and a throw always means nothing was stored
+    // seq orders the rows, and the id identifies the row everywhere. A stored id fails the UNIQUE
+    // constraint, which rolls the transaction back. The insert runs to the end once started, so a
+    // throw always means nothing was stored.
     withContext(NonCancellable) {
       withContext(io) {
         val queries = queries()
@@ -135,11 +135,10 @@ class SqlDelightOutboxStore<E>(
         }
       }
     }
-    return id
   }
 
   override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
-    val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.status.isSettled }
+    val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.isDone }
     return withContext(io) {
       val queries = queries()
       // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
@@ -165,6 +164,14 @@ class SqlDelightOutboxStore<E>(
             },
           retryAt = entry.retryAt?.toEpochMilliseconds(),
           settledAt = settledAt,
+          committed =
+            if (entry.committed) {
+              1L
+            } else {
+              0L
+            },
+          sentAt = entry.sentAt?.toEpochMilliseconds(),
+          reply = entry.reply,
           outbox = outbox,
           id = entry.id.value,
           expectedStatus = row.status,
@@ -180,6 +187,14 @@ class SqlDelightOutboxStore<E>(
   }
     .map { rows -> rows.mapNotNull { it.toEntryOrNull() } }
     .distinctUntilChanged()
+
+  override suspend fun owed(): List<OutboxEntry<E>> =
+    withContext(io) { queries().owed(outbox).executeAsList().mapNotNull { it.toEntryOrNull() } }
+
+  override suspend fun owed(key: String): List<OutboxEntry<E>> =
+    withContext(io) {
+      queries().owedOnKey(outbox, key).executeAsList().mapNotNull { it.toEntryOrNull() }
+    }
 
   // An id that is not one of ours finds no row, so its handle settles Cancelled
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> = flow {
@@ -244,7 +259,7 @@ class SqlDelightOutboxStore<E>(
 
   /**
    * This row as an entry, or null when its payload does not decode. A row known not to decode is
-   * skipped without decoding. A row neither Sent nor Discarded that fails to decode is recorded in
+   * skipped without decoding. A row that is not done and fails to decode is recorded in
    * [undecodable].
    */
   private fun OutboxRow.toEntryOrNull(): OutboxEntry<E>? {
@@ -254,7 +269,7 @@ class SqlDelightOutboxStore<E>(
     val decoded = codec.decodeCatching(payload)
     val failure = decoded.exceptionOrNull()
     if (failure != null) {
-      if (!OutboxStatus(status, cause).isSettled) {
+      if (settledAt == null) {
         undecodable.found(id, failure)
       }
       return null
@@ -268,6 +283,9 @@ class SqlDelightOutboxStore<E>(
       lastError = lastError,
       reverted = reverted != 0L,
       retryAt = retryAt?.let { Instant.fromEpochMilliseconds(it) },
+      committed = committed != 0L,
+      sentAt = sentAt?.let { Instant.fromEpochMilliseconds(it) },
+      reply = reply,
     )
   }
 }

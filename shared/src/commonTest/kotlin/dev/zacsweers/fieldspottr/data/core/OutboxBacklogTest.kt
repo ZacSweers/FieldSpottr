@@ -50,8 +50,8 @@ class OutboxBacklogTest {
   @Test
   fun `a row that waits is reported and the backlog clears once it sends`() = runTest {
     val factory = factory(online = false)
-    val data = factory.create(backgroundScope)
-    val outbox = data.outbox<String>("test", send)
+    val data = factory.create(backgroundScope, setOf(Changes.sender(send = send)))
+    val outbox = data.outbox(Changes)
     runCurrent()
     // An outbox with nothing to send schedules nothing
     assertThat(factory.backlog.first()).isEqualTo(Empty)
@@ -71,8 +71,8 @@ class OutboxBacklogTest {
   @Test
   fun `consecutive ready reports reach the scheduler once and a row after empty again`() = runTest {
     val factory = factory(online = false)
-    val data = factory.create(backgroundScope)
-    val outbox = data.outbox<String>("test", send)
+    val data = factory.create(backgroundScope, setOf(Changes.sender(send = send)))
+    val outbox = data.outbox(Changes)
     runCurrent()
 
     // Each enqueue reports the backlog, and it stays Ready, so the scheduler hears it once
@@ -96,8 +96,11 @@ class OutboxBacklogTest {
     val factory = factory()
     val outbox =
       factory
-        .create(backgroundScope)
-        .outbox<String>("test", send, retry = RetryPolicy(maxAttempts = 3) { 1.minutes })
+        .create(
+          backgroundScope,
+          setOf(Changes.sender(retry = RetryPolicy(maxAttempts = 3) { 1.minutes }, send = send)),
+        )
+        .outbox(Changes)
 
     val handle = outbox.enqueue("a")
     factory.backlog.first { it == BackingOff(START + 1.minutes) }
@@ -121,10 +124,16 @@ class OutboxBacklogTest {
   fun `the backlog is ready if any outbox is and otherwise the earliest backoff`() = runTest {
     send.failTransiently()
     val factory = factory()
-    val data = factory.create(backgroundScope)
-    val slow = data.outbox<String>("slow", send, retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
-    val quick =
-      data.outbox<String>("quick", send, retry = RetryPolicy(maxAttempts = 3) { 1.minutes })
+    val data =
+      factory.create(
+        backgroundScope,
+        setOf(
+          Slow.sender(retry = RetryPolicy(maxAttempts = 3) { 5.minutes }, send = send),
+          Quick.sender(retry = RetryPolicy(maxAttempts = 3) { 1.minutes }, send = send),
+        ),
+      )
+    val slow = data.outbox(Slow)
+    val quick = data.outbox(Quick)
 
     slow.enqueue("a")
     factory.backlog.first { it == BackingOff(START + 5.minutes) }
@@ -149,7 +158,7 @@ class OutboxBacklogTest {
     val factory = factory(online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    factory.create(owner).outbox<String>("test", send).enqueue("a")
+    factory.create(owner, setOf(Changes.sender(send = send))).outbox(Changes).enqueue("a")
     factory.backlog.first { it == Ready }
 
     owner.cancel()
@@ -157,7 +166,7 @@ class OutboxBacklogTest {
     // Nothing runs, so nothing counts, and the row stays for the next owner
     factory.backlog.first { it == Empty }
     assertThat(scheduler.calls).containsExactly(Ready)
-    assertThat(factory.outboxStore<String>("test").entries().first()).hasSize(1)
+    assertThat(factory.outboxStore<String>(Changes.name).entries().first()).hasSize(1)
   }
 
   @Test
@@ -174,8 +183,8 @@ class OutboxBacklogTest {
         }
       val factory =
         testDataScopeFactory(clock = testClock(START), online = false, scheduler = throwing)
-      val data = factory.create(backgroundScope)
-      val outbox = data.outbox<String>("test", send)
+      val data = factory.create(backgroundScope, setOf(Changes.sender(send = send)))
+      val outbox = data.outbox(Changes)
 
       val first = outbox.enqueue("a")
       factory.backlog.first { it == Ready }
@@ -198,8 +207,11 @@ class OutboxBacklogTest {
     send.hold("a")
     val outbox =
       factory
-        .create(backgroundScope)
-        .outbox<String>("test", send, retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+        .create(
+          backgroundScope,
+          setOf(Changes.sender(retry = RetryPolicy(maxAttempts = 3) { 5.minutes }, send = send)),
+        )
+        .outbox(Changes)
     outbox.enqueue("a")
     val drained = async { factory.awaitDrained() }
     runCurrent()
@@ -216,8 +228,7 @@ class OutboxBacklogTest {
   @Test
   fun `an outbox that fails to build leaves the backlog reporting`() = runTest {
     val factory = factory()
-    val data = factory.create(backgroundScope)
-    val rows = factory.outboxStore<String>("test")
+    val rows = factory.outboxStore<String>(Changes.name)
     var failToOpen = true
     val flaky =
       object : OutboxStore<String> by rows {
@@ -230,8 +241,10 @@ class OutboxBacklogTest {
         }
       }
 
-    assertFailsWith<IllegalStateException> { data.outbox("flaky", flaky, send = send) }
-    data.outbox("flaky", flaky, send = send)
+    val senders = setOf(Flaky.sender(store = flaky, send = send))
+
+    assertFailsWith<IllegalStateException> { factory.create(backgroundScope, senders) }
+    factory.create(backgroundScope, senders).outbox(Flaky)
     runCurrent()
 
     // Only the outbox that was built counts, so the backlog still reports
@@ -243,8 +256,11 @@ class OutboxBacklogTest {
     val factory = factory()
     val outbox =
       factory
-        .create(backgroundScope)
-        .outbox<String>("test", send, retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+        .create(
+          backgroundScope,
+          setOf(Changes.sender(retry = RetryPolicy(maxAttempts = 3) { 5.minutes }, send = send)),
+        )
+        .outbox(Changes)
     send.failTransiently()
     val handle = outbox.enqueue("a")
     runCurrent()
@@ -266,3 +282,7 @@ class OutboxBacklogTest {
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+private val Changes = OutboxKey<String>("test")
+private val Slow = OutboxKey<String>("slow")
+private val Quick = OutboxKey<String>("quick")
+private val Flaky = OutboxKey<String>("flaky")

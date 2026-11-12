@@ -28,6 +28,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -72,7 +73,7 @@ class OptimisticQueryStoreTest {
   @Serializable data class Increment(val id: String, val delta: Int)
 
   /** A count and the ids of the increments it holds, as the server reports them. */
-  data class Tally(val count: Int, val applied: Set<String> = emptySet())
+  @Serializable data class Tally(val count: Int, val applied: Set<String> = emptySet())
 
   private val send = TestSend<Add>()
   // The row ids each send attempt was given, in attempt order
@@ -92,11 +93,15 @@ class OptimisticQueryStoreTest {
     stored: Fetched<List<String>>? = Fetched(listOf("a"), START),
     idempotent: Boolean = true,
   ): Pair<OptimisticQueryStore<List<String>, Add>, DataQuery<List<String>>> {
-    data = testDataScope(clock = testClock(START), online = online)
+    val sender = Tags.sender { add, id ->
+      sentIds += id
+      send(add, id)
+    }
+    data = testDataScope(clock = testClock(START), online = online, senders = setOf(sender))
     truth = QueryStore.inMemory(stored)
     val store =
       data.optimisticStore<List<String>, Add>(
-        name = "tags",
+        Tags,
         base = truth,
         apply =
           if (idempotent) {
@@ -104,14 +109,13 @@ class OptimisticQueryStoreTest {
           } else {
             ::append
           },
-        send = { add, id ->
-          sentIds += id
-          send(add, id)
-        },
       )
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
     return store to query
   }
+
+  /** Sends each change of [TagsByItem] through [send]. */
+  private fun tagsByItemSender() = TagsByItem.sender { change, id -> send(change.mutation, id) }
 
   /** Passes when the only failure is the store's one report that [append] is not idempotent. */
   private fun assertOnlyIdempotencyReport() {
@@ -299,14 +303,20 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a value exchange returns becomes fresh truth`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data =
+      testDataScope(
+        clock = testClock(START),
+        senders =
+          setOf(
+            // The server normalizes what it stores
+            ReplyingTags.exchangingSender { add, _ -> listOf("a", add.tag.uppercase()) }
+          ),
+      )
     val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
+      data.optimisticStore(
+        ReplyingTags,
         base = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours)),
         apply = ::addOnce,
-        // The server normalizes what it stores
-        exchange = { add, _ -> listOf("a", add.tag.uppercase()) },
       )
     val query = data.query(store, Freshness.staleAfter(2.hours), fetch = fetch)
     query.data.test {
@@ -320,18 +330,17 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a keyed store builds one base per key and commits through it`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
     val built = mutableListOf<String>()
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         // Each instance keeps state of its own, like a store that caches what it loaded
         base = { key ->
           built += key
           QueryStore.inMemory(Fetched(listOf(key), START))
         },
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
@@ -348,13 +357,12 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a fetch from after a send drops the change's record`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
@@ -371,13 +379,12 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a key keeps one value on record however many changes it sends`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { _ -> fetch() }
@@ -403,18 +410,18 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a key keeps one server answer on record however many exchanges it sends`() = runTest {
-    data = testDataScope(clock = testClock(START))
     // The server stores tags in upper case, so its answer differs from what apply builds
     val server = mutableListOf("a", "z")
+    val sender = ReplyingTagsByItem.exchangingSender { change, _ ->
+      server += change.mutation.tag.uppercase()
+      server.toList()
+    }
+    data = testDataScope(clock = testClock(START), senders = setOf(sender))
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        ReplyingTagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        exchange = { _, add, _ ->
-          server += add.tag.uppercase()
-          server.toList()
-        },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { _ -> fetch() }
@@ -441,22 +448,21 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a send after an exchange keeps the server answer on record`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    // The server answers only the first change, with its tag in upper case
+    val sender = ReplyingTagsByItem.deliveringSender { change, _ ->
+      if (change.mutation.tag == "b") {
+        Delivery.Replaced(listOf("a", "z", "B"))
+      } else {
+        Delivery.Acknowledged
+      }
+    }
+    data = testDataScope(clock = testClock(START), senders = setOf(sender))
     val stores =
       data.optimisticStores(
-        name = "tagsByItem",
+        ReplyingTagsByItem,
         base = QueryStore.inMemoryByKey<String, List<String>>(),
         keySerializer = String.serializer(),
-        serializer = Add.serializer(),
         apply = ::addOnce,
-        // The server answers only the first change, with its tag in upper case
-        deliver = { _, add, _ ->
-          if (add.tag == "b") {
-            Delivery.Replaced(listOf("a", "z", "B"))
-          } else {
-            Delivery.Acknowledged
-          }
-        },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { _ -> fetch() }
@@ -482,13 +488,12 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a record that no fetch confirms is dropped minutes after its send`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
@@ -508,14 +513,13 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a key the base evicts while a change waits fetches again on screen`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
     val base = QueryStore.inMemoryByKey<String, List<String>>()
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = base,
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     val fetch = TestKeyedFetch<String, List<String>> { key -> listOf(key) }
     val queries =
@@ -543,13 +547,12 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `keyed stores change one key and leave the rest alone`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
     val stores =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByItem",
+        TagsByItem,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
@@ -631,25 +634,26 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a change sent again after a restart leaves a truth that already holds it alone`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    val scopes = testDataScopeFactory(clock = testClock(START))
     // What a process that died between the truth write and the row's status leaves behind: the
     // change in the truth, and its row still Sending
     truth = QueryStore.inMemory(Fetched(listOf("a", "b"), START))
-    val rows = data.outboxStore<KeyedMutation<Unit, Add>>("tags")
-    rows.insert(key = "{}", payload = KeyedMutation(Unit, Add("b"), token = "earlier"))
+    val rows = scopes.outboxStore<Add>("tags")
+    rows.insertNew(key = "", payload = Add("b"))
     val row = rows.entries().first().single()
     rows.update(row.copy(status = OutboxStatus.Sending), expected = OutboxStatus.Queued)
 
-    val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        send = { add, id ->
-          sentIds += id
-          send(add, id)
-        },
+    data =
+      scopes.create(
+        backgroundScope,
+        setOf(
+          Tags.sender { add, id ->
+            sentIds += id
+            send(add, id)
+          }
+        ),
       )
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
     store.data.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
       store.pending.first { it.isEmpty() }
@@ -689,15 +693,9 @@ class OptimisticQueryStoreTest {
           stores = inserts,
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Tags.sender { _, _ -> }))
     truth = QueryStore.inMemory(Fetched(listOf("old"), START))
-    val store =
-      scope.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        send = { _, _ -> },
-      )
+    val store = scope.optimisticStore(Tags, base = truth, apply = ::addOnce)
     fetch.respond = { listOf("new") }
     // Never stale, so collecting the seeded value starts no fetch of its own
     val query = scope.query(store, Freshness.NeverStale, fetch = fetch)
@@ -734,7 +732,11 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a fetch write that lands after a commit from a later time is dropped`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(ReplyingTags.exchangingSender { _, _ -> listOf("confirmed") }),
+      )
     truth = QueryStore.inMemory(Fetched(listOf("a"), START - 2.hours))
     val gate = CompletableDeferred<Unit>()
     // A base whose write of the fetched value stalls, like a slow file
@@ -750,13 +752,7 @@ class OptimisticQueryStoreTest {
           truth.writeFetched(fetched, keepsStored)
         },
       )
-    val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = base,
-        apply = ::addOnce,
-        exchange = { _, _ -> listOf("confirmed") },
-      )
+    val store = data.optimisticStore(ReplyingTags, base = base, apply = ::addOnce)
     fetch.respond = { listOf("old") }
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
@@ -781,16 +777,17 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `an older truth shows a server answer as that answer`() = runTest {
-    data = testDataScope(clock = testClock(START))
-    truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
-    val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        // The server normalizes what it stores
-        exchange = { add, _ -> listOf("a", add.tag.uppercase()) },
+    data =
+      testDataScope(
+        clock = testClock(START),
+        senders =
+          setOf(
+            // The server normalizes what it stores
+            ReplyingTags.exchangingSender { add, _ -> listOf("a", add.tag.uppercase()) }
+          ),
       )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    val store = data.optimisticStore(ReplyingTags, base = truth, apply = ::addOnce)
     val query = data.query(store, Freshness.staleAfter(2.hours), fetch = fetch)
     store.mutate(Add("b")).awaitSucceeded()
     assertThat(query.stored.first()).isEqualTo(Fetched(listOf("a", "B"), START))
@@ -813,14 +810,11 @@ class OptimisticQueryStoreTest {
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
-    fun DataScope.tags() =
-      optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        send = send,
-      )
-    val before = scopes.create(owner).tags()
+    fun build(scope: CoroutineScope) =
+      scopes
+        .create(scope, setOf(Tags.sender(send = send)))
+        .optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val before = build(owner)
     send.hold(Add("b"))
     before.mutate(Add("b"))
     before.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }
@@ -834,7 +828,7 @@ class OptimisticQueryStoreTest {
     assertThat(before.pending.first()).isEmpty()
 
     // The next owner over the same rows finds nothing to send
-    val after = scopes.create(backgroundScope).tags()
+    val after = build(backgroundScope)
     runCurrent()
     assertThat(after.data.first()).isNull()
     assertThat(send.attempts).containsExactly(Add("b"))
@@ -846,19 +840,22 @@ class OptimisticQueryStoreTest {
     val scopes = testDataScopeFactory(clock = testClock(START), online = false)
     val owner =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
-    // Each build opens the name with a new KeyedMutation serializer object
-    fun DataScope.tags() =
-      optimisticStores<Item, List<String>, Add>(
-        name = "tagsByItem",
-        base = QueryStore.inMemoryByKey(),
-        apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
-      )
-    scopes.create(owner).tags().mutate(Item("x"), Add("b")).stored.awaitSucceeded()
+    // Each build opens the name with a new key, and so a new KeyedMutation serializer object
+    fun build(scope: CoroutineScope): OptimisticQueryStores<Item, List<String>, Add> {
+      val key = itemTags()
+      return scopes
+        .create(scope, setOf(key.sender { change, id -> send(change.mutation, id) }))
+        .optimisticStores<Item, List<String>, Add>(
+          key,
+          base = QueryStore.inMemoryByKey(),
+          apply = ::addOnce,
+        )
+    }
+    build(owner).mutate(Item("x"), Add("b")).stored.awaitSucceeded()
     owner.cancel()
     owner.coroutineContext.job.join()
 
-    val after = scopes.create(backgroundScope).tags()
+    val after = build(backgroundScope)
 
     assertThat(after.pending(Item("x")).first { it.isNotEmpty() }.map { it.mutation })
       .containsExactly(Add("b"))
@@ -867,7 +864,7 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `an invalidate during a commit still leaves the truth stale`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
     val state = MutableStateFlow<Fetched<List<String>>?>(Fetched(listOf("a"), START))
     val commitWriting = CompletableDeferred<Unit>()
     val finishCommit = CompletableDeferred<Unit>()
@@ -884,13 +881,7 @@ class OptimisticQueryStoreTest {
           state.writeFetched(fetched, keepsStored)
         },
       )
-    val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = base,
-        apply = ::addOnce,
-        send = { add, id -> send(add, id) },
-      )
+    val store = data.optimisticStore(Tags, base = base, apply = ::addOnce)
 
     val handle = store.mutate(Add("b"))
     commitWriting.await()
@@ -934,15 +925,9 @@ class OptimisticQueryStoreTest {
           stores = claimedDuringClear,
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Tags.sender(send = send)))
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
-    val store =
-      scope.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        send = { add, id -> send(add, id) },
-      )
+    val store = scope.optimisticStore(Tags, base = truth, apply = ::addOnce)
     send.hold(Add("b"))
     val handle = store.mutate(Add("b"))
     handle.stored.awaitSucceeded()
@@ -960,18 +945,12 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a commit that fails locally is reported and never sent again`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
     val backing = QueryStore.inMemory(Fetched(listOf("a"), START))
     val diskFull = IllegalStateException("Disk full")
     val failingWrites =
       QueryStore.of(backing.data, clear = backing::clearFetched, write = { _, _ -> throw diskFull })
-    val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = failingWrites,
-        apply = ::addOnce,
-        send = { add, id -> send(add, id) },
-      )
+    val store = data.optimisticStore(Tags, base = failingWrites, apply = ::addOnce)
 
     // The server took the change, so its handle succeeds and its retries are not spent
     store.mutate(Add("b")).awaitSucceeded()
@@ -984,9 +963,9 @@ class OptimisticQueryStoreTest {
   @Test
   fun `a counter refreshed while its exchange runs shows the change twice until the answer`() =
     runTest {
-      data = testDataScope(clock = testClock(START))
       val server = CounterServer(answer = CompletableDeferred())
-      val store = data.counterStore(server, QueryStore.inMemory(Fetched(0, START)))
+      data = testDataScope(clock = testClock(START), senders = setOf(counterSender(server)))
+      val store = data.counterStore(QueryStore.inMemory(Fetched(0, START)))
       val query = data.query(store, Freshness.staleAfter(1.hours)) { server.count }
 
       query.data.test {
@@ -1013,16 +992,17 @@ class OptimisticQueryStoreTest {
   @Test
   fun `a counter left sending at a restart shows the change twice until the resend answers`() =
     runTest {
-      data = testDataScope(clock = testClock(START), online = false)
+      val scopes = testDataScopeFactory(clock = testClock(START), online = false)
       // What an owner that stopped after it stored the server's answer leaves behind: the count
       // holds the change, and its row still says Sending
-      val rows = data.outboxStore<KeyedMutation<Unit, Int>>("count")
-      rows.insert(key = "{}", payload = KeyedMutation(Unit, 1, token = "earlier"))
+      val rows = scopes.outboxStore<Int>("count")
+      rows.insertNew(key = "", payload = 1)
       val row = rows.entries().first().single()
       rows.update(row.copy(status = OutboxStatus.Sending), expected = OutboxStatus.Queued)
       val server = CounterServer(count = 1, applied = setOf(row.id))
 
-      val store = data.counterStore(server, QueryStore.inMemory(Fetched(1, START)))
+      data = scopes.create(backgroundScope, setOf(counterSender(server)))
+      val store = data.counterStore(QueryStore.inMemory(Fetched(1, START)))
       assertThat(store.data.first()?.value).isEqualTo(2)
 
       // The resend carries the row's id, so the server answers without counting the change again
@@ -1035,9 +1015,9 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a tally stays exact through a refresh before the server takes the change`() = runTest {
-    data = testDataScope(clock = testClock(START))
     val server = TallyServer(accept = CompletableDeferred())
-    val store = data.tallyStore(server, QueryStore.inMemory(Fetched(server.read(), START)))
+    data = testDataScope(clock = testClock(START), senders = setOf(tallySender(server)))
+    val store = data.tallyStore(QueryStore.inMemory(Fetched(server.read(), START)))
     val query = data.query(store, Freshness.staleAfter(1.hours)) { server.read() }
 
     val handle = store.mutate(Increment("e1", 1))
@@ -1057,9 +1037,9 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a tally stays exact through a refresh after the server takes the change`() = runTest {
-    data = testDataScope(clock = testClock(START))
     val server = TallyServer(answer = CompletableDeferred())
-    val store = data.tallyStore(server, QueryStore.inMemory(Fetched(server.read(), START)))
+    data = testDataScope(clock = testClock(START), senders = setOf(tallySender(server)))
+    val store = data.tallyStore(QueryStore.inMemory(Fetched(server.read(), START)))
     val query = data.query(store, Freshness.staleAfter(1.hours)) { server.read() }
 
     val handle = store.mutate(Increment("e1", 1))
@@ -1084,7 +1064,7 @@ class OptimisticQueryStoreTest {
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
     val server = TallyServer(answer = CompletableDeferred())
     val base = QueryStore.inMemory(Fetched(server.read(), START))
-    val before = scopes.create(owner).tallyStore(server, base)
+    val before = scopes.create(owner, setOf(tallySender(server))).tallyStore(base)
 
     // The server counts the change, and the owner stops before the answer arrives
     before.mutate(Increment("e1", 1))
@@ -1095,7 +1075,7 @@ class OptimisticQueryStoreTest {
 
     // Reopened offline, the change shows once on top of the truth that lacks it
     scopes.online.value = false
-    val after = scopes.create(backgroundScope).tallyStore(server, base)
+    val after = scopes.create(backgroundScope, setOf(tallySender(server))).tallyStore(base)
     assertThat(after.data.first()?.value).isEqualTo(Tally(1, setOf("e1")))
 
     // The change sends again with its row id, so the server answers without counting it twice
@@ -1109,7 +1089,7 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a fetch that folds in a delete keeps a row another writer recreated meanwhile`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(Note.sender { _, _ -> }))
     // One row that another writer shares, like a table a second query also fills
     val row = MutableStateFlow<Fetched<String>?>(Fetched("draft", START))
     val removing = CompletableDeferred<Unit>()
@@ -1133,12 +1113,7 @@ class OptimisticQueryStoreTest {
         },
       )
     val store =
-      data.optimisticStore<String, SetText>(
-        name = "note",
-        base = base,
-        apply = { _, edit -> edit.text },
-        send = { _, _ -> },
-      )
+      data.optimisticStore<String, SetText>(Note, base = base, apply = { _, edit -> edit.text })
     val fetch = TestFetch { "draft" }
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
@@ -1164,7 +1139,15 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `an exchange answer keeps a newer value another writer stored during its commit`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data =
+      testDataScope(
+        clock = testClock(START),
+        senders =
+          setOf(
+            // The server normalizes what it stores
+            ReplyingNote.exchangingSender { edit, _ -> checkNotNull(edit.text).uppercase() }
+          ),
+      )
     val row = MutableStateFlow<Fetched<String>?>(Fetched("draft", START))
     val commitWriting = CompletableDeferred<Unit>()
     val finishCommit = CompletableDeferred<Unit>()
@@ -1183,11 +1166,9 @@ class OptimisticQueryStoreTest {
       )
     val store =
       data.optimisticStore<String, SetText>(
-        name = "note",
+        ReplyingNote,
         base = base,
         apply = { _, edit -> edit.text },
-        // The server normalizes what it stores
-        exchange = { edit, _ -> checkNotNull(edit.text).uppercase() },
       )
 
     advanceTimeBy(1.seconds)
@@ -1205,15 +1186,9 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `a write through the store still replaces a newer value`() = runTest {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
     truth = QueryStore.inMemory(Fetched(listOf("a"), START + 1.hours))
-    val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        send = { add, id -> send(add, id) },
-      )
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
 
     store.write(listOf("seed"), START)
     assertThat(truth.data.value).isEqualTo(Fetched(listOf("seed"), START))
@@ -1222,12 +1197,17 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `an apply that throws leaves its change out and data keeps flowing`() = runTest {
-    data = testDataScope(clock = testClock(START), online = false)
+    data =
+      testDataScope(
+        clock = testClock(START),
+        online = false,
+        senders = setOf(Tags.sender(send = send)),
+      )
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
     val boom = IllegalArgumentException("Cannot apply boom")
     val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
+      data.optimisticStore(
+        Tags,
         base = truth,
         apply = { current, add ->
           if (add.tag == "boom") {
@@ -1235,7 +1215,6 @@ class OptimisticQueryStoreTest {
           }
           addOnce(current, add)
         },
-        send = { add, id -> send(add, id) },
       )
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
     query.data.test {
@@ -1255,13 +1234,18 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `an apply that throws at commit leaves the truth stale and the send succeeds`() = runTest {
-    data = testDataScope(clock = testClock(START), online = false)
+    data =
+      testDataScope(
+        clock = testClock(START),
+        online = false,
+        senders = setOf(Tags.sender(send = send)),
+      )
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
     val broken = IllegalStateException("Broken apply")
     var breaks = false
     val store =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
+      data.optimisticStore(
+        Tags,
         base = truth,
         apply = { current, add ->
           if (breaks) {
@@ -1269,7 +1253,6 @@ class OptimisticQueryStoreTest {
           }
           addOnce(current, add)
         },
-        send = { add, id -> send(add, id) },
       )
     val handle = store.mutate(Add("b"))
     assertThat(store.data.first()?.value).isEqualTo(listOf("a", "b"))
@@ -1315,10 +1298,10 @@ class OptimisticQueryStoreTest {
    * time, so only a commit of `dup` can fail the idempotence check.
    */
   private fun TestScope.appendsDuplicates(): OptimisticQueryStore<List<String>, Add> {
-    data = testDataScope(clock = testClock(START))
+    data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
-    return data.optimisticStore<List<String>, Add>(
-      name = "tags",
+    return data.optimisticStore(
+      Tags,
       base = truth,
       apply = { current, add ->
         if (add.tag == "dup") {
@@ -1327,7 +1310,6 @@ class OptimisticQueryStoreTest {
           addOnce(current, add)
         }
       },
-      send = { add, id -> send(add, id) },
     )
   }
 
@@ -1342,15 +1324,9 @@ class OptimisticQueryStoreTest {
           stores = inserts,
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Tags.sender { _, _ -> }))
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
-    val store =
-      scope.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::append,
-        send = { _, _ -> },
-      )
+    val store = scope.optimisticStore(Tags, base = truth, apply = ::append)
     store.data.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       inserts.hold()
@@ -1383,15 +1359,9 @@ class OptimisticQueryStoreTest {
           stores = inserts,
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Tags.sender(send = send)))
     truth = QueryStore.inMemory(Fetched(listOf("a"), START))
-    val store =
-      scope.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = truth,
-        apply = ::addOnce,
-        send = { add, id -> send(add, id) },
-      )
+    val store = scope.optimisticStore(Tags, base = truth, apply = ::addOnce)
     store.data.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       inserts.hold()
@@ -1410,32 +1380,36 @@ class OptimisticQueryStoreTest {
 
   @Test
   fun `keys order their rows by their serialized form`() = runTest {
-    data = testDataScope(clock = testClock(START), online = false)
+    val itemTags = itemTags()
+    data =
+      testDataScope(
+        clock = testClock(START),
+        online = false,
+        senders =
+          setOf(
+            itemTags.sender { change, id -> send(change.mutation, id) },
+            TagsByName.sender { change, id -> send(change.mutation, id) },
+            Tags.sender(send = send),
+          ),
+      )
     val stores =
       data.optimisticStores<Item, List<String>, Add>(
-        name = "tagsByItem",
+        itemTags,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     // Equal keys whose toString differs share one order
     stores.mutate(Item("x"), Add("b")).stored.awaitSucceeded()
     stores.mutate(Item("x"), Add("c")).stored.awaitSucceeded()
     val strings =
       data.optimisticStores<String, List<String>, Add>(
-        name = "tagsByName",
+        TagsByName,
         base = QueryStore.inMemoryByKey(),
         apply = ::addOnce,
-        send = { _, add, id -> send(add, id) },
       )
     strings.mutate("x", Add("b")).stored.awaitSucceeded()
     val single =
-      data.optimisticStore<List<String>, Add>(
-        name = "tags",
-        base = QueryStore.inMemory<List<String>>(null),
-        apply = ::addOnce,
-        send = { add, id -> send(add, id) },
-      )
+      data.optimisticStore(Tags, base = QueryStore.inMemory<List<String>>(null), apply = ::addOnce)
     single.mutate(Add("b")).stored.awaitSucceeded()
 
     assertThat(
@@ -1446,8 +1420,8 @@ class OptimisticQueryStoreTest {
         data.outboxStore<KeyedMutation<String, Add>>("tagsByName").entries().first().map { it.key }
       )
       .containsExactly("\"x\"")
-    assertThat(data.outboxStore<KeyedMutation<Unit, Add>>("tags").entries().first().map { it.key })
-      .containsExactly("{}")
+    // A single store's rows hold the change itself, all on one key
+    assertThat(data.outboxStore<Add>("tags").entries().first().map { it.key }).containsExactly("")
     data.assertNoFailures()
   }
 
@@ -1465,6 +1439,7 @@ class OptimisticQueryStoreTest {
   @Test
   fun `a change sent before its insert returns shows once`() = runTest {
     val failures = TestFailures()
+    var server = 0
     val data =
       DataScope.Factory(
           onFailure = failures,
@@ -1472,17 +1447,20 @@ class OptimisticQueryStoreTest {
           stores = LaggingOutboxStores(insertReturnsAfter = 1.seconds),
           clock = testClock(START),
         )
-        .create(backgroundScope)
-    var server = 0
+        .create(
+          backgroundScope,
+          setOf(
+            Bumps.exchangingSender { bump, _ ->
+              server += bump.by
+              server
+            }
+          ),
+        )
     val count =
       data.optimisticStore<Int, Bump>(
-        name = "count",
+        Bumps,
         base = QueryStore.inMemory(Fetched(0, START)),
         apply = { current, bump -> (current ?: 0) + bump.by },
-        exchange = { bump, _ ->
-          server += bump.by
-          server
-        },
       )
     val seen = mutableListOf<Int?>()
     backgroundScope.launch { count.data.collect { seen += it?.value } }
@@ -1513,10 +1491,10 @@ class OptimisticQueryStoreTest {
             LaggingOutboxStores(insertStartsAfter = 500.milliseconds, rowsLag = 100.milliseconds),
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Tags.sender { _, _ -> }))
     val tags =
       data.optimisticStore<List<String>, Add>(
-        name = "tags",
+        Tags,
         base = QueryStore.inMemory(Fetched(listOf("a"), START)),
         apply = { current, add ->
           val list = current.orEmpty()
@@ -1526,7 +1504,6 @@ class OptimisticQueryStoreTest {
             list + add.tag
           }
         },
-        send = { _, _ -> },
       )
     val seen = mutableListOf<List<String>?>()
     backgroundScope.launch { tags.data.collect { seen += it?.value } }
@@ -1549,6 +1526,7 @@ class OptimisticQueryStoreTest {
   fun `a pruned record never lets a lagging row apply again`() = runTest {
     val failures = TestFailures()
     val clock = testClock(START)
+    var server = 0
     val data =
       DataScope.Factory(
           onFailure = failures,
@@ -1556,18 +1534,21 @@ class OptimisticQueryStoreTest {
           stores = LaggingOutboxStores(rowsLag = 1.seconds),
           clock = clock,
         )
-        .create(backgroundScope)
-    var server = 0
+        .create(
+          backgroundScope,
+          setOf(
+            Bumps.exchangingSender { bump, _ ->
+              delay(2.seconds)
+              server += bump.by
+              server
+            }
+          ),
+        )
     val count =
       data.optimisticStore<Int, Bump>(
-        name = "count",
+        Bumps,
         base = QueryStore.inMemory(Fetched(0, START)),
         apply = { current, bump -> (current ?: 0) + bump.by },
-        exchange = { bump, _ ->
-          delay(2.seconds)
-          server += bump.by
-          server
-        },
       )
     val seen = mutableListOf<Int?>()
     backgroundScope.launch { count.data.collect { seen += it?.value } }
@@ -1602,16 +1583,15 @@ class OptimisticQueryStoreTest {
           stores = LaggingOutboxStores(decodeEachRead = true),
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Ops.sender { _, _ -> }))
     val tags =
       data.optimisticStore<List<String>, Op>(
-        name = "ops",
+        Ops,
         base = QueryStore.inMemory(Fetched(listOf("a"), START)),
         apply = { current, op ->
           check(!op.boom) { "boom" }
           current.orEmpty() + op.tag
         },
-        send = { _, _ -> },
       )
     backgroundScope.launch { tags.data.collect {} }
     runCurrent()
@@ -1639,15 +1619,14 @@ class OptimisticQueryStoreTest {
           online = MutableStateFlow(false),
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(backgroundScope, setOf(Ops.sender { _, _ -> }))
         .optimisticStore<List<String>, Op>(
-          name = "ops",
+          Ops,
           base = QueryStore.inMemory(Fetched(listOf("a"), START)),
           apply = { current, op ->
             check(!op.boom) { "boom" }
             current.orEmpty() + op.tag
           },
-          send = { _, _ -> },
         )
     repeat(3) { round ->
       val collector = backgroundScope.launch { tags.data.collect {} }
@@ -1675,9 +1654,9 @@ class OptimisticQueryStoreTest {
         stores = LaggingOutboxStores(rowsLag = 1.seconds),
         clock = testClock(START),
       )
-      .create(scope)
+      .create(scope, setOf(Tags.sender { _, _ -> }))
       .optimisticStore<List<String>, Add>(
-        name = "tags",
+        Tags,
         base = QueryStore.inMemory(Fetched(listOf("a"), START)),
         apply = { current, add ->
           val list = current.orEmpty()
@@ -1687,7 +1666,6 @@ class OptimisticQueryStoreTest {
             list + add.tag
           }
         },
-        send = { _, _ -> },
       )
 
   /**
@@ -1782,12 +1760,8 @@ class OptimisticQueryStoreTest {
     advanceTimeBy(5.seconds)
     runCurrent()
     clearing.join()
-    val rows =
-      stores.delegate
-        .open("tags", KeyedMutation.serializer(Unit.serializer(), Add.serializer()))
-        .entries()
-        .first()
-    assertThat(rows.map { it.payload.mutation }).containsExactly(Add("c"))
+    val rows = stores.delegate.open("tags", Add.serializer()).entries().first()
+    assertThat(rows.map { it.payload }).containsExactly(Add("c"))
     assertThat(tags.data.first()?.value).isEqualTo(listOf("c"))
   }
 
@@ -1806,12 +1780,14 @@ class OptimisticQueryStoreTest {
           stores = stores,
           clock = testClock(START),
         )
-        .create(CoroutineScope(backgroundScope.coroutineContext + owner))
+        .create(
+          CoroutineScope(backgroundScope.coroutineContext + owner),
+          setOf(UnitTags.sender { _, _ -> }),
+        )
         .optimisticStores<Unit, List<String>, Add>(
-          name = "tags",
+          UnitTags,
           base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
           apply = ::addOnce,
-          send = { _, _, _ -> },
         )
     val tags = sets(Unit)
     val seen = mutableListOf<List<String>?>()
@@ -1848,12 +1824,11 @@ class OptimisticQueryStoreTest {
           stores = stores,
           clock = testClock(START),
         )
-        .create(backgroundScope)
-        .optimisticStore<List<String>, Add>(
-          name = "tags",
+        .create(backgroundScope, setOf(Tags.sender { _, _ -> throw PermanentFailure("No") }))
+        .optimisticStore(
+          Tags,
           base = QueryStore.inMemory(Fetched(listOf("a"), START)),
           apply = ::addOnce,
-          send = { _, _ -> throw PermanentFailure("No") },
         )
     val handle = tags.mutate(Add("b"))
     handle.stored.await()
@@ -1947,16 +1922,20 @@ class OptimisticQueryStoreTest {
           stores = stores,
           clock = testClock(START),
         )
-        .create(backgroundScope)
+        .create(
+          backgroundScope,
+          setOf(
+            UnitTags.sender { change, _ ->
+              if (rejected.value) {
+                throw PermanentFailure("Rejected ${change.mutation}")
+              }
+            }
+          ),
+        )
         .optimisticStores<Unit, List<String>, Add>(
-          name = "tags",
+          UnitTags,
           base = { QueryStore.inMemory(Fetched(emptyList(), START)) },
           apply = ::addOnce,
-          send = { _, add, _ ->
-            if (rejected.value) {
-              throw PermanentFailure("Rejected $add")
-            }
-          },
         )
     val tags = sets(Unit)
     backgroundScope.launch { tags.data.collect {} }
@@ -1995,12 +1974,11 @@ class OptimisticQueryStoreTest {
         stores = stores,
         clock = testClock(START),
       )
-      .create(backgroundScope)
-      .optimisticStore<List<String>, Add>(
-        name = "tags",
+      .create(backgroundScope, setOf(Tags.sender(send = send)))
+      .optimisticStore(
+        Tags,
         base = QueryStore.inMemory(Fetched(listOf("a"), START)),
         apply = ::addOnce,
-        send = send,
       )
 
   /**
@@ -2039,14 +2017,13 @@ private class CounterServer(
   }
 }
 
-/** A count over [base] that [server] answers each change for, with the server's count. */
-private fun DataScope.counterStore(server: CounterServer, base: QueryStore<Int>) =
-  optimisticStore<Int, Int>(
-    name = "count",
-    base = base,
-    apply = { value, delta -> (value ?: 0) + delta },
-    exchange = server::exchange,
-  )
+/** Sends each change of a count to [server], which answers with its count. */
+private fun counterSender(server: CounterServer) =
+  Counter.exchangingSender(exchange = server::exchange)
+
+/** A count over [base], in a data scope created with [counterSender]. */
+private fun DataScope.counterStore(base: QueryStore<Int>) =
+  optimisticStore(Counter, base = base, apply = { value, delta -> (value ?: 0) + delta })
 
 /**
  * A counter server that reports the ids of the increments its count holds. It counts each delivery
@@ -2080,17 +2057,14 @@ private class TallyServer(
   }
 }
 
-/** A tally over [base] that [server] answers each change for, with an apply that skips repeats. */
-private fun DataScope.tallyStore(
-  server: TallyServer,
-  base: QueryStore<OptimisticQueryStoreTest.Tally>,
-) =
-  optimisticStore<OptimisticQueryStoreTest.Tally, OptimisticQueryStoreTest.Increment>(
-    name = "tally",
-    base = base,
-    apply = ::countOnce,
-    exchange = server::exchange,
-  )
+/** Sends each change of a tally to [server], which answers with its tally. */
+private fun tallySender(server: TallyServer) = Tallies.exchangingSender(exchange = server::exchange)
+
+/**
+ * A tally over [base] with an apply that skips repeats, in a data scope created with [tallySender].
+ */
+private fun DataScope.tallyStore(base: QueryStore<OptimisticQueryStoreTest.Tally>) =
+  optimisticStore(Tallies, base = base, apply = ::countOnce)
 
 /**
  * Adds the increment unless the tally already lists it, so a value fetched after the server took
@@ -2127,10 +2101,10 @@ private class HoldingOutboxStores(private val failure: Throwable? = null) : Outb
   override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
     val rows = delegate.open(name, serializer)
     return object : OutboxStore<E> by rows {
-      override suspend fun insert(key: String, payload: E): EntryId {
+      override suspend fun insert(id: EntryId, key: String, payload: E) {
         held.first { !it }
         failure?.let { throw it }
-        return rows.insert(key, payload)
+        rows.insert(id, key, payload)
       }
     }
   }
@@ -2168,6 +2142,57 @@ private class SlowEntryOutboxStores : OutboxStores {
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+
+/** The tag list's outbox, whose server answers nothing. */
+private val Tags = OutboxKey<OptimisticQueryStoreTest.Add>("tags")
+
+/** The tag list's outbox, whose server answers with the list it holds. */
+private val ReplyingTags = OutboxKey.replying<OptimisticQueryStoreTest.Add, List<String>>("tags")
+
+/** The tag lists' outbox, one list per item name. */
+private val TagsByItem =
+  OutboxKey<KeyedMutation<String, OptimisticQueryStoreTest.Add>>("tagsByItem")
+
+/** [TagsByItem] whose server answers with the list it holds. */
+private val ReplyingTagsByItem =
+  OutboxKey.replying<KeyedMutation<String, OptimisticQueryStoreTest.Add>, List<String>>(
+    "tagsByItem"
+  )
+
+/** The tag lists' outbox, one list per name, beside [TagsByItem]. */
+private val TagsByName =
+  OutboxKey<KeyedMutation<String, OptimisticQueryStoreTest.Add>>("tagsByName")
+
+/**
+ * A new key for the tag lists' outbox, one list per [OptimisticQueryStoreTest.Item]. Each call
+ * builds a new key with a new serializer object.
+ */
+private fun itemTags() =
+  OutboxKey<KeyedMutation<OptimisticQueryStoreTest.Item, OptimisticQueryStoreTest.Add>>(
+    "tagsByItem"
+  )
+
+/** A tag list set keyed by [Unit], so its one key still orders its rows by a serialized form. */
+private val UnitTags = OutboxKey<KeyedMutation<Unit, OptimisticQueryStoreTest.Add>>("tags")
+
+/** The note's outbox, whose server answers nothing. */
+private val Note = OutboxKey<OptimisticQueryStoreTest.SetText>("note")
+
+/** The note's outbox, whose server answers with the text it holds. */
+private val ReplyingNote = OutboxKey.replying<OptimisticQueryStoreTest.SetText, String>("note")
+
+/** The bump counter's outbox, whose server answers with its count. */
+private val Bumps = OutboxKey.replying<OptimisticQueryStoreTest.Bump, Int>("count")
+
+/** The plain counter's outbox, whose server answers with its count. */
+private val Counter = OutboxKey.replying<Int, Int>("count")
+
+/** The tally's outbox, whose server answers with its tally. */
+private val Tallies =
+  OutboxKey.replying<OptimisticQueryStoreTest.Increment, OptimisticQueryStoreTest.Tally>("tally")
+
+/** The ops' outbox, whose server answers nothing. */
+private val Ops = OutboxKey<OptimisticQueryStoreTest.Op>("ops")
 
 /** Adds the tag once, as the store requires: a tag already there leaves the list as it is. */
 private fun addOnce(current: List<String>?, add: OptimisticQueryStoreTest.Add): List<String> {

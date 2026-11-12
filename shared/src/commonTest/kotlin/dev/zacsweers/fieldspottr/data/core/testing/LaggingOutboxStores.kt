@@ -28,7 +28,9 @@ import kotlinx.serialization.json.Json
  * row list arrives [rowsLag] late, so the list can lag the store. With [firstListOnly], the list
  * emits once and then never again, like a list that never catches up. With [decodeEachRead], each
  * list holds new payload objects, as a durable store that decodes on each read does. While
- * [failEntryReads] is set, each read of a single row throws, like a disk error.
+ * [failEntryReads] is set, each read of a single row throws, like a disk error. While
+ * [failCommittedWrite] is set, a write that marks a Sent row committed throws and writes nothing,
+ * like a process that dies between a commit and its row write.
  */
 class LaggingOutboxStores(
   private val insertStartsAfter: Duration = Duration.ZERO,
@@ -43,18 +45,22 @@ class LaggingOutboxStores(
 
   @Volatile var failEntryReads = false
 
+  @Volatile var failCommittedWrite = false
+
   override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
     val rows = delegate.open(name, serializer)
     return object : OutboxStore<E> by rows {
-      override suspend fun insert(key: String, payload: E): EntryId {
+      override suspend fun insert(id: EntryId, key: String, payload: E) {
         delay(insertStartsAfter)
-        val id = rows.insert(key, payload)
+        rows.insert(id, key, payload)
         delay(insertReturnsAfter)
-        return id
       }
 
       override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
         delay(updateTakes)
+        check(!failCommittedWrite || entry.status != OutboxStatus.Sent || !entry.committed) {
+          "The process died before the row was marked committed"
+        }
         return rows.update(entry, expected)
       }
 

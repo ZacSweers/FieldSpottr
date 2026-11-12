@@ -5,20 +5,27 @@ package dev.zacsweers.fieldspottr.data.core.impl
 import dev.zacsweers.fieldspottr.data.core.ActionRunner
 import dev.zacsweers.fieldspottr.data.core.DataQuery
 import dev.zacsweers.fieldspottr.data.core.DataScope
+import dev.zacsweers.fieldspottr.data.core.DefaultPayloadFormat
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.KeyedDataQueries
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
+import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStores
 import dev.zacsweers.fieldspottr.data.core.Outbox
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
+import dev.zacsweers.fieldspottr.data.core.OutboxEntry
+import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxScheduler
+import dev.zacsweers.fieldspottr.data.core.OutboxSender
+import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.OutboxStores
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
+import dev.zacsweers.fieldspottr.data.core.asCodec
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -35,6 +42,8 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,14 +51,25 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.Json
+
+/**
+ * The JSON that encodes a key into its rows' ordering key. Defaults are encoded, so a key's
+ * ordering key does not change when a later version changes a property's default.
+ */
+private val ORDER_KEY_JSON = Json { encodeDefaults = true }
+
+/** The ordering key of a single optimistic store's rows, which all share one order. */
+private const val WHOLE_QUEUE = ""
 
 /**
  * The factory behind `DataScope.Factory(...)`: the settings every data scope from one factory
  * shares, the outbox names they have running, and what every running outbox still has to send. The
- * names live here, so scopes from one factory cannot run two outboxes over the same rows. The
+ * names live here, so scopes from one factory cannot run two senders over the same rows. The
  * backlogs live here, so one combined state reaches [backlog] and the scheduler.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
@@ -86,7 +106,8 @@ internal class RealDataScopeFactory(
   override val backlog: Flow<OutboxBacklog> =
     combined.filterNotNull().map { it.asOf(clock.now()) }.distinctUntilChanged()
 
-  override fun create(scope: CoroutineScope): DataScope = RealDataScope(scope, this)
+  override fun create(scope: CoroutineScope, senders: Set<OutboxSender<*>>): DataScope =
+    RealDataScope(scope, this, senders)
 
   /**
    * [onFailure] for failures that belong to the factory itself, like a scheduler that throws. It
@@ -178,16 +199,16 @@ internal class RealDataScopeFactory(
   }
 
   /**
-   * Records an outbox for [name] until [scope] completes or the returned release runs, whichever
-   * comes first. Two outboxes over one name's rows would drain them on separate runners, which
+   * Records a sender for [name] until [scope] completes or the returned release runs, whichever
+   * comes first. Two senders over one name's rows would drain them on separate runners, which
    * breaks per-key send order, so a second one fails here.
    */
   fun claimOutbox(name: String, scope: CoroutineScope): () -> Unit {
     while (true) {
       val current = runningOutboxes.load()
       check(name !in current) {
-        "An outbox named $name is already running. Build each outbox in one owner, or let the " +
-          "previous owner's scope finish first."
+        "A sender for outbox $name already runs in another data scope from this factory. Create " +
+          "one data scope with each sender, or let the previous data scope's scope finish first."
       }
       if (runningOutboxes.compareAndSet(current, current.adding(name))) {
         break
@@ -237,16 +258,22 @@ private fun OutboxBacklog.asOf(now: Instant): OutboxBacklog =
  * Every failure handler reaches its parts through [guarded], once: the factory's handlers when the
  * scope is built, and each handler of its own when the part is built. So no part ever calls a
  * handler that can throw, and none has to guard it again.
+ *
+ * It builds an outbox engine for each of [senders] when it is built, so their rows drain from then
+ * on. A handle builder attaches to the engine of its key.
  */
-@OptIn(DelicateDataLayerApi::class)
+@OptIn(DelicateDataLayerApi::class, ExperimentalAtomicApi::class)
 private class RealDataScope(
   override val scope: CoroutineScope,
   private val factory: RealDataScopeFactory,
+  senders: Set<OutboxSender<*>>,
 ) : DataScope {
   /** The factory's handler for every failure without a handler of its own, guarded. */
   private val defaultOnFailure = guarded(factory.onFailure)
   /** The factory's handler for failed fetches, guarded. */
   private val defaultOnFetchFailure = guarded(factory.onFetchFailure)
+  /** Each sender's engine, by key name. */
+  private val engines: Map<String, RealOutbox<*>> = engines(senders)
 
   /**
    * [handler] made safe to call from paths that must not fail, like a drain or a watcher. A throw
@@ -342,105 +369,186 @@ private class RealDataScope(
     }
   }
 
-  override fun <E> outbox(
-    name: String,
-    serializer: KSerializer<E>,
-    send: suspend (E, EntryId) -> Unit,
-    revert: suspend (E) -> Unit,
-    retry: RetryPolicy?,
-    onFailure: ((Throwable) -> Unit)?,
-  ): Outbox<E> {
-    val handler = handlerOf(onFailure)
-    return claimed(name, serializer) { store ->
-      newOutbox(name, store, send, revert, retry, handler)
-    }
-  }
-
-  override fun <E> outbox(
-    name: String,
-    store: OutboxStore<E>,
-    send: suspend (E, EntryId) -> Unit,
-    revert: suspend (E) -> Unit,
-    retry: RetryPolicy?,
-    onFailure: ((Throwable) -> Unit)?,
-  ): Outbox<E> = newOutbox(name, store, send, revert, retry, handlerOf(onFailure))
-
   /**
-   * An outbox over [store] that names itself [name] in the failures it reports to [onFailure],
-   * which is already guarded.
+   * Builds an engine for each of [senders], keyed by name. Names must be unique. It first opens
+   * every sender's rows and claims each name opened from the factory's store set, and only then
+   * builds the engines, so a failure in the first part leaves nothing running. Opening comes before
+   * the claim, so a store that fails to open leaves its name free, and opening again is harmless. A
+   * failure releases every claim made, and an engine that fails to build cancels the engines built
+   * before it, so the caller can create the scope again. A sender over a store of its own is
+   * checked only within this scope, since nothing else knows its store.
    */
-  private fun <E> newOutbox(
-    name: String,
-    store: OutboxStore<E>,
-    send: suspend (E, EntryId) -> Unit,
-    revert: suspend (E) -> Unit,
-    retry: RetryPolicy?,
-    onFailure: (Throwable) -> Unit,
-  ): Outbox<E> =
-    RealOutbox(
-      name = name,
-      scope = scope,
-      actions = RealActionRunner(scope, onFailure),
-      send = send,
-      revert = revert,
-      store = store,
-      policy = retry ?: factory.retry,
-      online = factory.online,
-      clock = factory.clock,
-      onFailure = onFailure,
-      trackBacklog = { factory.track(scope) },
-    )
-
-  override fun <K : Any, T, M> optimisticStores(
-    name: String,
-    base: (key: K) -> QueryStore<T>,
-    keySerializer: KSerializer<K>,
-    serializer: KSerializer<M>,
-    apply: (current: T?, mutation: M) -> T?,
-    deliver: suspend (key: K, mutation: M, id: EntryId) -> Delivery<T>,
-    retry: RetryPolicy?,
-    onFailure: ((Throwable) -> Unit)?,
-  ): OptimisticQueryStores<K, T, M> {
-    val handler = handlerOf(onFailure)
-    return claimed(name, KeyedMutation.serializer(keySerializer, serializer)) { rows ->
-      RealOptimisticQueryStores(
-        rows = rows,
-        // The set drops changes by writing their rows, so it needs the store beside the outbox
-        outbox = { send ->
-          newOutbox(name, rows, send = send, revert = {}, retry = retry, onFailure = handler)
-        },
-        keySerializer = keySerializer,
-        base = base,
-        apply = apply,
-        deliver = deliver,
-        clock = factory.clock,
-        onFailure = handler,
-        // A scope with no dispatcher of its own runs on Default, so the views do too
-        context = scope.coroutineContext[ContinuationInterceptor] ?: Dispatchers.Default,
-      )
+  private fun engines(senders: Set<OutboxSender<*>>): Map<String, RealOutbox<*>> {
+    if (senders.isEmpty()) {
+      return emptyMap()
     }
-  }
-
-  /**
-   * Opens [name]'s rows from the store set, claims the name for this scope and builds over the
-   * rows. Opening comes first, so a store that fails to open leaves the name free, and opening
-   * again is harmless. A [build] that throws, like one whose rows flow fails to open, frees the
-   * name too, so the owner can try again.
-   */
-  private fun <E, R> claimed(
-    name: String,
-    serializer: KSerializer<E>,
-    build: (OutboxStore<E>) -> R,
-  ): R {
-    val store = factory.stores.open(name, serializer)
-    val release = factory.claimOutbox(name, scope)
-    return try {
-      build(store)
+    val duplicate = senders.groupBy { it.key.name }.entries.firstOrNull { it.value.size > 1 }
+    require(duplicate == null) {
+      "The senders for this data scope hold ${duplicate?.value?.size} senders for outbox " +
+        "${duplicate?.key}. Contribute one sender per outbox name."
+    }
+    val releases = ArrayList<() -> Unit>()
+    // A child of the scope's job, so the engines stop with the scope, and engines built before a
+    // failure stop too
+    val engineJob = SupervisorJob(scope.coroutineContext[Job])
+    val engineScope = scope + engineJob
+    try {
+      val opened = senders.map { sender ->
+        val store = sender.store ?: factory.stores.open(sender.key.name, sender.key.serializer)
+        if (sender.store == null) {
+          releases += factory.claimOutbox(sender.key.name, scope)
+        }
+        sender to store
+      }
+      return opened.associate { (sender, store) ->
+        sender.key.name to newEngine(sender, store, engineScope)
+      }
     } catch (t: Throwable) {
-      release()
+      engineJob.cancel()
+      releases.forEach { it() }
       throw t
     }
   }
+
+  /** The engine that drains [sender]'s rows in [store], in [engineScope]. */
+  @Suppress("UNCHECKED_CAST")
+  private fun <E> newEngine(
+    sender: OutboxSender<E>,
+    store: Any,
+    engineScope: CoroutineScope,
+  ): RealOutbox<E> {
+    val onFailure = handlerOf(sender.onFailure)
+    val replySerializer = sender.key.replySerializer as KSerializer<Any?>?
+    return RealOutbox(
+      name = sender.key.name,
+      descriptor = sender.key.serializer.descriptor,
+      replyDescriptor = sender.key.replySerializer?.descriptor,
+      scope = engineScope,
+      deliver = sender.deliver,
+      replyCodec =
+        replySerializer?.let {
+          if (sender.store == null) {
+            factory.stores.replyCodec(it)
+          } else {
+            it.asCodec(DefaultPayloadFormat)
+          }
+        },
+      store = store as OutboxStore<E>,
+      policy = sender.retry ?: factory.retry,
+      online = factory.online,
+      clock = factory.clock,
+      onFailure = onFailure,
+      trackBacklog = { factory.track(engineScope) },
+    )
+  }
+
+  /**
+   * The engine of [key]'s sender, checked against [key]. It throws when this scope has no sender
+   * for [key], or when the sender's key differs from [key] in its payload type or its answer type.
+   * Both keys must be plain, or both replying with one answer type, since a store would otherwise
+   * take an answer of another type as its truth.
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun <E> engineFor(key: OutboxKey<E, *>): RealOutbox<E> {
+    val engine =
+      checkNotNull(engines[key.name]) {
+        "No sender for outbox ${key.name} in this data scope. Contribute ${key.name}'s sender to " +
+          "the set passed to DataScope.Factory.create."
+      }
+    val replyDescriptor = key.replySerializer?.descriptor
+    val matches =
+      engine.descriptor == key.serializer.descriptor && engine.replyDescriptor == replyDescriptor
+    check(matches) {
+      "The sender for outbox ${key.name} has payloads of type ${engine.descriptor} and answers " +
+        "of type ${engine.replyDescriptor ?: "none"}, but the handle's key has payloads of type " +
+        "${key.serializer.descriptor} and answers of type ${replyDescriptor ?: "none"}, so the " +
+        "handle cannot attach. Use the one OutboxKey val for both the sender and the handle."
+    }
+    return engine as RealOutbox<E>
+  }
+
+  override fun <E> outbox(
+    key: OutboxKey<E, *>,
+    apply: suspend (payload: E, id: EntryId) -> Unit,
+    revert: suspend (payload: E, id: EntryId) -> Unit,
+    onFailure: ((Throwable) -> Unit)?,
+  ): Outbox<E> {
+    val owner =
+      object : RowOwner<E> {
+        override suspend fun apply(payload: E, id: EntryId) = apply(payload, id)
+
+        override suspend fun revert(payload: E, id: EntryId) = revert(payload, id)
+
+        // A plain outbox keeps no state that a sent row changes
+        override suspend fun commit(
+          entry: OutboxEntry<E>,
+          delivery: Delivery<*>?,
+          sentAt: Instant,
+          expected: OutboxStatus,
+        ) {}
+      }
+    return engineFor(key).attach(owner, handlerOf(onFailure))
+  }
+
+  override fun <T, M> optimisticStore(
+    key: OutboxKey<M, T>,
+    base: QueryStore<T>,
+    apply: (current: T?, mutation: M) -> T?,
+    onFailure: ((Throwable) -> Unit)?,
+  ): OptimisticQueryStore<T, M> {
+    val engine = engineFor(key)
+    val handler = handlerOf(onFailure)
+    // The rows hold the change itself, so the set sees them through a view with a Unit key
+    return newStores(
+        rows = engine.store.keyedByUnit(),
+        attach = { owner -> engine.attach(owner.forChange(), handler).keyedByUnit() },
+        orderKey = { WHOLE_QUEUE },
+        base = { base },
+        apply = apply,
+        onFailure = handler,
+      )
+      .invoke(Unit)
+  }
+
+  override fun <K : Any, T, M> optimisticStores(
+    key: OutboxKey<KeyedMutation<K, M>, T>,
+    base: (key: K) -> QueryStore<T>,
+    keySerializer: KSerializer<K>,
+    apply: (current: T?, mutation: M) -> T?,
+    onFailure: ((Throwable) -> Unit)?,
+  ): OptimisticQueryStores<K, T, M> {
+    val engine = engineFor(key)
+    val handler = handlerOf(onFailure)
+    return newStores(
+      rows = engine.store,
+      attach = { owner -> engine.attach(owner, handler) },
+      orderKey = { k -> ORDER_KEY_JSON.encodeToString(keySerializer, k) },
+      base = base,
+      apply = apply,
+      onFailure = handler,
+    )
+  }
+
+  /** An optimistic store set over [rows] in this scope, reporting to [onFailure], guarded. */
+  private fun <K : Any, T, M> newStores(
+    rows: OutboxStore<KeyedMutation<K, M>>,
+    attach: (RowOwner<KeyedMutation<K, M>>) -> OwnedRows<KeyedMutation<K, M>>,
+    orderKey: (K) -> String,
+    base: (key: K) -> QueryStore<T>,
+    apply: (current: T?, mutation: M) -> T?,
+    onFailure: (Throwable) -> Unit,
+  ): RealOptimisticQueryStores<K, T, M> =
+    RealOptimisticQueryStores(
+      rows = rows,
+      attach = attach,
+      orderKey = orderKey,
+      base = base,
+      apply = apply,
+      clock = factory.clock,
+      onFailure = onFailure,
+      // A scope with no dispatcher of its own runs on Default, so the views do too
+      context = scope.coroutineContext[ContinuationInterceptor] ?: Dispatchers.Default,
+    )
 
   /**
    * A query in this scope that hears the factory's network state. It reports to [onFailure], which

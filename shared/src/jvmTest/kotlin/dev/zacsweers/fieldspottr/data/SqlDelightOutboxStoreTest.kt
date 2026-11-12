@@ -25,6 +25,7 @@ import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OLD_CHANGE
+import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
 import dev.zacsweers.fieldspottr.data.core.PayloadCodec
@@ -33,9 +34,11 @@ import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.assertOneTypePerName
 import dev.zacsweers.fieldspottr.data.core.assertUnreadableRowIsHandled
+import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.OutboxStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.metro.suspendLazy
 import java.util.concurrent.atomic.AtomicLong
@@ -101,7 +104,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
       SqlDelightOutboxStores(queries, Dispatchers.IO, payloadFormat = TaggedFormat)
         .open("notes", String.serializer())
 
-    store.insert("k", "hello")
+    store.insertNew("k", "hello")
 
     assertThat(store.entries().first().single().payload).isEqualTo("hello")
     // A second store over the same rows that returns each payload as stored
@@ -132,7 +135,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
         String.serializer().asCodec(Json),
         Dispatchers.IO,
       )
-    val id = store.insert("k", "a")
+    val id = store.insertNew("k", "a")
     // As a newer version would write it
     db
       .await()
@@ -145,6 +148,9 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
         reverted = 0,
         retryAt = null,
         settledAt = null,
+        committed = 0,
+        sentAt = null,
+        reply = null,
         outbox = "future",
         id = id.value,
         expectedStatus = "queued",
@@ -158,7 +164,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
   }
 
   @Test
-  fun `an insert whose caller is cancelled during the write returns the id`() = runTest {
+  fun `an insert whose caller is cancelled during the write still stores the row`() = runTest {
     val db = suspendLazy { temporaryDatabase.db() }
     lateinit var caller: Job
     // Cancels the caller from inside the transaction, which still commits
@@ -172,7 +178,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
       SqlDelightOutboxStore({ db.await().outboxRowQueries }, "cancel", cancelling, Dispatchers.IO)
     var inserted: Result<EntryId>? = null
 
-    caller = launch { inserted = runCatching { store.insert("k", "a") } }
+    caller = launch { inserted = runCatching { store.insertNew("k", "a") } }
     caller.join()
 
     val rows = store.entries().first()
@@ -210,6 +216,9 @@ class SqlDelightUnreadableRowTest {
       reverted = 1,
       retryAt = null,
       settledAt = null,
+      committed = 0,
+      sentAt = null,
+      reply = null,
       outbox = "changes",
       id = "failed",
       expectedStatus = "queued",
@@ -223,10 +232,9 @@ class SqlDelightUnreadableRowTest {
           online = MutableStateFlow(true),
           stores = SqlDelightOutboxStores({ queries }, Dispatchers.IO),
         )
-        .create(scope)
+        .create(scope, setOf(OutboxKey<String>("changes").sender { _, _ -> }))
 
-    // Nothing collects the outbox's entries
-    data.outbox("changes", String.serializer(), send = { _, _ -> })
+    // The sender alone reads the rows, with no handle and nothing collecting entries
     val reported =
       withTimeout(10.seconds) {
         while (failures.all.count { it is UnreadableEntryException } < 2) {
@@ -259,8 +267,11 @@ class SqlDelightOutboxScaleTest {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val online = MutableStateFlow(false)
     val failures = TestFailures()
-    val data = DataScope.Factory(onFailure = failures, online = online).create(scope)
-    val outbox = data.outbox("store", store, send = { _, _ -> })
+    val rows = OutboxKey<String>("store")
+    val data =
+      DataScope.Factory(onFailure = failures, online = online)
+        .create(scope, setOf(rows.sender(store = store) { _, _ -> }))
+    val outbox = data.outbox(rows)
     val handles = List(ROWS) { outbox.enqueue("p$it", key = "k") }
     withTimeout(60.seconds) { handles.forEach { it.stored.await() } }
     driver.rowsRead.set(0)
@@ -374,8 +385,8 @@ class SqlDelightOutboxStoresClearAllTest {
     val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
     val tags = stores.open("tags", String.serializer())
     val notes = stores.open("notes", String.serializer())
-    val id = tags.insert("k", "a")
-    notes.insert("k", "b")
+    val id = tags.insertNew("k", "a")
+    notes.insertNew("k", "b")
 
     stores.clearAll()
 

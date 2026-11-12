@@ -8,8 +8,6 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.PersistentSet
 import kotlinx.collections.immutable.persistentHashMapOf
@@ -23,9 +21,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.KSerializer
 
 /**
- * Rows in memory, lost with the process. A settled row stays observable for [keepSettledFor], so a
- * handle that re-attaches soon after still sees its outcome, and the next write prunes it. Payloads
- * are kept as objects, so no row is ever unreadable.
+ * Rows in memory, lost with the process. A row that is [isDone] stays observable for
+ * [keepSettledFor], so a handle that re-attaches soon after still sees its outcome, and the next
+ * write prunes it. Payloads are kept as objects, so no row is ever unreadable.
  */
 internal fun <E> inMemoryOutboxStore(
   keepSettledFor: Duration = 1.minutes,
@@ -67,25 +65,23 @@ class InMemoryOutboxStores : OutboxStores {
   }
 }
 
-@OptIn(ExperimentalUuidApi::class)
 private class InMemoryOutboxStore<E>(
   private val keepSettledFor: Duration,
   private val time: TimeSource,
 ) : OutboxStore<E> {
   private val rows = MutableStateFlow(Rows<E>())
 
-  override suspend fun insert(key: String, payload: E): EntryId {
-    val id = EntryId(Uuid.random().toString())
+  override suspend fun insert(id: EntryId, key: String, payload: E) {
     val row = OutboxEntry(id, key, payload, OutboxStatus.Queued)
     rows.update { current ->
       val pruned = current.pruned()
+      require(id !in pruned.all) { "Row ${id.value} is already stored" }
       Rows(
         all = pruned.all.putting(id, Row(row, settledAt = null)),
         byKey = pruned.byKey.putting(key, (pruned.byKey[key] ?: persistentSetOf()).adding(id)),
         settled = pruned.settled,
       )
     }
-    return id
   }
 
   override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
@@ -103,10 +99,14 @@ private class InMemoryOutboxStore<E>(
             lastError = entry.lastError,
             reverted = entry.reverted,
             retryAt = entry.retryAt,
+            committed = entry.committed,
+            sentAt = entry.sentAt,
+            reply = entry.reply,
           )
         val pruned = current.pruned()
-        if (entry.status.isSettled) {
-          val settledAt = time.markNow()
+        if (updated.status.isSettled) {
+          // A Sent row waits in all until it is committed, and only then gets a settled time
+          val settledAt = time.markNow().takeIf { updated.isDone }
           val key = updated.key
           val waiting = pruned.byKey[key]?.removing(entry.id)
           Rows(
@@ -117,7 +117,12 @@ private class InMemoryOutboxStore<E>(
               } else {
                 pruned.byKey.putting(key, waiting)
               },
-            settled = pruned.settled.putting(entry.id, settledAt),
+            settled =
+              if (settledAt == null) {
+                pruned.settled
+              } else {
+                pruned.settled.removing(entry.id).putting(entry.id, settledAt)
+              },
           )
         } else {
           val all = pruned.all.putting(entry.id, Row(updated, settledAt = null))
@@ -130,7 +135,7 @@ private class InMemoryOutboxStore<E>(
 
   override fun entries(): Flow<List<OutboxEntry<E>>> =
     rows
-      .map { current -> current.all.values.map { it.entry }.filterNot { it.status.isSettled } }
+      .map { current -> current.all.values.map { it.entry }.filterNot { it.isDone } }
       .distinctUntilChanged()
 
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> =
@@ -145,6 +150,10 @@ private class InMemoryOutboxStore<E>(
       .distinctUntilChanged()
 
   override suspend fun head(key: String): OutboxEntry<E>? = rows.value.headOf(key)
+
+  // Rows are objects in memory, so a scan costs no decoding
+  override suspend fun owed(key: String): List<OutboxEntry<E>> =
+    rows.value.all.values.mapNotNull { row -> row.entry.takeIf { it.key == key && it.isOwed } }
 
   /** Drops every row, settled ones included, so each handle reads its row as absent. */
   fun clear() {
@@ -194,7 +203,7 @@ private class InMemoryOutboxStore<E>(
    * @property all every row, settled ones included until they expire.
    * @property byKey each key's rows that are neither Sent nor Discarded, oldest first. A key with
    *   none has no entry.
-   * @property settled when each settled row settled, oldest first, for pruning.
+   * @property settled when each row that is [isDone] settled, oldest first, for pruning.
    */
   private class Rows<E>(
     val all: PersistentMap<EntryId, Row<E>> = persistentMapOf(),
