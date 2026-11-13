@@ -21,7 +21,7 @@ ktor = "3.6.1"
 mapsCompose = "9.0.1"
 metro = "1.5.2"
 okio = "3.18.2"
-robolectric = "4.17"
+robolectric = "4.18"
 sqldelight = "2.4.1"
 
 [plugins]
