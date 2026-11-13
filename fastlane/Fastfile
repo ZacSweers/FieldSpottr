@@ -129,6 +129,8 @@ platform :ios do
     build_app(
       project: "FieldSpottr/FieldSpottr.xcodeproj",
       scheme: options[:scheme],
+      # Release uses the App Store signing credentials installed by match.
+      configuration: "Release",
       archive_path: archive_path,
       buildlog_path: "build/fastlane-buildlog",
       skip_package_ipa: true,
