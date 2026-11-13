@@ -31,8 +31,8 @@ import kotlinx.serialization.Serializable
  * before this store existed, like in a background drain, keeps showing until the store commits it,
  * which happens once the store is built.
  *
- * `apply` runs on the data scope's dispatcher each time the truth or the rows change. Keep it
- * cheap, pure and idempotent, as [DataScope.optimisticStore] explains. The first commits check
+ * `apply` runs on the data scope's dispatcher each time the truth or the rows change. Keep it cheap
+ * and pure, and idempotent where [DataScope.optimisticStore] asks. The first commits check
  * idempotence, and the first failure goes once to the store's `onFailure` handler, or to the
  * factory's when it has none. An `apply` that throws goes there too, and [data] leaves that change
  * out. It is reported once for as long as the store remembers the change, which lasts until the
@@ -54,7 +54,8 @@ import kotlinx.serialization.Serializable
  * Across a restart that guarantee cannot hold. A process that dies after a commit wrote the truth
  * and before the row was marked committed leaves the row owed, and the next process commits it
  * again on top of a truth that already holds it. That window, and a fetch that read the server
- * after it took the change but landed before the commit, are why `apply` must be idempotent.
+ * after it took the change but landed before the commit, are why `apply` must be idempotent for a
+ * change the store commits itself.
  *
  * Built by [DataScope.optimisticStore], or per key by [DataScope.optimisticStores].
  */

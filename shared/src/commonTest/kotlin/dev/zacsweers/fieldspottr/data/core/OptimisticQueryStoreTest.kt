@@ -10,6 +10,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
@@ -862,6 +863,46 @@ class OptimisticQueryStoreTest {
     scopes.assertNoFailures()
   }
 
+  /**
+   * Two edits of one note wait offline, and the store reopens over their rows, so the new set knows
+   * neither change. A retry of the first row puts a provisional mark on it, and the set learns of
+   * that change. The view still applies the rows in queue order, so the newer edit stays on top.
+   */
+  @Test
+  fun `a retried edit keeps its queue position after a reopen`() = runTest {
+    val scopes = testDataScopeFactory(clock = testClock(START), online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val note = QueryStore.inMemory(Fetched("draft", START))
+    fun build(scope: CoroutineScope) =
+      scopes
+        .create(scope, setOf(Note.sender(send = { _, _ -> })))
+        .optimisticStore<String, SetText>(Note, base = note, apply = { _, edit -> edit.text })
+    val before = build(owner)
+    before.mutate(SetText("first")).stored.awaitSucceeded()
+    before.mutate(SetText("second")).stored.awaitSucceeded()
+    owner.cancel()
+    owner.coroutineContext.job.join()
+
+    val after = build(backgroundScope)
+    after.data.test {
+      assertThat(awaitItem()?.value).isEqualTo("second")
+      val first = after.pending.first().first()
+      assertThat(first.mutation).isEqualTo(SetText("first"))
+      after.retry(first.id)
+      runCurrent()
+      expectNoEvents()
+
+      // Both rows send in order, and the view never leaves the newer edit
+      scopes.online.value = true
+      after.pending.first { it.isEmpty() }
+      runCurrent()
+      expectNoEvents()
+    }
+    assertThat(note.data.value?.value).isEqualTo("second")
+    scopes.assertNoFailures()
+  }
+
   @Test
   fun `an invalidate during a commit still leaves the truth stale`() = runTest {
     data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
@@ -1465,11 +1506,20 @@ class OptimisticQueryStoreTest {
     val seen = mutableListOf<Int?>()
     backgroundScope.launch { count.data.collect { seen += it?.value } }
     runCurrent()
-    count.mutate(Bump(1))
+    val handle = count.mutate(Bump(1))
+    advanceTimeBy(500.milliseconds)
+    runCurrent()
+    // The server has the bump while the insert has not returned
+    assertThat(server).isEqualTo(1)
+    assertThat(handle.stored.state.value).isNotEqualTo(OperationState.Succeeded)
+
     advanceTimeBy(5.seconds)
     runCurrent()
-    // One bump was made, so no value may count two
+    handle.awaitSucceeded()
+    // One bump was made, so the view counts it, and no value may count two
+    assertThat(seen.last()).isEqualTo(1)
     assertThat(seen.filter { it != null && it > 1 }).isEmpty()
+    failures.assertNone()
   }
 
   /**
@@ -1554,18 +1604,24 @@ class OptimisticQueryStoreTest {
     backgroundScope.launch { count.data.collect { seen += it?.value } }
     advanceTimeBy(2.seconds)
     runCurrent()
-    count.mutate(Bump(1))
+    val handle = count.mutate(Bump(1))
     // The send ends at +2s, and the rows list shows that at +3s
     advanceTimeBy(2.seconds + 100.milliseconds)
     runCurrent()
     // Sound so far: the value counts the one change
+    assertThat(seen.last()).isEqualTo(1)
     assertThat(seen.filter { it != null && it > 1 }).isEmpty()
     // A fetch from after the send, with the server's value
     count.write(server, clock.now())
     runCurrent()
     advanceTimeBy(5.seconds)
     runCurrent()
+    handle.awaitSucceeded()
+    assertThat(server).isEqualTo(1)
+    // The view still counts the one change, and never two
+    assertThat(seen.last()).isEqualTo(1)
     assertThat(seen.filter { it != null && it > 1 }).isEmpty()
+    failures.assertNone()
   }
 
   /**

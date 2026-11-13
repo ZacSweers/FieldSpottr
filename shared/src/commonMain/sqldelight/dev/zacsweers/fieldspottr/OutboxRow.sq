@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS outboxRow (
   committed INTEGER NOT NULL DEFAULT 0,
   -- Epoch millis when the send finished
   sentAt INTEGER,
-  -- The server's answer in the reply codec's format, kept until the row is committed. Null when the
-  -- server answered with nothing.
+  -- The server's answer in the reply codec's format, kept until the row is committed. The write
+  -- that marks the row committed clears it. Null when the server answered with nothing.
   reply TEXT
 );
 

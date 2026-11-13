@@ -12,7 +12,6 @@ import dev.zacsweers.fieldspottr.data.core.Ordering
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.update
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.collections.immutable.persistentHashMapOf
@@ -31,8 +30,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * [ActionRunner] over a map from each key to its newest entry. Each entry links to the one ahead of
- * it, so a new command finds its turn by walking back along its key.
+ * [ActionRunner] over a map from each key to its newest unsettled entry. Each entry links to the
+ * one ahead of it, so a new command finds its turn by walking back along its key. A key stays in
+ * the map until every command on it has settled.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealActionRunner(
@@ -48,7 +48,7 @@ internal class RealActionRunner(
 
   /**
    * Whether no command on [ordering]'s key is queued, running or settling. A key leaves the map
-   * only after its newest command settled, so a true answer means every command submitted on it
+   * only once every command on it settled, so a true answer means every command submitted on it
    * before this call has finished. [Ordering.Concurrent] has no key and is always idle.
    */
   internal fun isIdle(ordering: Ordering): Boolean {
@@ -147,18 +147,56 @@ internal class RealActionRunner(
     // Registered once linked, so it also runs for a job that ended before then, like one whose
     // scope was already cancelled
     if (key != null) {
-      entry.settled.invokeOnCompletion {
-        tails.update { m ->
-          if (m[key] === entry) {
-            m.removing(key)
-          } else {
-            m
-          }
-        }
-      }
+      entry.settled.invokeOnCompletion { releaseSettledTail(key) }
     }
     claimPredecessors(entry)
     entry.job?.start()
+  }
+
+  /**
+   * Runs each time a command on [key] settles. While the key's newest entry has settled, this
+   * replaces it with the nearest entry behind it that has not settled, or removes the key when no
+   * such entry is left. A newest command can settle first when it is cancelled while queued. The
+   * key then stays held while an older command still runs, and the next command waits for it.
+   *
+   * Any settling command may do this work for the key, so the result does not depend on the order
+   * the handlers run in. An entry chosen here may settle before the compare-and-set lands. Its own
+   * call then ran too early to see it as the newest. So the loop reads the key again after each
+   * write, and ends only on an unsettled newest entry or no entry. No settled entry then stays
+   * reachable from [tails].
+   */
+  private fun releaseSettledTail(key: ChainKey) {
+    while (true) {
+      val current = tails.load()
+      val tail = current[key]
+      if (tail == null || !tail.settled.isCompleted) {
+        return
+      }
+      val next = nearestUnsettled(tail)
+      val updated =
+        if (next == null) {
+          current.removing(key)
+        } else {
+          current.putting(key, next)
+        }
+      // The loop reads the key again either way. After a lost race it sees the newer state. After
+      // a write it checks whether the entry it chose settled in the meantime.
+      tails.compareAndSet(current, updated)
+    }
+  }
+
+  /**
+   * The nearest entry behind [settled] that has not settled, or null when every entry ahead of it
+   * has. An entry that settled without starting keeps its link, so the walk passes it. An entry
+   * that started cleared its link. It only started once everything ahead of it settled, so the walk
+   * may end there.
+   */
+  private fun nearestUnsettled(settled: Entry): Entry? {
+    var cursor = settled.predecessor
+    while (cursor != null && cursor.settled.isCompleted) {
+      cursor = cursor.predecessor
+    }
+    return cursor
   }
 
   /** An entry whose job waits to be started, so nothing runs until it is linked on its key. */
@@ -399,7 +437,8 @@ internal class Entry(
   val settled = Job()
   // One CAS decides. Nothing observes it.
   val claim = AtomicReference(Claim.Undecided)
-  // Written before the entry is published on its key. Cleared on start.
+  // Written before the entry is published on its key. Cleared on start. An entry that settles
+  // without starting keeps it, so walks from newer entries still reach the ones ahead of it.
   @Volatile var predecessor: Entry? = null
   private val runnerHandle =
     if (cancellable) {

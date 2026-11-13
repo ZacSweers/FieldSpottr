@@ -88,6 +88,12 @@ import kotlinx.coroutines.sync.withLock
  * | Dropped   | [discard], [clear], or a send that | nothing      | passed                    |
  * |           | left no record                     |              |                           |
  *
+ * A view applies the records first. Then it applies the list's rows in queue order, each by the
+ * table when the set knows its change, and by the list when it does not. Last, it applies the known
+ * changes the list does not show yet, in the order the set learned of them, like a change whose
+ * insert has not returned. So a change the set learns of late, like by a [retry] after a restart,
+ * keeps its place in the queue.
+ *
  * "Passed" means the list showed the row and a later list lacks it. Pending moves on when its
  * commit records it, when its attempt ends, or when [discard] or [clear] drops it. Dropped is
  * final. HandedOff means the owner's scope stopped: the row waits for the next owner, so the change
@@ -800,7 +806,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * a row meanwhile, so each compare-and-set retries until it wins or the row is settled. A row
    * cannot become Sent and committed meanwhile, since that waits for [commit], which needs the
    * caller's lock. A Sent row that waits for its commit is marked committed without one, so the old
-   * change never reaches the cleared truth.
+   * change never reaches the cleared truth. The same write drops the row's stored answer, since no
+   * commit reads it now.
    */
   private suspend fun discardPending(key: K): Map<EntryId, OutboxEntry<KeyedMutation<K, M>>> {
     val discarded = HashMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>()
@@ -815,7 +822,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       while (current != null && !current.isDone) {
         val dropped =
           if (current.status == OutboxStatus.Sent) {
-            current.copy(committed = true)
+            current.copy(committed = true, reply = null)
           } else {
             current.copy(status = OutboxStatus.Discarded, reverted = true)
           }
@@ -861,9 +868,17 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
   /**
    * A key's view of [stored] with its [slice], by the table in the class KDoc: records first, then
-   * the list's rows in flight that the set knows nothing about, then the changes the set knows as
-   * Pending or HandedOff, in the order the set learned of them. It reads nothing but its arguments
-   * and [apply], so the same truth and slice give the same value. A null slice gives [stored].
+   * the list's rows in queue order, then the changes the set knows that the list does not show yet,
+   * in the order the set learned of them. Each change applies at most once.
+   *
+   * A listed row applies in its queue position whatever the set knows of it, so a retry or a
+   * discard that teaches the set a change never moves it past a newer row. What the set knows
+   * decides whether the row applies, and the list decides only a row the set knows nothing about. A
+   * known change missing from the list goes last. Its insert has not returned or the list lags, and
+   * a key's inserts run in order, so its row comes after every row the list shows.
+   *
+   * It reads nothing but its arguments and [apply], so the same truth and slice give the same
+   * value. A null slice gives [stored].
    */
   private fun overlay(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Fetched<T>? {
     if (slice == null) {
@@ -871,15 +886,21 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     }
     val recorded = slice.committed.mapTo(HashSet()) { it.change }
     var result = withSent(stored, slice.committed)
+    val listed = HashSet<EntryId>(slice.rows.size)
     for (row in slice.rows) {
       val change = row.id
-      if (!row.shows(stored) || change in recorded || change in slice.known) {
+      listed += change
+      if (change in recorded) {
+        continue
+      }
+      val shows = slice.known[change]?.kind?.shows ?: row.shows(stored)
+      if (!shows) {
         continue
       }
       result = appliedOrSkipped(result, row.payload.mutation, change)
     }
     for ((change, known) in slice.known) {
-      if (known.kind?.shows != true || change in recorded) {
+      if (known.kind?.shows != true || change in recorded || change in listed) {
         continue
       }
       result = appliedOrSkipped(result, known.payload.mutation, change)

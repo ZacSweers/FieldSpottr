@@ -638,8 +638,8 @@ internal class RealOutbox<E>(
    * send, NonCancellable, since the server already has the change.
    *
    * With a handle that is ready and no older row on the key still owed, the handle commits the row
-   * first, and then one write marks it Sent and committed. A crash between the two leaves the row
-   * Sending, so it sends again, which the idempotency key makes safe.
+   * first, and then one write marks it Sent and committed, with no answer kept. A crash between the
+   * two leaves the row Sending, so it sends again, which the idempotency key makes safe.
    *
    * Otherwise the row is written Sent and not committed, with the answer encoded on it, and it is
    * owed to the handle. So is a row whose live commit threw, and then the commit runs again after a
@@ -654,7 +654,10 @@ internal class RealOutbox<E>(
       if (commit(handle, head, delivery, sentAt, expected = OutboxStatus.Sending)) {
         // Written or lost to a clear, no commit for the row runs again. A write that throws leaves
         // the row Sending, so it sends and commits again, and the handle keeps what it knows.
-        writeSent(head, head.copy(status = OutboxStatus.Sent, committed = true, sentAt = sentAt))
+        writeSent(
+          head,
+          head.copy(status = OutboxStatus.Sent, committed = true, sentAt = sentAt, reply = null),
+        )
         handle.owner.committed(head.id)
         return
       }
@@ -809,7 +812,8 @@ internal class RealOutbox<E>(
 
   /**
    * Settles one [row] owed to [handle], as [settledOwed] describes, and returns false when its
-   * commit threw, so the row stays owed.
+   * commit threw, so the row stays owed. A sent row drops its stored answer in the write that marks
+   * it committed. If that write fails, the row keeps the answer for the next commit.
    */
   private suspend fun settleOwed(handle: Attached<E>, row: OutboxEntry<E>): Boolean =
     withContext(NonCancellable) {
@@ -819,8 +823,9 @@ internal class RealOutbox<E>(
           return@withContext false
         }
         // Written or lost to a clear, no commit for the row runs again. A write that throws keeps
-        // the row owed, and the key settles again after a pause.
-        store.update(row.copy(committed = true), expected = OutboxStatus.Sent)
+        // the row owed with its answer, and the key settles again after a pause. The answer is
+        // cleared in the write that marks the row committed, so a commit that runs again reads it.
+        store.update(row.copy(committed = true, reply = null), expected = OutboxStatus.Sent)
         handle.owner.committed(row.id)
       } else if (row.status is OutboxStatus.Failed && !row.reverted) {
         onRow(row.id) {

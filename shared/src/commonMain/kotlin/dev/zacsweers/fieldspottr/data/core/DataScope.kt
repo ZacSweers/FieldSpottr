@@ -170,12 +170,20 @@ interface DataScope {
    *
    * @param apply returns the value with [mutation] applied. A null input means nothing is stored,
    *   and a null result removes the value. It runs on the data scope's dispatcher each time the
-   *   truth or the rows change, so keep it cheap and pure. It must also be idempotent: given a
-   *   value that already holds the change, it returns that value unchanged, as setting a field
-   *   does. A fetch that overlapped the send, or a resend after a restart, can pass it such a
-   *   value. A change that cannot be idempotent, like a counter's increment, takes
-   *   [exchangingSender] instead. The first 16 commits of the store check idempotence with one more
-   *   call each, and then the check stops.
+   *   truth or the rows change, so keep it cheap and pure. Its other rule depends on how the server
+   *   answers a send.
+   *
+   *   With [Delivery.Acknowledged], the store commits a sent change by applying it to the truth. A
+   *   fetch that overlapped the send, or a commit that runs again after a restart, can pass it a
+   *   value that already holds the change. So it must be idempotent: applying the same change twice
+   *   gives the same value as applying it once, as setting a field does. The first 16 of these
+   *   commits check idempotence with one more call each, and then the check stops.
+   *
+   *   With [Delivery.Replaced], the server's value becomes the truth, and [apply] only shows the
+   *   changes that still wait. So a change that is not idempotent, like a counter's increment, is
+   *   valid with [exchangingSender], and nothing checks it. When a fetch already holds an increment
+   *   that still waits, the store shows that increment twice, so the count is an estimate until the
+   *   server's answer replaces the truth.
    *
    *   A throw from it is reported to [onFailure] once for as long as the store remembers the
    *   change, and the store's data keeps flowing without that change. When it throws while a sent

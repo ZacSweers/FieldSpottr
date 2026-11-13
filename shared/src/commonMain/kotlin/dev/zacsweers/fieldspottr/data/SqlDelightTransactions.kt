@@ -17,7 +17,7 @@ import app.cash.sqldelight.SuspendingTransactionWithoutReturn
  * stays held past that timeout. Then the transaction rolls back and [body] runs again. [body] must
  * be safe to run more than once: its database writes roll back, but anything else it did stays.
  *
- * After the last attempt, or for any other failure, the error reaches the caller.
+ * After three failed attempts, or for any other failure, the caller receives the error.
  */
 internal suspend fun SuspendingTransacter.transactionRetryingConflicts(
   body: suspend SuspendingTransactionWithoutReturn.() -> Unit
