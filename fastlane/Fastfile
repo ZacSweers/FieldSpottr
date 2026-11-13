@@ -39,6 +39,16 @@ platform :ios do
   ]
 
   before_all do |lane|
+    signed_build = [:build, :build_prod, :build_fs].include?(lane) && !env_nil_or_blank('MATCH_PASSWORD')
+    if signed_build || [:certs, :recreate_certs].include?(lane)
+      app_store_connect_api_key(
+        is_key_content_base64: true,
+        in_house: false,
+      )
+      # Probe the same API match uses before Xcode setup or cloning the certificates repo.
+      UI.message("Checking Apple Developer access and required agreements...")
+      Spaceship::ConnectAPI.get_certificates(limit: 1)
+    end
     cleanup_ci_keychain if is_ci
     xcodes(select_for_current_build_only: true)
   end
@@ -48,6 +58,12 @@ platform :ios do
   end
 
   error do |lane, exception|
+    # Apple's API reports agreement failures without linking to where they can be resolved.
+    if exception.message.match?(/required agreement is missing or has expired|requires an in-effect agreement/i)
+      UI.error("Sign in as the Account Holder to review and accept pending agreements: https://developer.apple.com/account/")
+      UI.error("Also check Business > Agreements in App Store Connect: https://appstoreconnect.apple.com/")
+      UI.error("After accepting the agreements, rerun this lane.")
+    end
     cleanup_ci_keychain if is_ci
   end
 
