@@ -5,6 +5,8 @@ package dev.zacsweers.fieldspottr.data
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.Fetched
@@ -13,9 +15,12 @@ import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.QueryStore
+import dev.zacsweers.fieldspottr.data.core.exchangingSender
+import dev.zacsweers.fieldspottr.data.core.replying
 import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
@@ -127,8 +132,50 @@ class OptimisticQueryStoreRestartTest {
     assertThat(sentIds).containsExactly(sending.id, sending.id)
     assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b"))
   }
+
+  @Test
+  fun `a stored server answer is cleared once its row commits`() = runTest {
+    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+    val rows = stores.open(ReplyingTags.name, Add.serializer())
+    val ids = listOf(rows.insertNew("", Add("b")), rows.insertNew("", Add("c")))
+    online.value = true
+    val data =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          onFetchFailure = TestFailures(),
+          online = online,
+          stores = stores,
+          clock = testClock(START),
+        )
+        .create(
+          owner(),
+          setOf(ReplyingTags.exchangingSender { add, _ -> listOf("a", add.tag.uppercase()) }),
+        )
+    // No handle is attached, so each answer waits on its row
+    val sent = rows.entries().first { list -> list.all { it.status == OutboxStatus.Sent } }
+    assertThat(sent.map { it.reply }).containsExactly("""["a","B"]""", """["a","C"]""")
+    assertThat(sent.map { it.committed }).containsExactly(false, false)
+
+    data.optimisticStore(
+      ReplyingTags,
+      base = truth,
+      apply = { current, add -> current.orEmpty() + add.tag },
+    )
+    rows.entries().first { it.isEmpty() }
+
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START))
+    for (id in ids) {
+      val committed = checkNotNull(rows.entry(id).first())
+      assertThat(committed.committed).isTrue()
+      assertThat(committed.reply).isNull()
+    }
+  }
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 private val Tags = OutboxKey<OptimisticQueryStoreRestartTest.Add>("tags")
+
+/** An outbox whose server answers each change with the tag list it holds. */
+private val ReplyingTags =
+  OutboxKey.replying<OptimisticQueryStoreRestartTest.Add, List<String>>("replyingTags")

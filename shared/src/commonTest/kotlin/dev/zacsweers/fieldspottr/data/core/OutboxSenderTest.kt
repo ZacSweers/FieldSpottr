@@ -140,6 +140,111 @@ class OutboxSenderTest {
   }
 
   @Test
+  fun `owed rows drop their stored answer as they commit in order`() = runTest {
+    val factory = testDataScopeFactory(clock = testClock(START))
+    val rows = factory.outboxStore<Add>(Tags.name)
+    for (tag in listOf("b", "c")) {
+      rows.insertNew("", Add(tag))
+    }
+    val data =
+      factory.create(
+        backgroundScope,
+        setOf(Tags.exchangingSender { add, _ -> listOf("a", add.tag.uppercase()) }),
+      )
+    val sent = rows.entries().first { list -> list.all { it.status == OutboxStatus.Sent } }
+    // Each answer waits on its row for a handle
+    assertThat(sent.map { it.reply }).containsExactly("""["a","B"]""", """["a","C"]""")
+    assertThat(sent.map { it.committed }).containsExactly(false, false)
+
+    val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    rows.entries().first { it.isEmpty() }
+
+    // c's answer came last, so it is the truth
+    assertThat(truth.data.first()?.value).isEqualTo(listOf("a", "C"))
+    for (row in sent) {
+      val committed = checkNotNull(rows.entry(row.id).first())
+      assertThat(committed.committed).isTrue()
+      assertThat(committed.reply).isNull()
+    }
+    factory.assertNoFailures()
+  }
+
+  @Test
+  fun `clear drops the stored answer of a sent row it retires`() = runTest {
+    val inner = InMemoryOutboxStores().open(Tags.name, Add.serializer())
+    // Holds the handle's read of its owed rows, so no commit runs and clear retires the row
+    val gate = CompletableDeferred<Unit>()
+    val rows =
+      object : OutboxStore<Add> by inner {
+        override suspend fun owed(): List<OutboxEntry<Add>> {
+          gate.await()
+          return inner.owed()
+        }
+      }
+    val id = sentRow(rows, Add("b"), reply = """["a","B"]""")
+    val data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(Tags.sender(store = rows) { _, _ -> }),
+      )
+    val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    runCurrent()
+    assertThat(rows.entry(id).first()?.reply).isEqualTo("""["a","B"]""")
+
+    store.clear()
+    gate.complete(Unit)
+    runCurrent()
+
+    assertThat(truth.data.first()).isNull()
+    val retired = checkNotNull(rows.entry(id).first())
+    assertThat(retired.committed).isTrue()
+    assertThat(retired.reply).isNull()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a failed write that marks a row committed keeps its answer for the next commit`() = runTest {
+    val stores = LaggingOutboxStores()
+    val factory =
+      DataScope.Factory(onFailure = TestFailures(), stores = stores, clock = testClock(START))
+    val rows = stores.delegate.open(Tags.name, Add.serializer())
+    val id = sentRow(rows, Add("c"), reply = """["a","C"]""")
+    val sender = Tags.sender { _, _ -> }
+
+    // The first process commits the answer into its truth, and the write that marks the row
+    // committed fails, so the row keeps its answer
+    stores.failCommittedWrite = true
+    val first = ownerScope()
+    val firstTruth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    factory.create(first, setOf(sender)).optimisticStore(Tags, base = firstTruth, apply = ::addOnce)
+    firstTruth.data.first { it?.value == listOf("a", "C") }
+    runCurrent()
+    val owed = checkNotNull(rows.entry(id).first())
+    assertThat(owed.committed).isFalse()
+    assertThat(owed.reply).isEqualTo("""["a","C"]""")
+    first.coroutineContext.job.cancelAndJoin()
+
+    // The next process commits the same answer into a truth that lacks it, then drops it
+    stores.failCommittedWrite = false
+    val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    factory
+      .create(backgroundScope, setOf(sender))
+      .optimisticStore(
+        Tags,
+        base = truth,
+        apply = ::addOnce,
+      )
+    rows.entries().first { it.isEmpty() }
+
+    assertThat(truth.data.first()).isEqualTo(Fetched(listOf("a", "C"), START))
+    val committed = checkNotNull(rows.entry(id).first())
+    assertThat(committed.committed).isTrue()
+    assertThat(committed.reply).isNull()
+  }
+
+  @Test
   fun `a commit repeated after a crash before the row was marked leaves the truth right`() =
     runTest {
       val stores = LaggingOutboxStores()

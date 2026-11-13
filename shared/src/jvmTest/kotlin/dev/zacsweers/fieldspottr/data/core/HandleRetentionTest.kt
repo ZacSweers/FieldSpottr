@@ -11,6 +11,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
+import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -27,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 
 /** What a settled handle keeps reachable, checked by walking the object graph from it. */
@@ -167,6 +169,34 @@ class HandleRetentionTest {
       assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
       assertThat(collector.isActive).isTrue()
       assertThat(query.reaches(error.response)).isFalse()
+    }
+
+  @Test
+  fun `a runner does not keep a cancelled command once it settles ahead of a running one`() =
+    runTest {
+      // A scope of its own, so a walk from the runner cannot reach this test's locals through a
+      // parent job
+      val owner = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+      val actions = RealActionRunner(owner, onFailure = {})
+      val release = CompletableDeferred<Unit>()
+      val running = actions.run(Ordering.Keyed("k")) { release.await() }
+      testScheduler.runCurrent()
+      val cancelled = actions.runCancellable(Ordering.Keyed("k")) {}
+      cancelled.cancel()
+      testScheduler.runCurrent()
+
+      cancelled.assertCancelled()
+      running.assertRunning()
+      // The running command still holds the key, and the cancelled one is gone from it
+      assertThat(actions.keysHeld).isEqualTo(1)
+      assertThat(actions.reaches(running)).isTrue()
+      assertThat(actions.reaches(cancelled)).isFalse()
+
+      release.complete(Unit)
+      testScheduler.runCurrent()
+      running.assertSucceeded()
+      assertThat(actions.keysHeld).isEqualTo(0)
+      owner.cancel()
     }
 
   @Test
