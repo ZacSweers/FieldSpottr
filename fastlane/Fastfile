@@ -39,22 +39,18 @@ platform :ios do
   ]
 
   before_all do |lane|
+    next if lane == :check_apple_access
+
     signed_build = [:build, :build_prod, :build_fs].include?(lane) && !env_nil_or_blank('MATCH_PASSWORD')
     if signed_build || [:certs, :recreate_certs].include?(lane)
-      app_store_connect_api_key(
-        is_key_content_base64: true,
-        in_house: false,
-      )
-      # Probe the same API match uses before Xcode setup or cloning the certificates repo.
-      UI.message("Checking Apple Developer access and required agreements...")
-      Spaceship::ConnectAPI.get_certificates(limit: 1)
+      check_apple_access
     end
     cleanup_ci_keychain if is_ci
     xcodes(select_for_current_build_only: true)
   end
 
   after_all do |lane|
-    cleanup_ci_keychain if is_ci
+    cleanup_ci_keychain if lane != :check_apple_access && is_ci
   end
 
   error do |lane, exception|
@@ -64,7 +60,18 @@ platform :ios do
       UI.error("Also check Business > Agreements in App Store Connect: https://appstoreconnect.apple.com/")
       UI.error("After accepting the agreements, rerun this lane.")
     end
-    cleanup_ci_keychain if is_ci
+    cleanup_ci_keychain if lane != :check_apple_access && is_ci
+  end
+
+  desc "Check Apple API access before modifying release files"
+  lane :check_apple_access do
+    app_store_connect_api_key(
+      is_key_content_base64: true,
+      in_house: false,
+    )
+    # Probe the same API match uses without Xcode setup or certificate repo changes.
+    UI.message("Checking Apple Developer access and required agreements...")
+    Spaceship::ConnectAPI.get_certificates(limit: 1)
   end
 
   lane :certs do |options|

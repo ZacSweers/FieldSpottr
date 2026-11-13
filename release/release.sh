@@ -55,6 +55,10 @@ for key in fs_versioncode fs_versionname; do
   fi
 done
 
+# Fail on Apple agreement or authentication errors before changing release files.
+bundle install
+bundle exec fastlane ios check_apple_access
+
 echo "Preflight checks passed."
 # --- End preflight checks ---
 
@@ -161,7 +165,6 @@ echo "Building Android"
 
 # Build iOS release
 echo "Building iOS"
-bundle install
 bundle exec fastlane ios build_prod
 
 # Commit and tag. Don't do it until we know builds were successful
