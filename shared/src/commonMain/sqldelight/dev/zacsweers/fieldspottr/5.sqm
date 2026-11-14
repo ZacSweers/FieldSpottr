@@ -1,5 +1,0 @@
-CREATE TABLE IF NOT EXISTS outboxChange (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT,
-  outbox TEXT,
-  id TEXT
-);

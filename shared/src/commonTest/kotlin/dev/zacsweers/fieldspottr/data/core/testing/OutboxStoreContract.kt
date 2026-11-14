@@ -337,21 +337,6 @@ abstract class OutboxStoreContract {
   }
 
   @Test
-  fun `changes name a row that a prune deletes`() = runTest {
-    val store = newStore(1.minutes)
-    val id = store.insertNew("k", "a")
-    store.move(id, OutboxStatus.Discarded)
-    val changes = store.changesIn(backgroundScope)
-    assertEquals(OutboxChange.Unknown, changes.receive())
-
-    advanceStoreTime(2.minutes)
-    store.insertNew("k", "b")
-
-    assertNull(store.entry(id).first())
-    changes.awaitNamed(setOf(id), orUnknown = false)
-  }
-
-  @Test
   fun `changes cover every row a clear deletes`() = runTest {
     val store = newStore(1.minutes)
     val a = store.insertNew("k", "a")

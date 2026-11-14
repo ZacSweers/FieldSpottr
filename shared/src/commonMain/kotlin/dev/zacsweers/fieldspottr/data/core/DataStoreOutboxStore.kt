@@ -22,7 +22,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
@@ -310,38 +309,6 @@ class DataStoreOutboxStore<E>(
 
   override suspend fun head(key: String): OutboxEntry<E>? =
     headsOf(dataStore.data.first(), key).firstOrNull()
-
-  /**
-   * DataStore reads and parses the whole log on each change either way, so this compares each log
-   * with the last, row by row as stored, and decodes no payload. It names the rows that went away
-   * and the rows whose status changed to one that ends an attempt. Every writer goes through the
-   * one DataStore for the file, so this sees them all.
-   */
-  override fun changes(): Flow<OutboxChange> = flow {
-    var last: Map<String, OutboxLog.Row>? = null
-    dataStore.data.collect { log ->
-      val current = log.rows.associateBy { it.id }
-      val previous = last
-      last = current
-      if (previous == null) {
-        emit(OutboxChange.Unknown)
-      } else {
-        val ids =
-          previous.keys
-            .filter { id ->
-              val now = current[id]
-              now == null ||
-                (now.status != previous[id]?.status &&
-                  now.status != QUEUED &&
-                  now.status != SENDING)
-            }
-            .mapTo(HashSet()) { EntryId(it) }
-        if (ids.isNotEmpty()) {
-          emit(OutboxChange.Rows(ids))
-        }
-      }
-    }
-  }
 
   override fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
     undecodable.listen(report)

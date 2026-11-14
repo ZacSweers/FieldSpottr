@@ -8,17 +8,14 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
-import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.PersistentSet
 import kotlinx.collections.immutable.persistentHashMapOf
-import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.KSerializer
@@ -73,17 +70,18 @@ internal class InMemoryOutboxStore<E>(
   private val time: TimeSource,
 ) : OutboxStore<E> {
   private val rows = MutableStateFlow(Rows<E>())
+  // The rows this store's writes ended, for changes
+  private val ended = OutboxChangeLog()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
     val row = OutboxEntry(id, key, payload, OutboxStatus.Queued)
     rows.update { current ->
       val pruned = current.pruned()
       require(id !in pruned.all) { "Row ${id.value} is already stored" }
-      // A new row ends nothing, so changes does not name it
-      pruned.changed(
-        emptySet(),
+      Rows(
         all = pruned.all.putting(id, Row(row, settledAt = null)),
         byKey = pruned.byKey.putting(key, (pruned.byKey[key] ?: persistentSetOf()).adding(id)),
+        settled = pruned.settled,
       )
     }
   }
@@ -113,8 +111,7 @@ internal class InMemoryOutboxStore<E>(
           val settledAt = time.markNow().takeIf { updated.isDone }
           val key = updated.key
           val waiting = pruned.byKey[key]?.removing(entry.id)
-          pruned.changed(
-            setOf(entry.id).takeIf { updated.status != row.entry.status }.orEmpty(),
+          Rows(
             all = pruned.all.putting(entry.id, Row(updated, settledAt)),
             byKey =
               if (waiting.isNullOrEmpty()) {
@@ -130,13 +127,14 @@ internal class InMemoryOutboxStore<E>(
               },
           )
         } else {
-          val ended =
-            setOf(entry.id)
-              .takeIf { updated.status.endsAttempt && updated.status != row.entry.status }
-              .orEmpty()
-          pruned.changed(ended, all = pruned.all.putting(entry.id, Row(updated, null)))
+          val all = pruned.all.putting(entry.id, Row(updated, settledAt = null))
+          Rows(all, pruned.byKey, pruned.settled)
         }
       }
+    }
+    // Only a write that ends the row's attempt is named, so one to Queued or Sending is not
+    if (written && !entry.status.isSendable && entry.status != expected) {
+      ended.record(setOf(entry.id))
     }
     return written
   }
@@ -146,34 +144,12 @@ internal class InMemoryOutboxStore<E>(
       .map { current -> current.all.values.map { it.entry }.filterNot { it.isDone } }
       .distinctUntilChanged()
 
+  override fun changes(): Flow<OutboxChange> = ended.changes()
+
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> =
     rows
       .map { current -> current.all[id]?.takeUnless { it.isExpired() }?.entry }
       .distinctUntilChanged()
-
-  /**
-   * Each write records the rows it ended or deleted, so this names them without reading any row. A
-   * collector that fell further behind than [Rows.log] reaches gets [OutboxChange.Unknown].
-   */
-  override fun changes(): Flow<OutboxChange> = flow {
-    var seen: Long? = null
-    rows.collect { current ->
-      val last = seen
-      seen = current.version
-      when {
-        last == null -> emit(OutboxChange.Unknown)
-        current.version == last -> Unit
-        else -> {
-          val since = current.log.filter { it.version > last }
-          if (since.size.toLong() == current.version - last) {
-            emit(OutboxChange.Rows(since.flatMapTo(HashSet()) { it.ids }))
-          } else {
-            emit(OutboxChange.Unknown)
-          }
-        }
-      }
-    }
-  }
 
   // Reads only each key's waiting rows up to its head, so a change costs about one row per key
   override fun heads(): Flow<List<OutboxEntry<E>>> =
@@ -189,14 +165,8 @@ internal class InMemoryOutboxStore<E>(
 
   /** Drops every row, settled ones included, so each handle reads its row as absent. */
   fun clear() {
-    rows.update { current ->
-      current.changed(
-        current.all.keys,
-        all = persistentMapOf(),
-        byKey = persistentMapOf(),
-        settled = persistentMapOf(),
-      )
-    }
+    rows.value = Rows()
+    ended.recordAll()
   }
 
   /** [key]'s oldest row that is Queued or Sending. Failed rows before it are skipped. */
@@ -217,19 +187,17 @@ internal class InMemoryOutboxStore<E>(
   private fun Rows<E>.pruned(): Rows<E> {
     var all = all
     var settled = settled
-    val removed = HashSet<EntryId>()
     for ((id, settledAt) in this.settled) {
       if (settledAt.elapsedNow() < keepSettledFor) {
         break
       }
       all = all.removing(id)
       settled = settled.removing(id)
-      removed += id
     }
-    return if (removed.isEmpty()) {
+    return if (settled === this.settled) {
       this
     } else {
-      changed(removed, all = all, settled = settled)
+      Rows(all, byKey, settled)
     }
   }
 
@@ -245,42 +213,10 @@ internal class InMemoryOutboxStore<E>(
    * @property byKey each key's rows that are neither Sent nor Discarded, oldest first. A key with
    *   none has no entry.
    * @property settled when each row that is [isDone] settled, oldest first, for pruning.
-   * @property version how many writes ended or deleted rows so far.
-   * @property log the rows each of the newest such writes ended or deleted, oldest first, for
-   *   [changes].
    */
   private class Rows<E>(
     val all: PersistentMap<EntryId, Row<E>> = persistentMapOf(),
     val byKey: PersistentMap<String, PersistentSet<EntryId>> = persistentMapOf(),
     val settled: PersistentMap<EntryId, TimeMark> = persistentMapOf(),
-    val version: Long = 0,
-    val log: PersistentList<Change> = persistentListOf(),
-  ) {
-    /**
-     * These rows after a write that ended or deleted [ids], with the write recorded in [log]. A
-     * write that ended nothing leaves [log] as it is.
-     */
-    fun changed(
-      ids: Set<EntryId>,
-      all: PersistentMap<EntryId, Row<E>> = this.all,
-      byKey: PersistentMap<String, PersistentSet<EntryId>> = this.byKey,
-      settled: PersistentMap<EntryId, TimeMark> = this.settled,
-    ): Rows<E> {
-      if (ids.isEmpty()) {
-        return Rows(all, byKey, settled, version, log)
-      }
-      val next = version + 1
-      var log = log.adding(Change(next, ids))
-      if (log.size > MAX_CHANGES) {
-        log = log.removingAt(0)
-      }
-      return Rows(all, byKey, settled, next, log)
-    }
-  }
-
-  /** One write's [version] and the rows it ended or deleted. */
-  private class Change(val version: Long, val ids: Set<EntryId>)
+  )
 }
-
-// The newest writes a store records for collectors of changes that fall behind
-private const val MAX_CHANGES = 64
