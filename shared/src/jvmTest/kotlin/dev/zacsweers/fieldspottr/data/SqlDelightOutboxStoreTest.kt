@@ -25,6 +25,8 @@ import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OLD_CHANGE
+import dev.zacsweers.fieldspottr.data.core.OperationState
+import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -38,6 +40,9 @@ import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.OutboxStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.awaitNamed
+import dev.zacsweers.fieldspottr.data.core.testing.changesIn
+import dev.zacsweers.fieldspottr.data.core.testing.discardDirectly
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.metro.suspendLazy
@@ -48,11 +53,13 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -85,6 +92,10 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
 
   override fun advanceStoreTime(duration: Duration) {
     clock.shift(duration)
+  }
+
+  override suspend fun TestScope.clearAll(store: OutboxStore<String>) {
+    SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO).clearAll()
   }
 
   // A JSON object where the codec expects a string
@@ -286,6 +297,25 @@ class SqlDelightOutboxScaleTest {
   }
 
   @Test
+  fun `naming a row discarded deep in a backlog reads no other row`() = runBlocking {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    val store =
+      SqlDelightOutboxStore({ queries }, "scale", String.serializer().asCodec(Json), Dispatchers.IO)
+    val ids = List(ROWS) { store.insertNew("k", "p$it") }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val changes = store.changesIn(scope)
+    assertThat(changes.receive()).isEqualTo(OutboxChange.Unknown)
+    driver.rowsRead.set(0)
+
+    store.discardDirectly(ids.last())
+    changes.awaitNamed(setOf(ids.last()), orUnknown = false)
+    scope.cancel()
+
+    // The discard's own reads and one change record. Reading the rows before it would be ROWS rows.
+    assertThat(driver.rowsRead.get()).isLessThanOrEqualTo(10L)
+  }
+
+  @Test
   fun `a key's next row is one index search per status`() = runBlocking {
     val queries = temporaryDatabase.db().outboxRowQueries
     val plan = driver.planOf { queries.nextSendable("a", "k", -1) }
@@ -394,5 +424,118 @@ class SqlDelightOutboxStoresClearAllTest {
     assertThat(notes.entries().first()).isEmpty()
     // A handle that follows the row reads it as absent, and settles Cancelled through that
     assertThat(tags.entry(id).first()).isNull()
+  }
+
+  @Test
+  fun `handles of rows a clear deletes settle cancelled`() = runBlocking {
+    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failures = TestFailures()
+    val notes = OutboxKey<String>("notes")
+    val outbox =
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(false), stores = stores)
+        .create(scope, setOf(notes.sender { _, _ -> }))
+        .outbox(notes)
+    val a = outbox.enqueue("a", key = "k")
+    val b = outbox.enqueue("b", key = "k")
+    val c = outbox.enqueue("c", key = "other")
+    // Keys insert on their own, so each row is waited for
+    withTimeout(10.seconds) { listOf(a, b, c).forEach { it.stored.await() } }
+
+    stores.clearAll()
+    val settled = withTimeout(10.seconds) { listOf(a.await(), b.await(), c.await()) }
+    scope.cancel()
+
+    assertThat(settled).isEqualTo(List(3) { OperationState.Cancelled })
+    failures.assertNone()
+  }
+}
+
+/** How [SqlDelightOutboxStore.changes] hears writes made through other stores over its table. */
+class SqlDelightOutboxChangesTest {
+  @get:Rule val temporaryDatabase = TemporaryDatabase()
+
+  @Test
+  fun `a row another store set discards behind a queued row settles its handle cancelled`() =
+    runBlocking {
+      val queries = temporaryDatabase.db().outboxRowQueries
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val failures = TestFailures()
+      val notes = OutboxKey<String>("notes")
+      val outbox =
+        DataScope.Factory(
+            onFailure = failures,
+            online = MutableStateFlow(false),
+            stores = SqlDelightOutboxStores(queries, Dispatchers.IO),
+          )
+          .create(scope, setOf(notes.sender { _, _ -> }))
+          .outbox(notes)
+      val a = outbox.enqueue("a", key = "k")
+      val b = outbox.enqueue("b", key = "k")
+      withTimeout(10.seconds) { b.stored.await() }
+
+      // Another store set over the same database. The key's head stays a.
+      SqlDelightOutboxStores(queries, Dispatchers.IO)
+        .open("notes", String.serializer())
+        .discardDirectly(b.id)
+      val settled = withTimeout(10.seconds) { b.await() }
+      scope.cancel()
+
+      assertThat(settled).isEqualTo(OperationState.Cancelled)
+      assertThat(a.state.value).isEqualTo(OperationState.Queued)
+      failures.assertNone()
+    }
+
+  @Test
+  fun `a write through another store set is named and another outbox's write is not`() =
+    runBlocking {
+      val queries = temporaryDatabase.db().outboxRowQueries
+      val reader =
+        SqlDelightOutboxStores(queries, Dispatchers.IO).open("notes", String.serializer())
+      val writers = SqlDelightOutboxStores(queries, Dispatchers.IO)
+      val notes = writers.open("notes", String.serializer())
+      val tags = writers.open("tags", String.serializer())
+      val note = notes.insertNew("k", "a")
+      val tag = tags.insertNew("k", "b")
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val changes = reader.changesIn(scope)
+      assertThat(changes.receive()).isEqualTo(OutboxChange.Unknown)
+
+      tags.discardDirectly(tag)
+      notes.discardDirectly(note)
+      val change = withTimeout(10.seconds) { changes.receive() }
+      scope.cancel()
+
+      assertThat(change).isEqualTo(OutboxChange.Rows(setOf(note)))
+    }
+
+  @Test
+  fun `a reader that falls behind the kept records gets Unknown`() = runBlocking {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    val store = SqlDelightOutboxStores(queries, Dispatchers.IO).open("notes", String.serializer())
+    val id = store.insertNew("k", "a")
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val changes = Channel<OutboxChange>(Channel.UNLIMITED)
+    val resume = CompletableDeferred<Unit>()
+    // Stops after the first change, like a reader that falls behind
+    scope.launch {
+      store.changes().collect {
+        changes.send(it)
+        resume.await()
+      }
+    }
+    assertThat(changes.receive()).isEqualTo(OutboxChange.Unknown)
+
+    store.discardDirectly(id)
+    // The records of a thousand writes to another outbox, then an insert, which prunes the oldest
+    queries.transaction {
+      repeat(1_000) { queries.recordChange("tags", "t$it") }
+    }
+    store.insertNew("k", "b")
+    resume.complete(Unit)
+    val change = withTimeout(10.seconds) { changes.receive() }
+    scope.cancel()
+
+    assertThat(change).isEqualTo(OutboxChange.Unknown)
   }
 }

@@ -8,6 +8,7 @@ import dev.zacsweers.fieldspottr.OutboxRowQueries
 import dev.zacsweers.fieldspottr.data.core.DefaultPayloadFormat
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OpenedStore
+import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -16,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.PayloadCodec
 import dev.zacsweers.fieldspottr.data.core.UndecodableRows
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.decodeCatching
+import dev.zacsweers.fieldspottr.data.core.endsAttempt
 import dev.zacsweers.fieldspottr.data.core.isDone
 import dev.zacsweers.fieldspottr.data.core.storedCause
 import dev.zacsweers.fieldspottr.data.core.storedName
@@ -91,9 +93,16 @@ class SqlDelightOutboxStores(
     }
   }
 
-  // One table holds every outbox's rows, so one statement clears them all
+  // One table holds every outbox's rows, so one statement clears them all, and one record tells
+  // every reader of changes that any row may have changed
   override suspend fun clearAll() {
-    withContext(io) { queries().deleteAll() }
+    withContext(io) {
+      val queries = queries()
+      queries.transaction {
+        queries.deleteAll()
+        queries.recordAllChanged()
+      }
+    }
     for (entry in opened.load().values) {
       entry.store.forgetUndecodable()
     }
@@ -108,6 +117,10 @@ class SqlDelightOutboxStores(
  * Each row's payload decodes on its own. A row that does not decode, like one stored before its
  * payload class changed, is left out of [entries], [entry] and [heads], and handed on through
  * [onUndecodable]. It stays in the table.
+ *
+ * A write that ends or deletes rows also records them in the `outboxChange` table, in its own
+ * transaction, which [changes] reads. Every store over this table writes those records, so a reader
+ * hears of every store's writes.
  */
 class SqlDelightOutboxStore<E>(
   private val queries: suspend () -> OutboxRowQueries,
@@ -129,9 +142,12 @@ class SqlDelightOutboxStore<E>(
     withContext(NonCancellable) {
       withContext(io) {
         val queries = queries()
+        val cutoff = cutoff()
         queries.transaction {
-          queries.pruneSettled(outbox, cutoff())
+          queries.recordPruned(outbox, cutoff)
+          queries.pruneSettled(outbox, cutoff)
           queries.insert(id.value, outbox, key, codec.encode(payload))
+          queries.pruneChanges()
         }
       }
     }
@@ -150,7 +166,7 @@ class SqlDelightOutboxStore<E>(
         return@withContext false
       }
       queries.transactionWithResult {
-        // The WHERE on what was read makes the write a compare-and-set. changes() reports it.
+        // The WHERE on what was read makes the write a compare-and-set
         queries.compareAndSet(
           status = entry.status.storedName,
           cause = entry.status.storedCause,
@@ -177,7 +193,13 @@ class SqlDelightOutboxStore<E>(
           expectedStatus = row.status,
           expectedCause = row.cause,
         )
-        queries.changes().executeAsOne() > 0
+        val written = queries.changes().executeAsOne() > 0
+        // The flow of changes names only the rows a write ends, so a write that leaves the status
+        // as it was, or moves it to Queued or Sending, records nothing
+        if (written && entry.status.endsAttempt && entry.status != expected) {
+          queries.recordChange(outbox, entry.id.value)
+        }
+        written
       }
     }
   }
@@ -228,6 +250,41 @@ class SqlDelightOutboxStore<E>(
         readableFrom(queries, row)
       }
     }
+
+  /**
+   * Reads the `outboxChange` records after the last one it read, once per change to that table, so
+   * a write costs the records of the rows it ended or deleted and reads no row. It reads every
+   * outbox's records and keeps this outbox's. A read that finds records missing, since a reader
+   * that fell behind lost them to pruning, or a record for every row, gives [OutboxChange.Unknown].
+   */
+  override fun changes(): Flow<OutboxChange> = flow {
+    val queries = queries()
+    var seen: Long? = null
+    queries.lastChange().asFlow().collect {
+      val change =
+        withContext(io) {
+          val last = seen
+          if (last == null) {
+            seen = queries.lastChange().executeAsOne().last ?: 0
+            return@withContext OutboxChange.Unknown
+          }
+          val records = queries.changesSince(last).executeAsList()
+          if (records.isEmpty()) {
+            return@withContext null
+          }
+          seen = records.last().seq
+          val ours = records.filter { it.outbox == outbox || it.outbox == null }
+          when {
+            records.first().seq != last + 1 || ours.any { it.id == null } -> OutboxChange.Unknown
+            ours.isEmpty() -> null
+            else -> OutboxChange.Rows(ours.mapTo(HashSet()) { EntryId(checkNotNull(it.id)) })
+          }
+        }
+      if (change != null) {
+        emit(change)
+      }
+    }
+  }
 
   override fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
     undecodable.listen(report)

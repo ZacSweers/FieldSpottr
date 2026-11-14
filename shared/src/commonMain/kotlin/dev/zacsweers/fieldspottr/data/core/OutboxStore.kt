@@ -7,6 +7,7 @@ import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -164,6 +165,37 @@ interface OutboxStore<E> {
     entries().first().firstOrNull { it.key == key && it.status.isSendable }
 
   /**
+   * Which rows writes ended, so an outbox can settle the handles that follow them.
+   *
+   * The flow starts with [OutboxChange.Unknown] once it is subscribed, so a read made after that
+   * sees every change the flow does not name later. Then, once each write is committed, it names
+   * every row the write moved to Sent, Failed or Discarded, and every row it deleted, whoever
+   * wrote: this store, another writer over the same storage, like an optimistic store's clear, or
+   * [OutboxStores.clearAll]. It may name other changed rows too, and several writes at once. It
+   * emits [OutboxChange.Unknown] only when it cannot name the rows, like after a clear that deleted
+   * rows without reading them.
+   *
+   * The default compares each [entries] emission with the last, so every change reads every row. A
+   * store over many rows overrides it to name the rows without reading them.
+   */
+  fun changes(): Flow<OutboxChange> = flow {
+    var last: Map<EntryId, OutboxEntry<E>>? = null
+    entries().collect { rows ->
+      val current = rows.associateBy { it.id }
+      val previous = last
+      last = current
+      if (previous == null) {
+        emit(OutboxChange.Unknown)
+      } else {
+        val ids = (previous.keys + current.keys).filterTo(HashSet()) { previous[it] != current[it] }
+        if (ids.isNotEmpty()) {
+          emit(OutboxChange.Rows(ids))
+        }
+      }
+    }
+  }
+
+  /**
    * Hands [report] each row that is not [isDone] that this store left out of a read because its
    * payload does not decode, with the decode error. Such a row never makes a read throw and never
    * blocks its key or another key. It stays stored until [OutboxStores.clearAll].
@@ -179,6 +211,18 @@ interface OutboxStore<E> {
    */
   fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
     AutoCloseable {}
+}
+
+/** Which rows writes ended, from [OutboxStore.changes]. */
+sealed interface OutboxChange {
+  /** Committed writes ended or deleted the rows [ids], and may have changed them otherwise. */
+  data class Rows(val ids: Set<EntryId>) : OutboxChange
+
+  /**
+   * Any row may have changed: the flow just started, or the store cannot name the rows, like after
+   * it fell behind its own record of writes. A reader reads again every row it cares about.
+   */
+  data object Unknown : OutboxChange
 }
 
 /** A store an [OutboxStores] set opened for a name, with the payload type it was opened for. */
@@ -199,6 +243,13 @@ internal class OpenedStore<S>(val descriptor: SerialDescriptor, val store: S) {
 /** Queued or Sending: the row waits to send, or is in flight. Only such a row can be a head. */
 internal val OutboxStatus.isSendable: Boolean
   get() = this == OutboxStatus.Queued || this == OutboxStatus.Sending
+
+/**
+ * Sent, Failed or Discarded: a write to this status ends the row's attempt, so a store names the
+ * row in [OutboxStore.changes].
+ */
+internal val OutboxStatus.endsAttempt: Boolean
+  get() = !isSendable
 
 /**
  * A set of [OutboxStore]s keyed by outbox name. The app builds one set and hands it to

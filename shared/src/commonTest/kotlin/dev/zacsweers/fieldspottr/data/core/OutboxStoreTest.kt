@@ -43,6 +43,10 @@ class InMemoryOutboxStoreTest : OutboxStoreContract() {
   override fun advanceStoreTime(duration: Duration) {
     time += duration
   }
+
+  override suspend fun TestScope.clearAll(store: OutboxStore<String>) {
+    (store as InMemoryOutboxStore<String>).clear()
+  }
 }
 
 class DataStoreOutboxStoreTest : OutboxStoreContract() {
@@ -65,6 +69,10 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
 
   override fun advanceStoreTime(duration: Duration) {
     clock.shift(duration)
+  }
+
+  override suspend fun TestScope.clearAll(store: OutboxStore<String>) {
+    (store as DataStoreOutboxStore<String>).clear()
   }
 
   // A JSON object where the codec expects a string

@@ -25,6 +25,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.discardDirectly
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
@@ -41,9 +42,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -1009,6 +1013,209 @@ class OutboxTest {
   }
 
   @Test
+  fun `a handle whose row another writer discards behind a queued row settles cancelled`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      val outbox = dataOver(rows, online = false).outbox(Rows)
+      val a = outbox.enqueue("a", key = "k")
+      val b = outbox.enqueue("b", key = "k")
+      runCurrent()
+
+      // The key's head stays a, so nothing about the heads changes
+      rows.discardDirectly(b.id)
+      runCurrent()
+
+      b.assertCancelled()
+      a.assertPending()
+      assertThat(outbox.rowsFollowed).isEqualTo(1)
+    }
+
+  @Test
+  fun `a handle whose row another writer discards behind a backing-off head settles cancelled`() =
+    runTest {
+      send.failure = { payload, _ -> IllegalStateException("Transient").takeIf { payload == "a" } }
+      val rows = inMemoryOutboxStore<String>()
+      val outbox = dataOver(rows, retry = RetryPolicy(maxAttempts = 3) { 5.minutes }).outbox(Rows)
+      val a = outbox.enqueue("a", key = "k")
+      val b = outbox.enqueue("b", key = "k")
+      outbox.entries.first { all -> all.any { it.retryAt != null } }
+
+      rows.discardDirectly(b.id)
+      runCurrent()
+
+      b.assertCancelled()
+      a.assertPending()
+      assertThat(send.attempts).containsExactly("a")
+    }
+
+  @Test
+  fun `a handle whose first read is held while another writer discards its row settles cancelled`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      val readTaken = CompletableDeferred<Unit>()
+      val returnRead = CompletableDeferred<Unit>()
+      var holdReads = false
+      // Returns the row as it was, a little late, like a value crossing threads
+      val lagging =
+        object : OutboxStore<String> by rows {
+          override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+            val row = rows.entry(id).first()
+            if (holdReads) {
+              holdReads = false
+              readTaken.complete(Unit)
+              returnRead.await()
+            }
+            emit(row)
+          }
+        }
+      val outbox = dataOver(lagging, online = false).outbox(Rows)
+      val a = outbox.enqueue("a", key = "k")
+      runCurrent()
+
+      holdReads = true
+      val b = outbox.enqueue("b", key = "k")
+      readTaken.await()
+      // b's first read holds the queued row while another writer discards it behind a
+      rows.discardDirectly(b.id)
+      runCurrent()
+      b.assertCancelled()
+      returnRead.complete(Unit)
+      runCurrent()
+
+      // The stale read does not move the handle back
+      b.assertCancelled()
+      a.assertPending()
+      assertThat(outbox.rowsFollowed).isEqualTo(1)
+    }
+
+  @Test
+  fun `an older change does not settle a retried row that another writer then discards`() =
+    runTest {
+      send.failPermanently()
+      val rows = inMemoryOutboxStore<String>()
+      val deliver = CompletableDeferred<Unit>()
+      var holdChanges = false
+      // Delivers each change once deliver completes, like a watcher that lags
+      val lagging =
+        object : OutboxStore<String> by rows {
+          override fun changes(): Flow<OutboxChange> =
+            rows.changes().onEach {
+              if (holdChanges) {
+                deliver.await()
+              }
+            }
+        }
+      val data = dataOver(lagging)
+      val outbox = data.outbox(Rows, revert = send::revert)
+      runCurrent()
+      holdChanges = true
+      val original = outbox.enqueue("a")
+      original.awaitFailed<PermanentFailure>()
+
+      // The retry waits offline, and the change that named the failed row arrives after it
+      data.online.value = false
+      val retried = outbox.retry(original.id)
+      runCurrent()
+      deliver.complete(Unit)
+      runCurrent()
+      retried.assertPending()
+
+      // A discard by another writer ends the retried attempt
+      rows.discardDirectly(original.id)
+      runCurrent()
+      retried.assertCancelled()
+      original.assertFailed<PermanentFailure>()
+    }
+
+  @Test
+  fun `a watch of changes that fails hears a discard made meanwhile once it watches again`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      var breakWatch = CompletableDeferred<Unit>()
+      var failWatches = false
+      // A watch fails once the breakWatch it started with completes. A new watch fails at once
+      // while failWatches is set.
+      val flaky =
+        object : OutboxStore<String> by rows {
+          override fun changes(): Flow<OutboxChange> = flow {
+            if (failWatches) {
+              throw IllegalStateException("database is locked")
+            }
+            val broken = breakWatch
+            val failure =
+              flow<OutboxChange> {
+                broken.await()
+                throw IllegalStateException("database is locked")
+              }
+            emitAll(merge(rows.changes(), failure))
+          }
+        }
+      val data = dataOver(flaky, online = false)
+      val outbox = data.outbox(Rows)
+      val a = outbox.enqueue("a", key = "k")
+      val b = outbox.enqueue("b", key = "k")
+      runCurrent()
+
+      // The watch fails, and so does the next one, while another writer discards b behind a
+      failWatches = true
+      val broken = breakWatch
+      breakWatch = CompletableDeferred()
+      broken.complete(Unit)
+      runCurrent()
+      rows.discardDirectly(b.id)
+      advanceTimeBy(1.seconds)
+      runCurrent()
+      b.assertPending()
+      assertThat(data.actionFailures.take()).hasSize(2)
+
+      // The next watch works. It starts with Unknown, which rechecks every followed row.
+      failWatches = false
+      advanceTimeBy(2.seconds)
+      runCurrent()
+
+      b.assertCancelled()
+      a.assertPending()
+      assertThat(outbox.rowsFollowed).isEqualTo(1)
+    }
+
+  @Test
+  fun `a recheck whose read failed settles a row behind a queued head once reads work again`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      var failReads = false
+      val flaky =
+        object : OutboxStore<String> by rows {
+          override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+            if (failReads) {
+              throw IllegalStateException("database is locked")
+            }
+            emitAll(rows.entry(id))
+          }
+        }
+      val data = dataOver(flaky, online = false)
+      val outbox = data.outbox(Rows)
+      val a = outbox.enqueue("a", key = "k")
+      val b = outbox.enqueue("b", key = "k")
+      runCurrent()
+
+      // Another writer discards b while row reads fail, so the recheck learns nothing
+      failReads = true
+      rows.discardDirectly(b.id)
+      runCurrent()
+      b.assertPending()
+      assertThat(data.actionFailures.take()).isNotEmpty()
+
+      // No other write comes, so only the recheck's own retry can settle b
+      failReads = false
+      advanceTimeBy(1.seconds)
+      runCurrent()
+
+      b.assertCancelled()
+      a.assertPending()
+      assertThat(outbox.rowsFollowed).isEqualTo(1)
+    }
+
+  @Test
   fun `handles of rows a logout clears settle cancelled`() = runTest {
     val scopes = testDataScopeFactory(online = false)
     val outbox = scopes.create(backgroundScope, setOf(Notes.sender(send = send))).outbox(Notes)
@@ -1063,40 +1270,44 @@ class OutboxTest {
     }
 
   @Test
-  fun `a row read that fails during a sweep does not fail a handle whose row then sends`() =
-    runTest {
-      val rows = inMemoryOutboxStore<String>()
-      var failReads = false
-      val flaky =
-        object : OutboxStore<String> by rows {
-          override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
-            if (failReads) {
-              throw IllegalStateException("database is locked")
-            }
-            emitAll(rows.entry(id))
+  fun `a recheck whose read fails does not fail a handle whose row then sends`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    var failReads = false
+    val extra = MutableSharedFlow<OutboxChange>()
+    val flaky =
+      object : OutboxStore<String> by rows {
+        override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+          if (failReads) {
+            throw IllegalStateException("database is locked")
           }
+          emitAll(rows.entry(id))
         }
-      val data = dataOver(flaky, online = false)
-      val outbox = data.outbox(Rows)
-      val a = outbox.enqueue("a", key = "k")
-      val b = outbox.enqueue("b", key = "k")
-      runCurrent()
 
-      // Row reads fail while the key drains. The drain reads heads only.
-      failReads = true
-      data.online.value = true
-      runCurrent()
-      failReads = false
-      runCurrent()
+        override fun changes(): Flow<OutboxChange> = merge(rows.changes(), extra)
+      }
+    val data = dataOver(flaky, online = false)
+    val outbox = data.outbox(Rows)
+    val a = outbox.enqueue("a", key = "k")
+    runCurrent()
 
-      assertThat(send.sent).containsExactly("a", "b")
-      a.assertSucceeded()
-      b.assertSucceeded()
-      assertThat(data.actionFailures.take()).isNotEmpty()
-    }
+    // A store may name a row that no write ended. The recheck's read fails, and the row stays
+    // queued.
+    failReads = true
+    extra.emit(OutboxChange.Rows(setOf(a.id)))
+    runCurrent()
+    a.assertPending()
+    assertThat(data.actionFailures.take()).isNotEmpty()
+
+    failReads = false
+    data.online.value = true
+    runCurrent()
+
+    assertThat(send.sent).containsExactly("a")
+    a.assertSucceeded()
+  }
 
   @Test
-  fun `a sweep whose read failed settles its handles once reads work again`() = runTest {
+  fun `a recheck whose read failed settles its handles once reads work again`() = runTest {
     val rows = inMemoryOutboxStore<String>()
     var failReads = false
     val flaky =
@@ -1114,7 +1325,7 @@ class OutboxTest {
     val b = outbox.enqueue("b", key = "k")
     runCurrent()
 
-    // Another writer discards the key's rows while row reads fail, so the sweep learns nothing
+    // Another writer discards the key's rows while row reads fail, so the recheck learns nothing
     failReads = true
     for (row in rows.entries().first()) {
       rows.update(row.copy(status = OutboxStatus.Discarded), OutboxStatus.Queued)
@@ -1123,7 +1334,7 @@ class OutboxTest {
     a.assertPending()
     assertThat(data.actionFailures.take()).isNotEmpty()
 
-    // No head on the key changes again, so only the sweep's own retry can settle them
+    // No other write comes, so only the recheck's own retry can settle them
     failReads = false
     advanceTimeBy(1.seconds)
     runCurrent()

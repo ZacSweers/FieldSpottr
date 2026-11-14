@@ -3,8 +3,10 @@
 package dev.zacsweers.fieldspottr.data.core.testing
 
 import dev.zacsweers.fieldspottr.data.core.EntryId
+import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
+import dev.zacsweers.fieldspottr.data.core.OutboxStores
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -34,6 +36,9 @@ abstract class OutboxStoreContract {
 
   /** Moves the store's notion of time forward by [duration], for settled rows to expire. */
   protected abstract fun advanceStoreTime(duration: Duration)
+
+  /** Deletes every row of [store], as a logout's [OutboxStores.clearAll] does. */
+  protected abstract suspend fun TestScope.clearAll(store: OutboxStore<String>)
 
   /**
    * Stores a Queued row on [key] in [store] whose payload the store cannot decode, like one written
@@ -312,5 +317,51 @@ abstract class OutboxStoreContract {
     advanceStoreTime(2.minutes)
     store.insertNew("k", "c")
     assertNull(store.entry(id).first())
+  }
+
+  @Test
+  fun `changes start with Unknown and then name each row a write ends`() = runTest {
+    val store = newStore(1.minutes)
+    val sent = store.insertNew("k", "a")
+    val failed = store.insertNew("k", "b")
+    val discarded = store.insertNew("other", "c")
+    val changes = store.changesIn(backgroundScope)
+    assertEquals(OutboxChange.Unknown, changes.receive())
+
+    store.move(sent, OutboxStatus.Sending)
+    store.move(sent, OutboxStatus.Sent)
+    store.move(failed, OutboxStatus.Failed("boom"))
+    store.move(discarded, OutboxStatus.Discarded)
+
+    changes.awaitNamed(setOf(sent, failed, discarded), orUnknown = false)
+  }
+
+  @Test
+  fun `changes name a row that a prune deletes`() = runTest {
+    val store = newStore(1.minutes)
+    val id = store.insertNew("k", "a")
+    store.move(id, OutboxStatus.Discarded)
+    val changes = store.changesIn(backgroundScope)
+    assertEquals(OutboxChange.Unknown, changes.receive())
+
+    advanceStoreTime(2.minutes)
+    store.insertNew("k", "b")
+
+    assertNull(store.entry(id).first())
+    changes.awaitNamed(setOf(id), orUnknown = false)
+  }
+
+  @Test
+  fun `changes cover every row a clear deletes`() = runTest {
+    val store = newStore(1.minutes)
+    val a = store.insertNew("k", "a")
+    val b = store.insertNew("other", "b")
+    val changes = store.changesIn(backgroundScope)
+    assertEquals(OutboxChange.Unknown, changes.receive())
+
+    clearAll(store)
+
+    // A store may name the rows, or give Unknown when it deleted them without reading them
+    changes.awaitNamed(setOf(a, b), orUnknown = true)
   }
 }
