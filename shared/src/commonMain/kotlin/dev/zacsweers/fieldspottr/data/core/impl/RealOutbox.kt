@@ -11,6 +11,7 @@ import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.Outbox
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
+import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
@@ -41,7 +42,6 @@ import kotlinx.collections.immutable.PersistentSet
 import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.collections.immutable.persistentHashSetOf
 import kotlinx.collections.immutable.persistentMapOf
-import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -148,14 +148,14 @@ internal class AttachedOutbox<E>(val engine: RealOutbox<E>) : Outbox<E>, OwnedRo
  * heads, and a drain reads only its key's head. Handles hold no store subscription of their own.
  * Each reads its row once after it starts following, and then the drain settles it with the
  * attempt's outcome. A change the outbox did not make, like a discard by an optimistic store's
- * clear, reaches a handle through a sweep of its key. A sweep runs when the key's head changes and
- * reads the key's followed rows up to the first one still waiting, so a handle on a row behind a
- * waiting head hears of such a change once the key moves past the head.
+ * clear, reaches a handle through [OutboxStore.changes]. That one subscription names the rows each
+ * write ended or deleted, and the outbox rereads only the followed rows among them, wherever they
+ * wait.
  *
  * Every handle settles one of these ways: its first read finds the row settled or gone, the drain
- * settles the attempt it follows, [discard] settles the row's handles Cancelled, a sweep finds its
- * row settled, or the scope stops. A failed store read never settles a handle. It is reported and
- * read again later.
+ * settles the attempt it follows, [discard] settles the row's handles Cancelled, a recheck after a
+ * change finds its row settled or gone, or the scope stops. A failed store read never settles a
+ * handle. It is reported and read again later.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealOutbox<E>(
@@ -209,9 +209,9 @@ internal class RealOutbox<E>(
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt. A timer that
   // fired stays until a drain takes its row, so the drain knows the wait is over.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
-  // The unsettled handles following each row's current attempt, by row and by key, so the
-  // attempt's outcome reaches them and a sweep finds them. Updated by compare-and-set only, and
-  // nothing observes it, so it needs no StateFlow.
+  // The unsettled handles following each row's current attempt, so the attempt's outcome reaches
+  // them and a recheck finds them. Updated by compare-and-set only, and nothing observes it, so it
+  // needs no StateFlow.
   private val follows = AtomicReference(Follows())
   // Set once the scope stops. A handle that starts following after that settles Cancelled itself.
   private val stopped = AtomicBoolean(false)
@@ -222,9 +222,12 @@ internal class RealOutbox<E>(
   // exception send threw, even one whose read lands before the drain settles it. It keeps the
   // newest MAX_REMEMBERED_FAILURES, oldest first. Updated by compare-and-set only.
   private val failedRows = AtomicReference(persistentMapOf<EntryId, FailedRow>())
-  // Keys whose sweep failed to read a row, with the pause before the next sweep and whether one is
-  // scheduled. Cleared by a sweep that reads every row it needs. Updated by compare-and-set only.
-  private val resweeps = AtomicReference(persistentHashMapOf<String, Resweep>())
+  // Rows whose recheck failed to read them, with the pause before the next recheck and whether one
+  // is scheduled. Cleared by a recheck that reads its row. Updated by compare-and-set only.
+  private val rechecks = AtomicReference(persistentHashMapOf<EntryId, Recheck>())
+  // Rows with a recheck running, and whether another was asked for meanwhile. Updated by
+  // compare-and-set only.
+  private val checking = AtomicReference(persistentHashMapOf<EntryId, Boolean>())
   // How long each key whose drain failed waits before its next try, doubling while it keeps
   // failing. Cleared by a drain that finishes. Updated by compare-and-set only.
   private val failing = AtomicReference(persistentMapOf<String, Duration>())
@@ -265,6 +268,7 @@ internal class RealOutbox<E>(
 
   init {
     scope.launch { watch() }
+    scope.launch { watchChanges() }
     // The watcher and drains read only heads, which are Queued or Sending. One read of every row
     // lets the store meet each stored row once, so it hands on a Failed row that does not decode
     // too. A failed read is reported and stops nothing.
@@ -274,15 +278,12 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Reports the backlog on every change of the heads and every network change, starts a drain for
-   * each key with a head while online, and sweeps each key whose head changed. A store that fails
-   * to report its heads is reported and watched again after a pause, or at once on reconnect, so
-   * rows already stored still send.
+   * Reports the backlog on every change of the heads and every network change, and starts a drain
+   * for each key with a head while online. A store that fails to report its heads is reported and
+   * watched again after a pause, or at once on reconnect, so rows already stored still send.
    */
   private suspend fun watch() {
     var pause = STORE_RETRY_FIRST
-    // The heads of the last pass, to find the keys whose head changed
-    var last = emptyMap<String, OutboxEntry<E>>()
     var wasUp = false
     while (true) {
       runCatchingCancellable {
@@ -291,18 +292,15 @@ internal class RealOutbox<E>(
               pause = STORE_RETRY_FIRST
               // Offline too, so a platform can schedule a drain for when the network is back
               onBacklog(backlogOf(heads))
-              val current = heads.associateBy { it.key }
+              val keys = heads.mapTo(HashSet()) { it.key }
               if (up) {
-                current.keys.forEach(::drain)
+                keys.forEach(::drain)
                 // A timer that fired while offline left its drain undone, and its row may be gone
                 if (!wasUp) {
-                  (waking.load().keys - current.keys).forEach(::drain)
+                  (waking.load().keys - keys).forEach(::drain)
                 }
               }
               wasUp = up
-              val moved = (last.keys + current.keys).filter { last[it] != current[it] }
-              last = current
-              moved.forEach { sweep(it) }
             }
         }
         .onFailure(onFailure)
@@ -408,7 +406,7 @@ internal class RealOutbox<E>(
       // stops meanwhile. A store that throws stored nothing, so no send or revert would reach it.
       withContext(NonCancellable) {
         rollbackOnFailure({ owner.revert(payload, id) }) { store.insert(id, rowKey, payload) }
-        attempt.started(id, rowKey)
+        attempt.started(id)
       }
       // Without waiting for the watcher, which may be pausing after a store failure
       drain(rowKey)
@@ -440,7 +438,7 @@ internal class RealOutbox<E>(
         else -> Unit
       }
       // A row that is gone still gets a handle, which its first read settles Cancelled
-      attempt.started(id, row?.key)
+      attempt.started(id)
       row?.let { drain(it.key) }
     }
 
@@ -476,19 +474,9 @@ internal class RealOutbox<E>(
 
   fun operation(id: EntryId): Operation {
     val state = MutableStateFlow<OperationState>(OperationState.Queued)
-    follow(id, key = null, state)
-    val handle =
-      latched(state, { id }) {
-        val row = readRow(id)
-        if (row == null) {
-          OperationState.Cancelled
-        } else {
-          // Now that the key is known, sweeps of that key find this handle. A change between the
-          // read and this could have been swept before, so the row is read again after it.
-          follows.update { it.placing(id, row.key) }
-          stateOf(id, readRow(id))
-        }
-      }
+    // Before the first read, so a change after the read reaches the handle through a recheck
+    follow(id, state)
+    val handle = latched(state, { id }) { stateOf(id, readRow(id)) }
     return Operation.of(handle)
   }
 
@@ -1072,9 +1060,9 @@ internal class RealOutbox<E>(
     // Whether the row is in the store, for the handle's stored milestone
     val stored = MutableStateFlow<OperationState>(OperationState.Queued)
 
-    /** Follows [row] on [key] before anything can settle the attempt, then records it. */
-    fun started(row: EntryId, key: String?) {
-      follow(row, key, state)
+    /** Follows [row] before anything can settle the attempt, then records it. */
+    fun started(row: EntryId) {
+      follow(row, state)
       this.row = row
       id.complete(row)
       stored.value = OperationState.Succeeded
@@ -1090,7 +1078,7 @@ internal class RealOutbox<E>(
 
   /**
    * [state], after one read of its row by [firstRead] in the outbox's scope. From then on the drain
-   * settles it through [settleFollowers], and a sweep settles it when something else changed the
+   * settles it through [settleFollowers], and a recheck settles it when something else changed the
    * row. A read that finds the row settled settles the handle. A read that throws is reported and
    * tried again after a pause, until it works or the handle has settled another way. If the scope
    * stops first, the handle settles Cancelled and the row stays for the next owner. Either way no
@@ -1138,65 +1126,109 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Settles the handles following [key]'s rows whose rows something else settled, like a discard by
-   * an optimistic store's clear or a logout's clearAll. It reads the rows in the order they were
-   * followed and stops at the first one still waiting, so each pass reads one waiting row, and each
-   * settled row is read until its handles settle. A row settles on its row key, where [retry] runs,
-   * so a retry never lands between the read and the settle.
-   *
-   * A read that throws settles nothing. It is reported, and the key is swept again after a pause
-   * that doubles while reads keep failing, so the handles settle once reads work even when the
-   * key's head never changes again.
+   * Rechecks the followed rows that [OutboxStore.changes] names, as [recheck] describes. Each
+   * subscription starts with [OutboxChange.Unknown], which rechecks every followed row, so a change
+   * made while the store was not watched still reaches its handles. A store that fails to report
+   * its changes is reported and watched again after a pause that doubles while it keeps failing.
    */
-  private suspend fun sweep(key: String) {
+  private suspend fun watchChanges() {
+    var pause = STORE_RETRY_FIRST
     while (true) {
-      val id = follows.load().byKey[key]?.firstOrNull()
-      if (id == null) {
-        sweptAll(key)
-        return
-      }
-      val state = readState(id)
-      if (state == null) {
-        sweepLater(key)
-        return
-      }
-      if (state !is OperationState.Terminal) {
-        showFollowers(id, state)
-        sweptAll(key)
-        return
-      }
-      val settled =
-        onRow(id) {
-          when (val again = readState(id)) {
-            null -> null
-            is OperationState.Terminal -> {
-              settleFollowers(id, again)
-              true
-            }
-            else -> {
-              showFollowers(id, again)
-              false
+      runCatchingCancellable {
+          store.changes().collect { change ->
+            pause = STORE_RETRY_FIRST
+            val followed = follows.load().byRow
+            when (change) {
+              OutboxChange.Unknown -> followed.keys.forEach(::recheck)
+              is OutboxChange.Rows ->
+                for (id in change.ids) {
+                  if (id in followed) {
+                    recheck(id)
+                  }
+                }
             }
           }
         }
-      when (settled) {
-        null -> {
-          sweepLater(key)
-          return
-        }
-        false -> {
-          sweptAll(key)
-          return
-        }
-        true -> Unit
-      }
+        .onFailure(onFailure)
+      delay(pause)
+      pause = minOf(pause * 2, STORE_RETRY_MAX)
     }
   }
 
-  /** Schedules one more sweep of [key] unless one is already due, after a doubling pause. */
-  private fun sweepLater(key: String) {
-    val before = resweeps.fetchAndUpdate { current ->
-      val last = current[key]
+  /**
+   * Reads row [id] again and settles its handles if something else settled or removed the row, like
+   * a discard by an optimistic store's clear or a logout's clearAll. Otherwise it shows the row's
+   * state. One recheck of a row runs at a time, and a request that comes meanwhile runs once more
+   * after it, so a burst of changes to one row costs at most two reads.
+   */
+  private fun recheck(id: EntryId) {
+    val before = checking.fetchAndUpdate { it.putting(id, it.containsKey(id)) }
+    if (before.containsKey(id)) {
+      return
+    }
+    scope.launch {
+      do {
+        recheckOnce(id)
+        val again = checking.fetchAndUpdate { current ->
+          if (current[id] == true) {
+            current.putting(id, false)
+          } else {
+            current.removing(id)
+          }
+        }
+      } while (again[id] == true)
+    }
+  }
+
+  /**
+   * One recheck of row [id]. The read runs off the row's key, so a slow read never holds up the
+   * drain. A row read as settled or gone is read again on its key, where [retry] runs, and settled
+   * there, so a retry never lands between that read and the settle, and a handle of the retry's new
+   * attempt never hears of an older change.
+   *
+   * A read that throws settles nothing. It is reported, and the row is rechecked after a pause that
+   * doubles while reads keep failing, so its handles settle once reads work even when no other
+   * write comes.
+   */
+  private suspend fun recheckOnce(id: EntryId) {
+    if (id !in follows.load().byRow) {
+      return
+    }
+    val state = readState(id)
+    if (state == null) {
+      recheckLater(id)
+      return
+    }
+    if (state !is OperationState.Terminal) {
+      recheckedAll(id)
+      showFollowers(id, state)
+      return
+    }
+    val settled =
+      onRow(id) {
+        when (val again = readState(id)) {
+          null -> false
+          is OperationState.Terminal -> {
+            settleFollowers(id, again)
+            true
+          }
+          else -> {
+            showFollowers(id, again)
+            true
+          }
+        }
+      }
+    if (settled) {
+      recheckedAll(id)
+    } else {
+      recheckLater(id)
+    }
+  }
+
+  /** Schedules one more recheck of row [id] unless one is already due, after a doubling pause. */
+  private fun recheckLater(id: EntryId) {
+    val before = rechecks.fetchAndUpdate { current ->
+      val last = current[id]
       if (last?.due == true) {
         current
       } else {
@@ -1206,27 +1238,27 @@ internal class RealOutbox<E>(
           } else {
             minOf(last.pause * 2, STORE_RETRY_MAX)
           }
-        current.putting(key, Resweep(pause, due = true))
+        current.putting(id, Recheck(pause, due = true))
       }
     }
-    if (before[key]?.due == true) {
+    if (before[id]?.due == true) {
       return
     }
-    val pause = resweeps.load()[key]?.pause ?: STORE_RETRY_FIRST
+    val pause = rechecks.load()[id]?.pause ?: STORE_RETRY_FIRST
     scope.launch {
       delay(pause)
-      resweeps.update { current ->
-        current[key]?.let { current.putting(key, Resweep(it.pause, due = false)) } ?: current
+      rechecks.update { current ->
+        current[id]?.let { current.putting(id, Recheck(it.pause, due = false)) } ?: current
       }
-      sweep(key)
+      recheck(id)
     }
   }
 
-  /** Clears [key]'s pause after a sweep that read every row it needed, unless a sweep is due. */
-  private fun sweptAll(key: String) {
-    resweeps.update { current ->
-      if (current[key]?.due == false) {
-        current.removing(key)
+  /** Clears row [id]'s pause after a recheck that read the row, unless a recheck is due. */
+  private fun recheckedAll(id: EntryId) {
+    rechecks.update { current ->
+      if (current[id]?.due == false) {
+        current.removing(id)
       } else {
         current
       }
@@ -1293,12 +1325,9 @@ internal class RealOutbox<E>(
   internal val rowsFollowed: Int
     get() = follows.load().byRow.size
 
-  /**
-   * Follows row [id] on [key] with [state]. A null key leaves the row out of sweeps until
-   * [Follows.placing] adds it. After the scope stopped, [state] settles Cancelled at once.
-   */
-  private fun follow(id: EntryId, key: String?, state: MutableStateFlow<OperationState>) {
-    follows.update { it.following(id, key, state) }
+  /** Follows row [id] with [state]. After the scope stopped, [state] settles Cancelled at once. */
+  private fun follow(id: EntryId, state: MutableStateFlow<OperationState>) {
+    follows.update { it.following(id, state) }
     if (stopped.load()) {
       state.update { it.settledOr(OperationState.Cancelled) }
       unfollow(id, state)
@@ -1311,7 +1340,7 @@ internal class RealOutbox<E>(
 
   /** Shows [state], which is not terminal, on every handle following row [id]. */
   private fun showFollowers(id: EntryId, state: OperationState) {
-    follows.load().byRow[id]?.states?.forEach { follower ->
+    follows.load().byRow[id]?.forEach { follower ->
       follower.update { it.settledOr(state) }
     }
   }
@@ -1322,7 +1351,7 @@ internal class RealOutbox<E>(
    */
   private fun settleFollowers(id: EntryId, outcome: OperationState) {
     val settled = follows.fetchAndUpdate { it.forgetting(id) }.byRow[id] ?: return
-    settled.states.forEach { state -> state.update { it.settledOr(outcome) } }
+    settled.forEach { state -> state.update { it.settledOr(outcome) } }
   }
 
   /**
@@ -1333,7 +1362,7 @@ internal class RealOutbox<E>(
     stopped.store(true)
     val all = follows.exchange(Follows())
     for (followers in all.byRow.values) {
-      followers.states.forEach { state -> state.update { it.settledOr(OperationState.Cancelled) } }
+      followers.forEach { state -> state.update { it.settledOr(OperationState.Cancelled) } }
     }
     try {
       undecodable.close()
@@ -1361,8 +1390,8 @@ internal class RealOutbox<E>(
   /** A row's Failed [status] as written, and the outcome with the exception send threw. */
   private class FailedRow(val status: OutboxStatus.Failed, val outcome: OperationState.Failed)
 
-  /** A key's sweep pause, and whether a sweep after it is scheduled. */
-  private class Resweep(val pause: Duration, val due: Boolean)
+  /** A row's recheck pause, and whether a recheck after it is scheduled. */
+  private class Recheck(val pause: Duration, val due: Boolean)
 
   /**
    * A backoff timer: the head row it waits for, that row's deadline [retryAt], and [wakeAt], when
@@ -1377,71 +1406,24 @@ internal class RealOutbox<E>(
       head.id == id && head.retryAt?.toEpochMilliseconds() == retryAt.toEpochMilliseconds()
   }
 
-  /** The handles following one row's current attempt, and the row's key once known. */
-  private class Followers(
-    val key: String?,
-    val states: PersistentSet<MutableStateFlow<OperationState>>,
-  )
-
-  /**
-   * Every handle that follows a row, by row in [byRow], and the followed rows of each key in
-   * [byKey], in the order they were first followed. For rows this outbox inserted, that is their
-   * send order, which lets a sweep stop at the first row still waiting.
-   */
+  /** Every handle that follows a row's current attempt, by row. */
   private class Follows(
-    val byRow: PersistentMap<EntryId, Followers> = persistentHashMapOf(),
-    val byKey: PersistentMap<String, PersistentSet<EntryId>> = persistentHashMapOf(),
+    val byRow: PersistentMap<EntryId, PersistentSet<MutableStateFlow<OperationState>>> =
+      persistentHashMapOf()
   ) {
-    fun following(id: EntryId, key: String?, state: MutableStateFlow<OperationState>): Follows {
-      val current = byRow[id]
-      val rowKey = key ?: current?.key
-      val states = (current?.states ?: persistentHashSetOf()).adding(state)
-      return Follows(byRow.putting(id, Followers(rowKey, states)), byKey.listing(rowKey, id))
-    }
-
-    /** Records [key] for row [id] if it is still followed, so sweeps of [key] find it. */
-    fun placing(id: EntryId, key: String): Follows {
-      val current = byRow[id] ?: return this
-      if (current.key == key) {
-        return this
-      }
-      return Follows(byRow.putting(id, Followers(key, current.states)), byKey.listing(key, id))
-    }
+    fun following(id: EntryId, state: MutableStateFlow<OperationState>): Follows =
+      Follows(byRow.putting(id, (byRow[id] ?: persistentHashSetOf()).adding(state)))
 
     fun unfollowing(id: EntryId, state: MutableStateFlow<OperationState>): Follows {
-      val current = byRow[id] ?: return this
-      val rest = current.states.removing(state)
+      val rest = byRow[id]?.removing(state) ?: return this
       return if (rest.isEmpty()) {
         forgetting(id)
       } else {
-        Follows(byRow.putting(id, Followers(current.key, rest)), byKey)
+        Follows(byRow.putting(id, rest))
       }
     }
 
-    fun forgetting(id: EntryId): Follows {
-      val current = byRow[id] ?: return this
-      val key = current.key ?: return Follows(byRow.removing(id), byKey)
-      val rest = byKey[key]?.removing(id)
-      return Follows(
-        byRow.removing(id),
-        if (rest.isNullOrEmpty()) {
-          byKey.removing(key)
-        } else {
-          byKey.putting(key, rest)
-        },
-      )
-    }
-
-    private fun PersistentMap<String, PersistentSet<EntryId>>.listing(
-      key: String?,
-      id: EntryId,
-    ): PersistentMap<String, PersistentSet<EntryId>> =
-      if (key == null) {
-        this
-      } else {
-        // An ordered set, so the first id is the one followed first
-        putting(key, (this[key] ?: persistentSetOf()).adding(id))
-      }
+    fun forgetting(id: EntryId): Follows = Follows(byRow.removing(id))
   }
 }
 

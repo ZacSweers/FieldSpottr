@@ -4,10 +4,15 @@ package dev.zacsweers.fieldspottr.data.core
 
 import kotlin.jvm.JvmInline
 import kotlin.time.Instant
+import kotlinx.collections.immutable.PersistentList
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 
@@ -164,6 +169,38 @@ interface OutboxStore<E> {
     entries().first().firstOrNull { it.key == key && it.status.isSendable }
 
   /**
+   * Which rows writes ended, so an outbox can settle the handles that follow them.
+   *
+   * The flow starts with [OutboxChange.Unknown] once it is subscribed, so a read made after that
+   * sees every change the flow does not name later. Then, once each write is committed, it names
+   * every row the write moved to Sent, Failed or Discarded, and every row it deleted before the row
+   * settled, whoever called the store: an outbox, an optimistic store's clear, or another data
+   * scope over the same store. It may name other changed rows too, and several writes at once. It
+   * emits [OutboxChange.Unknown] when it cannot name the rows, like after a clear of every row. A
+   * settled row that the store prunes needs no name, since no handle follows a settled row.
+   *
+   * The default compares each [entries] emission with the last, so every change reads every row. A
+   * store over many rows overrides it with an [OutboxChangeLog], which names the rows of the writes
+   * made through the store and reads none.
+   */
+  fun changes(): Flow<OutboxChange> = flow {
+    var last: Map<EntryId, OutboxEntry<E>>? = null
+    entries().collect { rows ->
+      val current = rows.associateBy { it.id }
+      val previous = last
+      last = current
+      if (previous == null) {
+        emit(OutboxChange.Unknown)
+      } else {
+        val ids = (previous.keys + current.keys).filterTo(HashSet()) { previous[it] != current[it] }
+        if (ids.isNotEmpty()) {
+          emit(OutboxChange.Rows(ids))
+        }
+      }
+    }
+  }
+
+  /**
    * Hands [report] each row that is not [isDone] that this store left out of a read because its
    * payload does not decode, with the decode error. Such a row never makes a read throw and never
    * blocks its key or another key. It stays stored until [OutboxStores.clearAll].
@@ -180,6 +217,90 @@ interface OutboxStore<E> {
   fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
     AutoCloseable {}
 }
+
+/** Which rows writes ended, from [OutboxStore.changes]. */
+sealed interface OutboxChange {
+  /** Committed writes ended the rows [ids], and may have changed them otherwise. */
+  data class Rows(val ids: Set<EntryId>) : OutboxChange
+
+  /**
+   * Any row may have changed: the flow just started, or the store cannot name the rows, like after
+   * a clear of every row. A reader reads again every row it cares about.
+   */
+  data object Unknown : OutboxChange
+}
+
+/**
+ * A store's record of the rows its writes ended, kept in memory, for [OutboxStore.changes]. The
+ * store calls [record] once a write is committed, with no suspension between the two, so a
+ * cancelled caller cannot skip it. Each collector of [changes] then hears of the write without
+ * reading a row.
+ *
+ * It records only what the store tells it, so every writer must go through the same store object,
+ * as the data scopes over one [OutboxStores] set do. A write that reaches the storage another way,
+ * like through a second store object over the same table, is not named.
+ *
+ * It keeps the newest [MAX_RECORDED_WRITES] writes. A collector that fell further behind gets
+ * [OutboxChange.Unknown].
+ */
+internal class OutboxChangeLog {
+  private val log = MutableStateFlow(Log())
+
+  /** Records one committed write that ended the rows [ids]. */
+  fun record(ids: Set<EntryId>) {
+    if (ids.isNotEmpty()) {
+      log.update { it.adding(ids) }
+    }
+  }
+
+  /** Records one committed write that may have ended any row, like a clear of every row. */
+  fun recordAll() {
+    log.update { it.adding(null) }
+  }
+
+  /** [OutboxStore.changes] for the store that owns this record. */
+  fun changes(): Flow<OutboxChange> = flow {
+    var seen: Long? = null
+    // A StateFlow can skip values, so each value carries the writes a collector may have missed
+    log.collect { current ->
+      val last = seen
+      seen = current.version
+      if (last == null) {
+        emit(OutboxChange.Unknown)
+      } else if (current.version != last) {
+        val missed = current.version - last
+        val writes = current.writes.takeLast(minOf(missed, current.writes.size.toLong()).toInt())
+        if (writes.size < missed || null in writes) {
+          emit(OutboxChange.Unknown)
+        } else {
+          emit(OutboxChange.Rows(writes.flatMapTo(HashSet()) { it.orEmpty() }))
+        }
+      }
+    }
+  }
+
+  /**
+   * How many writes were recorded so far, and the newest of them, oldest first. A write is the rows
+   * it ended, or null when it may have ended any row.
+   */
+  private class Log(
+    val version: Long = 0,
+    val writes: PersistentList<Set<EntryId>?> = persistentListOf(),
+  ) {
+    fun adding(ids: Set<EntryId>?): Log {
+      val kept =
+        if (writes.size == MAX_RECORDED_WRITES) {
+          writes.removingAt(0)
+        } else {
+          writes
+        }
+      return Log(version + 1, kept.adding(ids))
+    }
+  }
+}
+
+/** How many writes an [OutboxChangeLog] keeps for collectors that fall behind. */
+internal const val MAX_RECORDED_WRITES = 64
 
 /** A store an [OutboxStores] set opened for a name, with the payload type it was opened for. */
 internal class OpenedStore<S>(val descriptor: SerialDescriptor, val store: S) {

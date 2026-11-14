@@ -65,11 +65,13 @@ class InMemoryOutboxStores : OutboxStores {
   }
 }
 
-private class InMemoryOutboxStore<E>(
+internal class InMemoryOutboxStore<E>(
   private val keepSettledFor: Duration,
   private val time: TimeSource,
 ) : OutboxStore<E> {
   private val rows = MutableStateFlow(Rows<E>())
+  // The rows this store's writes ended, for changes
+  private val ended = OutboxChangeLog()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
     val row = OutboxEntry(id, key, payload, OutboxStatus.Queued)
@@ -130,6 +132,10 @@ private class InMemoryOutboxStore<E>(
         }
       }
     }
+    // Only a write that ends the row's attempt is named, so one to Queued or Sending is not
+    if (written && !entry.status.isSendable && entry.status != expected) {
+      ended.record(setOf(entry.id))
+    }
     return written
   }
 
@@ -137,6 +143,8 @@ private class InMemoryOutboxStore<E>(
     rows
       .map { current -> current.all.values.map { it.entry }.filterNot { it.isDone } }
       .distinctUntilChanged()
+
+  override fun changes(): Flow<OutboxChange> = ended.changes()
 
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> =
     rows
@@ -158,6 +166,7 @@ private class InMemoryOutboxStore<E>(
   /** Drops every row, settled ones included, so each handle reads its row as absent. */
   fun clear() {
     rows.value = Rows()
+    ended.recordAll()
   }
 
   /** [key]'s oldest row that is Queued or Sending. Failed rows before it are skipped. */

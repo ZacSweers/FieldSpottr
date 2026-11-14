@@ -21,11 +21,13 @@ import dev.zacsweers.fieldspottr.data.core.impl.committedValues
 import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
+import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
@@ -901,6 +903,37 @@ class OptimisticQueryStoreTest {
     }
     assertThat(note.data.value?.value).isEqualTo("second")
     scopes.assertNoFailures()
+  }
+
+  /**
+   * Two edits wait offline in one scope. A scope from another factory over the same rows discards
+   * the second, so the first stays the key's head, then clears the store, which discards the first.
+   */
+  @Test
+  fun `changes another writer discards and clears settle their handles cancelled`() = runTest {
+    val scopes = testDataScopeFactory(clock = testClock(START), online = false)
+    val others = testDataScopeFactory(online = false, stores = scopes.outboxStores)
+    val note = QueryStore.inMemory(Fetched("draft", START))
+    fun build(factory: TestDataScopeFactory) =
+      factory
+        .create(backgroundScope, setOf(Note.sender(send = { _, _ -> })))
+        .optimisticStore<String, SetText>(Note, base = note, apply = { _, edit -> edit.text })
+    val mine = build(scopes)
+    val first = mine.mutate(SetText("first"))
+    val second = mine.mutate(SetText("second"))
+    second.stored.awaitSucceeded()
+    val other = build(others)
+
+    other.discard(second.id).awaitSucceeded()
+    runCurrent()
+    second.assertCancelled()
+    first.assertPending()
+
+    other.clear()
+    runCurrent()
+    first.assertCancelled()
+    scopes.assertNoFailures()
+    others.assertNoFailures()
   }
 
   @Test

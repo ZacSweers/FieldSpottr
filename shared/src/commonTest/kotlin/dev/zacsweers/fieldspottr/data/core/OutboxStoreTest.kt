@@ -19,9 +19,12 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Instant
 import kotlin.time.TestTimeSource
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -34,6 +37,55 @@ import okio.Path
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
 
+/** What a collector of [OutboxChangeLog.changes] hears of the writes it missed. */
+class OutboxChangeLogTest {
+  @Test
+  fun `a collector that missed a few writes gets their rows at once`() = runTest {
+    val log = OutboxChangeLog()
+    val resume = CompletableDeferred<Unit>()
+    val changes = changesHeldUntil(resume, log)
+    assertEquals(OutboxChange.Unknown, changes.receive())
+
+    log.record(setOf(EntryId("a")))
+    log.record(setOf(EntryId("b"), EntryId("c")))
+    resume.complete(Unit)
+
+    val all = setOf(EntryId("a"), EntryId("b"), EntryId("c"))
+    assertEquals(OutboxChange.Rows(all), changes.receive())
+  }
+
+  @Test
+  fun `a collector that fell behind the kept writes gets Unknown`() = runTest {
+    val log = OutboxChangeLog()
+    val resume = CompletableDeferred<Unit>()
+    val changes = changesHeldUntil(resume, log)
+    assertEquals(OutboxChange.Unknown, changes.receive())
+
+    repeat(MAX_RECORDED_WRITES + 1) { log.record(setOf(EntryId("row$it"))) }
+    resume.complete(Unit)
+
+    assertEquals(OutboxChange.Unknown, changes.receive())
+  }
+
+  /**
+   * Collects [log] in the background. The collector holds after each change until [resume]
+   * completes, like one that falls behind.
+   */
+  private fun TestScope.changesHeldUntil(
+    resume: CompletableDeferred<Unit>,
+    log: OutboxChangeLog,
+  ): ReceiveChannel<OutboxChange> {
+    val changes = Channel<OutboxChange>(Channel.UNLIMITED)
+    backgroundScope.launch {
+      log.changes().collect {
+        changes.send(it)
+        resume.await()
+      }
+    }
+    return changes
+  }
+}
+
 class InMemoryOutboxStoreTest : OutboxStoreContract() {
   private val time = TestTimeSource()
 
@@ -42,6 +94,10 @@ class InMemoryOutboxStoreTest : OutboxStoreContract() {
 
   override fun advanceStoreTime(duration: Duration) {
     time += duration
+  }
+
+  override suspend fun TestScope.clearAll(store: OutboxStore<String>) {
+    (store as InMemoryOutboxStore<String>).clear()
   }
 }
 
@@ -65,6 +121,10 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
 
   override fun advanceStoreTime(duration: Duration) {
     clock.shift(duration)
+  }
+
+  override suspend fun TestScope.clearAll(store: OutboxStore<String>) {
+    (store as DataStoreOutboxStore<String>).clear()
   }
 
   // A JSON object where the codec expects a string
