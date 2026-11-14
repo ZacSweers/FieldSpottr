@@ -1,6 +1,7 @@
 skip_docs
 
 require 'fileutils'
+require 'shellwords'
 
 platform :android do
 
@@ -118,6 +119,17 @@ platform :ios do
 
     certs(type: 'appstore') unless skip_certs
 
+    # Archive with match's App Store credentials even when the project uses development signing.
+    signing_args = nil
+    unless skip_certs
+      profile = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING].fetch(ios_bundle_ids.first)
+      signing_args = Shellwords.join([
+        "CODE_SIGN_STYLE=Manual",
+        "CODE_SIGN_IDENTITY=Apple Distribution",
+        "PROVISIONING_PROFILE_SPECIFIER=#{profile}",
+      ])
+    end
+
     increment_build_number(
       xcodeproj: "FieldSpottr/FieldSpottr.xcodeproj",
       build_number: ENV['FS_BUILD_NUMBER']
@@ -129,8 +141,8 @@ platform :ios do
     build_app(
       project: "FieldSpottr/FieldSpottr.xcodeproj",
       scheme: options[:scheme],
-      # Release uses the App Store signing credentials installed by match.
       configuration: "Release",
+      xcargs: signing_args,
       archive_path: archive_path,
       buildlog_path: "build/fastlane-buildlog",
       skip_package_ipa: true,
