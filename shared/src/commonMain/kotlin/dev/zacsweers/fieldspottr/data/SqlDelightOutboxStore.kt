@@ -8,6 +8,8 @@ import dev.zacsweers.fieldspottr.OutboxRowQueries
 import dev.zacsweers.fieldspottr.data.core.DefaultPayloadFormat
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OpenedStore
+import dev.zacsweers.fieldspottr.data.core.OutboxChange
+import dev.zacsweers.fieldspottr.data.core.OutboxChangeLog
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -17,6 +19,7 @@ import dev.zacsweers.fieldspottr.data.core.UndecodableRows
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.decodeCatching
 import dev.zacsweers.fieldspottr.data.core.isDone
+import dev.zacsweers.fieldspottr.data.core.isSendable
 import dev.zacsweers.fieldspottr.data.core.storedCause
 import dev.zacsweers.fieldspottr.data.core.storedName
 import kotlin.concurrent.atomics.AtomicReference
@@ -93,7 +96,13 @@ class SqlDelightOutboxStores(
 
   // One table holds every outbox's rows, so one statement clears them all
   override suspend fun clearAll() {
-    withContext(io) { queries().deleteAll() }
+    withContext(io) {
+      queries().deleteAll()
+      // Right after the delete, with no suspension between, so a cancelled caller cannot skip it
+      for (entry in opened.load().values) {
+        entry.store.recordCleared()
+      }
+    }
     for (entry in opened.load().values) {
       entry.store.forgetUndecodable()
     }
@@ -108,6 +117,10 @@ class SqlDelightOutboxStores(
  * Each row's payload decodes on its own. A row that does not decode, like one stored before its
  * payload class changed, is left out of [entries], [entry] and [heads], and handed on through
  * [onUndecodable]. It stays in the table.
+ *
+ * [changes] names the rows that writes through this store ended, from a record in memory. A write
+ * that reaches the table another way, like through a second store set over the same database, is
+ * not named, so build one [SqlDelightOutboxStores] per database.
  */
 class SqlDelightOutboxStore<E>(
   private val queries: suspend () -> OutboxRowQueries,
@@ -120,6 +133,8 @@ class SqlDelightOutboxStore<E>(
 ) : OutboxStore<E> {
   // The rows this store cannot decode, found by its reads
   private val undecodable = UndecodableRows()
+  // The rows this store's writes ended, for changes
+  private val ended = OutboxChangeLog()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
     currentCoroutineContext().ensureActive()
@@ -149,7 +164,7 @@ class SqlDelightOutboxStore<E>(
       if (row == null || OutboxStatus(row.status, row.cause) != expected) {
         return@withContext false
       }
-      queries.transactionWithResult {
+      val written = queries.transactionWithResult {
         // The WHERE on what was read makes the write a compare-and-set. changes() reports it.
         queries.compareAndSet(
           status = entry.status.storedName,
@@ -179,6 +194,12 @@ class SqlDelightOutboxStore<E>(
         )
         queries.changes().executeAsOne() > 0
       }
+      // Right after the commit, with no suspension between, so a cancelled caller cannot skip it.
+      // Only a write that ends the row's attempt is named, so one to Queued or Sending is not.
+      if (written && !entry.status.isSendable && entry.status != expected) {
+        ended.record(setOf(entry.id))
+      }
+      written
     }
   }
 
@@ -229,12 +250,19 @@ class SqlDelightOutboxStore<E>(
       }
     }
 
+  override fun changes(): Flow<OutboxChange> = ended.changes()
+
   override fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
     undecodable.listen(report)
 
   /** Forgets the rows found not to decode, after every row was deleted. */
   internal fun forgetUndecodable() {
     undecodable.clear()
+  }
+
+  /** Tells collectors of [changes] that any row may be gone, after every row was deleted. */
+  internal fun recordCleared() {
+    ended.recordAll()
   }
 
   /**

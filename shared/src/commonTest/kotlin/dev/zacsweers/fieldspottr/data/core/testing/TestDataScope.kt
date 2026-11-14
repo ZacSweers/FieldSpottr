@@ -143,11 +143,12 @@ fun TestScope.testDataScopeFactory(
   retry: RetryPolicy = RetryPolicy.exponential(),
   /** The hold-off policy of every query built without one, as [DataScope.Factory] describes. */
   fetchRetry: RetryPolicy = RetryPolicy.exponential(initial = 1.seconds, max = 1.minutes),
+  /** The outbox rows. Another factory's rows give a second writer over the same rows. */
+  stores: InMemoryOutboxStores = InMemoryOutboxStores(),
 ): TestDataScopeFactory {
   val onlineState = MutableStateFlow(online)
   val fetchFailures = TestFailures()
   val actionFailures = TestFailures()
-  val stores = InMemoryOutboxStores()
   val delegate =
     DataScope.Factory(
       onFailure = actionFailures,

@@ -6,6 +6,7 @@ import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
 import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
@@ -70,6 +71,9 @@ internal fun <M> OutboxStore<M>.keyedByUnit(): OutboxStore<KeyedMutation<Unit, M
 
     override suspend fun head(key: String): OutboxEntry<KeyedMutation<Unit, M>>? =
       rows.head(key)?.keyed()
+
+    // Row ids are the same either way
+    override fun changes(): Flow<OutboxChange> = rows.changes()
 
     override fun onUndecodable(report: (id: EntryId, cause: Throwable) -> Unit): AutoCloseable =
       rows.onUndecodable(report)
