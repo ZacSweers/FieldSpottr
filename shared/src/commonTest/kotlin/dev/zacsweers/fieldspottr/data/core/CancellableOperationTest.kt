@@ -245,7 +245,9 @@ class CancellableOperationTest {
     val data = testDataScope()
     val actions = data.newActionRunner()
     val ordering = Ordering.Keyed("search", OnPrevious.Cancel)
-    val searches = ConflatedActionRunner { block -> actions.runCancellable(ordering, block) }
+    val searches = ConflatedActionRunner { block ->
+      actions.runCancellable(ordering, block = block)
+    }
     val ran = mutableListOf<String>()
 
     val first = searches.run {

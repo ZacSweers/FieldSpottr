@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
@@ -333,6 +334,23 @@ class HandleRetentionTest {
       queued.assertSucceeded()
       owner.cancel()
     }
+
+  @Test
+  fun `a settled handle does not keep its join key or its conflict key`() = runTest {
+    val joinKey = ByteArray(1 shl 20)
+    val conflictKey = ByteArray(1 shl 20)
+    val actions = testDataScope().newActionRunner()
+    val handle = actions.run(joinKey = joinKey, conflictKey = conflictKey) {}
+    val rejected = actions.run(conflictKey = conflictKey) {}
+    testScheduler.runCurrent()
+
+    handle.assertSucceeded()
+    assertThat(handle.reaches(joinKey)).isFalse()
+    assertThat(handle.reaches(conflictKey)).isFalse()
+    // A rejected handle names the key that rejected it, for the caller to read
+    assertThat(rejected.assertFailed<CommandRejectedException>().conflictKey)
+      .isSameInstanceAs(conflictKey)
+  }
 
   @Test
   fun `a settled handle does not keep its key`() = runTest {

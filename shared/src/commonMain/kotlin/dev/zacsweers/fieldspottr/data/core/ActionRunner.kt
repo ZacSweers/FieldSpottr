@@ -53,12 +53,21 @@ interface ActionRunner {
    * [runCancellable] is never joined. A join key needs a key to look on, so [Ordering.Concurrent]
    * with one throws [IllegalArgumentException].
    *
-   * A join key is compared with `equals` to the newest command's join key alone, so a call costs
-   * the same however many commands wait.
+   * A [conflictKey] rejects the call while a command run with an equal conflict key on this runner
+   * has not settled, whatever the ordering of either. A rejected call starts nothing and leaves
+   * every accepted command in its place. Its handle is already [OperationState.Failed] with a
+   * [CommandRejectedException], and no failure handler hears of it. Commands that must never be
+   * pending together share one conflict key. The key is free again once its command settles,
+   * cancelled or not. With both keys, the join is tried first.
+   *
+   * A join key is compared with `equals` to the newest command's join key alone. A conflict key is
+   * looked up by `hashCode` and `equals`, like a map key. So a call costs the same however many
+   * commands wait.
    */
   fun run(
     ordering: Ordering = Ordering.Serial,
     joinKey: Any? = null,
+    conflictKey: Any? = null,
     block: suspend () -> Unit,
   ): Operation
 
@@ -66,16 +75,27 @@ interface ActionRunner {
    * [run], with a handle that can also cancel the command, as [CancellableOperation.cancel]
    * describes. An owner that returns this handle to its callers lets them cancel the command.
    *
-   * It takes no join key, since one holder's cancel would stop the command for every caller that
-   * shares it.
+   * It takes a [conflictKey] as [run] does. A rejected call's handle is already Failed, and its
+   * `cancel` does nothing. It takes no join key, since one holder's cancel would stop the command
+   * for every caller that shares it.
    */
   fun runCancellable(
     ordering: Ordering = Ordering.Serial,
+    conflictKey: Any? = null,
     block: suspend () -> Unit,
   ): CancellableOperation
 
   companion object
 }
+
+/**
+ * Why a command never ran: when it was submitted, another command with an equal [conflictKey] had
+ * not settled on its runner. It is the cause of the Failed handle that [ActionRunner.run] and
+ * [ActionRunner.runCancellable] return for a rejected call, so a caller can tell a rejection from a
+ * command that ran and failed.
+ */
+class CommandRejectedException(val conflictKey: Any) :
+  IllegalStateException("A command with conflict key $conflictKey has not settled yet")
 
 /**
  * Runs commands where each new one cancels the one before it, like a search field's queries. Every
@@ -111,6 +131,6 @@ fun DataScope.newConflatedActionRunner(
     override fun run(block: suspend () -> Unit): Operation = actions.run(ordering, block = block)
 
     override fun runCancellable(block: suspend () -> Unit): CancellableOperation =
-      actions.runCancellable(ordering, block)
+      actions.runCancellable(ordering, block = block)
   }
 }
