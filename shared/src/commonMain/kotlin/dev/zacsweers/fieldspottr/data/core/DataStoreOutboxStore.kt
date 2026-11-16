@@ -32,6 +32,7 @@ import kotlinx.serialization.json.Json
 import okio.BufferedSink
 import okio.BufferedSource
 import okio.FileSystem
+import okio.IOException
 import okio.Path
 import okio.SYSTEM
 
@@ -171,11 +172,26 @@ class DataStoreOutboxStores(
    * file through a DataStore, and only that DataStore may write the file, so such a store is
    * cleared through it. A file left behind by an earlier process, which no store here has opened,
    * has no DataStore and is deleted directly. The deletes run on the caller's dispatcher.
+   *
+   * A [directory] that does not exist holds no files, so only the built stores are cleared. Any
+   * other failure to list it, like a directory that cannot be read or a path that is a file, throws
+   * the [IOException] before anything is deleted or cleared, so every row stays.
    */
   override suspend fun clearAll() {
     val built = opened.load().mapValues { it.value.store }.filterValues { it.isInitialized() }
     val ownedFiles = built.keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
-    for (path in fileSystem.listOrNull(directory).orEmpty()) {
+    val files =
+      try {
+        fileSystem.list(directory)
+      } catch (e: IOException) {
+        // Okio reports a missing directory and an unreadable one alike on some file systems, so
+        // the path's metadata tells them apart. A metadata read that fails throws its own error.
+        if (fileSystem.metadataOrNull(directory) != null) {
+          throw e
+        }
+        emptyList()
+      }
+    for (path in files) {
       if (path.name.endsWith(".outbox") && path.name !in ownedFiles) {
         fileSystem.delete(path, mustExist = false)
       }

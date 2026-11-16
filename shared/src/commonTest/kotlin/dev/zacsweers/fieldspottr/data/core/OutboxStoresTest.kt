@@ -4,10 +4,12 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isSameInstanceAs
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
@@ -32,6 +34,10 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
+import okio.FileSystem
+import okio.ForwardingFileSystem
+import okio.IOException
+import okio.Path
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
 
@@ -142,6 +148,92 @@ class OutboxStoresTest {
         fileSystem.read(directory / "notes.outbox") { readUtf8() },
       )
     assertThat(log.rows.single().payload).isEqualTo("tagged:\"hello\"")
+  }
+
+  @Test
+  fun `DataStore stores clear their own files and files an earlier process left`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    fileSystem.write(directory / "old.outbox") { writeUtf8("{}") }
+    fileSystem.write(directory / "keep.txt") { writeUtf8("keep") }
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+    val notes = stores.open("notes", String.serializer())
+    notes.insertNew("k", "a")
+
+    stores.clearAll()
+
+    assertThat(notes.entries().first()).isEmpty()
+    assertThat(fileSystem.list(directory).map { it.name })
+      .containsExactlyInAnyOrder("keep.txt", "notes.outbox")
+  }
+
+  /** A directory that was never created, like on a first run, holds no files to clear. */
+  @Test
+  fun `DataStore stores clear when their directory does not exist`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+    val notes = stores.open("notes", String.serializer())
+    assertThat(notes.entries().first()).isEmpty()
+
+    stores.clearAll()
+
+    assertThat(notes.entries().first()).isEmpty()
+    // The opened store still works after the clear
+    notes.insertNew("k", "a")
+    assertThat(notes.entries().first().map { it.payload }).containsExactly("a")
+  }
+
+  @Test
+  fun `DataStore stores fail to clear a directory they cannot list and clear nothing`() = runTest {
+    val fake = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fake.createDirectories(directory)
+    fake.write(directory / "old.outbox") { writeUtf8("{}") }
+    val fileSystem = UnlistableFileSystem(fake, directory)
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+    val notes = stores.open("notes", String.serializer())
+    notes.insertNew("k", "a")
+
+    val failure = assertFailsWith<IOException> { stores.clearAll() }
+
+    assertThat(failure.message).isEqualTo("disk error")
+    assertThat(fake.exists(directory / "old.outbox")).isTrue()
+    assertThat(notes.entries().first().map { it.payload }).containsExactly("a")
+  }
+
+  @Test
+  fun `DataStore stores fail to clear when their directory is a file`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fileSystem.write(directory) { writeUtf8("not a directory") }
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+
+    assertFailsWith<IOException> { stores.clearAll() }
+
+    assertThat(fileSystem.read(directory) { readUtf8() }).isEqualTo("not a directory")
+  }
+
+  /**
+   * [delegate] with [directory] that exists and cannot be listed, like one the app lost permission
+   * to read. [listOrNull] returns null for it, as Okio does for any directory it cannot list.
+   */
+  private class UnlistableFileSystem(delegate: FileSystem, private val directory: Path) :
+    ForwardingFileSystem(delegate) {
+    override fun list(dir: Path): List<Path> {
+      if (dir == directory) {
+        throw IOException("disk error")
+      }
+      return super.list(dir)
+    }
+
+    override fun listOrNull(dir: Path): List<Path>? {
+      if (dir == directory) {
+        return null
+      }
+      return super.listOrNull(dir)
+    }
   }
 }
 
