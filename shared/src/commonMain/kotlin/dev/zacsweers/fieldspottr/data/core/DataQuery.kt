@@ -134,7 +134,8 @@ interface DataQuery<T> {
    * Collecting this may fetch. Each collector checks freshness on the first value it reads, even
    * one that takes one value and leaves, like `first()`, and fetches when the data is stale.
    * Collectors share one queued check. When a stored value goes away, one check runs however many
-   * collectors see it. Use [stored] to watch the same values without starting work.
+   * collectors see it. Use [storedState] to watch the same values and statuses without starting
+   * work.
    *
    * The first value comes at once and never waits for the check. When it is stale or absent and
    * this collector queued a check, its status shows [FetchStatus.Fetching], and it shows [status]
@@ -188,9 +189,30 @@ interface DataQuery<T> {
   val state: Flow<QueryState<T>>
 
   /**
-   * The stored values, without checking freshness or fetching. For readers that must not start
-   * work, like a background job that only reports. It skips a value that is the same as the one
-   * before, by the rule [state] describes.
+   * [state] for a reader that must not start work, like a background job that reports, or a second
+   * screen that shows what another one loads. Collecting it never checks freshness and never
+   * fetches. It also starts no watcher, so nothing fetches for it when the stored value goes away
+   * or the network comes back. It shows the fetches that something else starts, like a
+   * [requestFetch] or a collector of [state].
+   *
+   * The value and the status line up as in [state]. After a fetch succeeds, this never shows `Idle`
+   * before it shows that fetch's data, and it never shows a fetch's data beside that fetch's
+   * `Fetching`. The first status is [status] as it is, since this collector queues no check, unless
+   * the first value already is the write of a fetch that still runs. It emits by the rule of
+   * [state] too. Combining [stored] with [status] by hand gives neither promise: over a store that
+   * delivers a write late, it shows the old value as `Idle` first.
+   *
+   * It keeps no copy of the value. The read that lines a fetch's data up with its status is made
+   * only while [state] has a collector. Without one, each collector of this starts its own read of
+   * the store again after each fetch that writes, and shows the new status with the first value of
+   * that read. So what it shows after a fetch is what a new read of [QueryStore.data] shows then.
+   */
+  val storedState: Flow<QueryState<T>>
+
+  /**
+   * The stored values, without checking freshness or fetching. For readers that must not start work
+   * and need no status. It skips a value that is the same as the one before, by the rule [state]
+   * describes. [storedState] is the same values with the status that applies to them.
    */
   val stored: Flow<Fetched<T>?>
 

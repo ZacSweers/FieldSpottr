@@ -113,7 +113,16 @@ internal class RealDataQuery<T>(
    * its own, so an observer that leaves after one value, like `first()`, still started it. The
    * first observer then starts the watcher, which can wait for that check, as [watch] describes.
    */
-  override val state: Flow<QueryState<T>> = flow { StateObserver().observe(this) }
+  override val state: Flow<QueryState<T>> = flow { StateObserver(fetches = true).observe(this) }
+
+  /**
+   * [state] from an observer that starts no check and no watcher, and is not counted. So a fetch
+   * that settles while only such observers collect leaves no record of what the store showed, and
+   * each of them reads the store again, as [StateObserver] describes.
+   */
+  override val storedState: Flow<QueryState<T>> = flow {
+    StateObserver(fetches = false).observe(this)
+  }
 
   override val stored: Flow<Fetched<T>?> = store.data.distinctUntilChanged(::sameFetched)
 
@@ -144,8 +153,14 @@ internal class RealDataQuery<T>(
    * value and starts its read again, and drops what the old read still delivers. Without a record
    * it starts its read again and shows the new status with the first value of that read. So it
    * never shows `Idle` before the data of the fetch that set it.
+   *
+   * With [fetches] false it is a collector of [storedState]. It does all of the above except that
+   * it starts no check, is not counted, and starts no watcher. A fetch reads the store back only
+   * for counted observers, so with none it leaves no record, and this collector takes the path
+   * without one: it reads the store again. That gives it the same order of values and statuses with
+   * no count of its own and no copy of the value kept for it.
    */
-  private inner class StateObserver {
+  private inner class StateObserver(private val fetches: Boolean) {
     // Read before the store, so a quiet key at both ends means no command ran around the read
     private val submitted = submissions.load()
     private val idle = actions.isIdle(ordering)
@@ -156,6 +171,9 @@ internal class RealDataQuery<T>(
     private val reads = MutableStateFlow(0)
     // This collector's first check, set when its first status shows Fetching on its behalf
     private val speculation = MutableStateFlow<Operation?>(null)
+    // Set once the first value was handled
+    private var started = false
+    // Set once this collector was counted in, which also started its check
     private var counted = false
     private var speculative = false
     // Set once this collector showed the value of the write in progress, so it shows Idle
@@ -200,7 +218,7 @@ internal class RealDataQuery<T>(
         return
       }
       latest = event.value
-      if (!counted) {
+      if (!started) {
         first(event.value, out)
         return
       }
@@ -220,18 +238,24 @@ internal class RealDataQuery<T>(
       }
     }
 
-    /** Runs the check for the first value, starts the watcher, and shows the value at once. */
+    /**
+     * Shows the first value at once. A collector that fetches first runs the check for it and
+     * starts the watcher.
+     */
     private suspend fun first(value: Fetched<T>?, out: FlowCollector<QueryState<T>>) {
-      counted = true
-      val quiet = idle && submissions.load() == submitted
-      val check = checkOnSubscribe(value, quiet)
-      if (check != null) {
-        holds.holdUntilSettled(check)
-      }
-      startWatching(check, value)
-      if (check != null && isStale(value)) {
-        speculative = true
-        speculation.value = check
+      started = true
+      if (fetches) {
+        counted = true
+        val quiet = idle && submissions.load() == submitted
+        val check = checkOnSubscribe(value, quiet)
+        if (check != null) {
+          holds.holdUntilSettled(check)
+        }
+        startWatching(check, value)
+        if (check != null && isStale(value)) {
+          speculative = true
+          speculation.value = check
+        }
       }
       val current = progress.value
       // A first value that carries the running fetch's time is that fetch's write, so it shows Idle
@@ -247,7 +271,7 @@ internal class RealDataQuery<T>(
     }
 
     private suspend fun onProgress(out: FlowCollector<QueryState<T>>) {
-      if (!counted) {
+      if (!started) {
         return
       }
       val current = progress.value

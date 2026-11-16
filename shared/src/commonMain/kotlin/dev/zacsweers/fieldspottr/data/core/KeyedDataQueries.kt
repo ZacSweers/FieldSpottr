@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.map
 interface KeyedDataQueries<K : Any, T> {
   /**
    * [key]'s stored value with the fetch status that applies to it. Collecting this may fetch, as
-   * [DataQuery.state] describes. Use [stored] to watch without starting any work.
+   * [DataQuery.state] describes. Use [storedState] to watch without starting any work.
    */
   fun state(key: K): Flow<QueryState<T>>
 
@@ -36,6 +36,13 @@ interface KeyedDataQueries<K : Any, T> {
       distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
     }
   }
+
+  /**
+   * [key]'s stored value with the fetch status that applies to it, without checking freshness or
+   * fetching, as [DataQuery.storedState] describes. Collecting it keeps the key's query but starts
+   * no work.
+   */
+  fun storedState(key: K): Flow<QueryState<T>>
 
   /**
    * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
