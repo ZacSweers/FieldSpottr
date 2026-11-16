@@ -288,6 +288,14 @@ interface DataScope {
        * when rows wait. Create scopes on `Dispatchers.Default`, not Main, as [ActionRunner]
        * explains.
        *
+       * Each outbox collects [online] for as long as its data scope lives. A query collects it only
+       * while its `state` has a collector, and checks again on each reconnect. Queries also read
+       * its value while nothing collects it, such as when one records whether a failed fetch ran
+       * offline. So its value must stay current with no collector, as a flow from `stateIn` with
+       * `SharingStarted.Eagerly` does. A flow shared with `SharingStarted.WhileSubscribed` keeps a
+       * stale value between subscribers, so a query can record a failure made offline as one made
+       * online and hold off after it.
+       *
        * [retry] decides for every sender built without a policy of its own whether a failed send
        * may succeed later, like after a timeout, and how long its row waits first. When the policy
        * declines, or send throws [PermanentFailure], the row fails at once: its undo runs, and the
