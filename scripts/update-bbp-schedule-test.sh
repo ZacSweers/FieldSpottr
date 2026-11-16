@@ -76,6 +76,28 @@ CURRENT_IMAGE="$TEST_ROOT/$CURRENT_IMAGE_RELATIVE"
 CURRENT_IMAGE_URL="$(jq -er '.imageUrl' "$SOURCE_FILE")"
 [[ -s "$CURRENT_IMAGE" ]] || fail "Missing migrated BBP image: $CURRENT_IMAGE"
 
+for year_case in \
+  "2026 https://brooklynbridgepark.org/wp-content/uploads/2023/07/Pier-5Turf-Schedule-web-11.3.26-e1793721443866.png" \
+  "2026 https://brooklynbridgepark.org/wp-content/uploads/2020/09/PIer-5-Turf-Schedule-for-Website-Fall-2026-10.20.png" \
+  "2026 https://brooklynbridgepark.org/wp-content/uploads/2023/07/PIer-5-Turf-Summer-2026-e222.png"; do
+  expected_year="${year_case%% *}"
+  year_url="${year_case#* }"
+  actual_year="$(
+    bash -c 'set -euo pipefail; source "$1"; schedule_year_from_url "$2"' _ "$UPDATER" "$year_url"
+  )"
+  [[ "$actual_year" == "$expected_year" ]] ||
+    fail "Expected schedule year $expected_year for $year_url, got $actual_year"
+done
+if bash -c \
+  'set -euo pipefail; source "$1"; schedule_year_from_url "$2"' \
+  _ \
+  "$UPDATER" \
+  "https://brooklynbridgepark.org/wp-content/uploads/2023/07/Pier-5-Turf-Schedule.png" \
+  >"$TEST_DIR/no-year.txt" 2>&1; then
+  fail "BBP schedule year parsing accepted a filename with no year"
+fi
+assert_contains "$TEST_DIR/no-year.txt" "Could not determine the BBP schedule year"
+
 webp_file="$TEST_DIR/schedule.webp"
 printf '\x52\x49\x46\x46\x04\x00\x00\x00\x57\x45\x42\x50' >"$webp_file"
 bash -c \

@@ -300,6 +300,31 @@ class GeneratorTest {
   }
 
   @Test
+  fun `bbp schedule image discovery accepts unseparated pier 5 names and dated filenames`() {
+    // BBP's November 2026 upload: no separator after "Pier-5", an M.D.YY date instead of a year,
+    // and an older uploads folder year.
+    val currentImage =
+      "https://brooklynbridgepark.org/wp-content/uploads/2023/07/" +
+        "Pier-5Turf-Schedule-web-11.3.26-e1793721443866.png"
+    val olderImage =
+      "https://brooklynbridgepark.org/wp-content/uploads/2020/09/" +
+        "PIer-5-Turf-Schedule-for-Website-Fall-2025-10.20.png"
+    val pier50Image =
+      "https://brooklynbridgepark.org/wp-content/uploads/2026/01/Pier-50-Turf-Schedule-2027.png"
+    val page =
+      """
+      <html>
+        <img src="$olderImage">
+        <img src="$currentImage">
+        <img src="$pier50Image">
+      </html>
+      """
+        .trimIndent()
+
+    assertThat(page.findBbpPier5ScheduleImageUrl()).isEqualTo(currentImage)
+  }
+
+  @Test
   fun `cloudflare block detection ignores normal email protection snippets`() {
     val page =
       """
