@@ -164,8 +164,16 @@ interface QueryStore<T> {
      * false.
      *
      * Without [invalidate], invalidating reads the value and writes it back with the invalidated
-     * flag set. That is two steps, so a store that other writers share can lose a write between
-     * them. Such a store passes an [invalidate] that sets the flag in one update.
+     * flag set, through [write]. That write keeps what is stored when its fetch time or flag is no
+     * longer the one that was read, and then the value is read and marked again. So a value another
+     * writer stores between the read and the write stays, and is the one marked stale. When the
+     * value changes 100 times in a row, the invalidation fails.
+     *
+     * Two cases are beyond those two steps, since [write] sees only the stored fetch time and flag.
+     * A value another writer stores with the same fetch time and flag as the one read is replaced
+     * by the marked copy of the old value. A value another writer clears in between comes back
+     * marked stale. A store that other writers share in those ways passes an [invalidate] that sets
+     * the flag in one update, like one SQL UPDATE.
      */
     fun <T> of(
       data: Flow<Fetched<T>?>,
@@ -187,14 +195,40 @@ interface QueryStore<T> {
         override suspend fun invalidate() {
           if (invalidator != null) {
             invalidator()
-          } else {
-            data.first()?.let { writer(it.copy(invalidated = true)) { _, _ -> false } }
+            return
           }
+          repeat(MARK_ATTEMPTS) {
+            val read = data.first()
+            if (read == null || read.invalidated) {
+              return
+            }
+            // The last answer counts, since the store may ask more than once
+            var changed = false
+            writer(read.copy(invalidated = true)) { storedAt, invalidated ->
+              // Another writer changed what is stored since the read, so its value stays
+              changed = storedAt != read.fetchedAt || invalidated
+              changed
+            }
+            if (!changed) {
+              return
+            }
+          }
+          // Only a store whose data keeps showing a value it no longer holds gets here
+          error(
+            "The stored value changed $MARK_ATTEMPTS times in a row while it was marked stale. " +
+              "Pass QueryStore.of an invalidate that sets the flag in one update."
+          )
         }
       }
     }
   }
 }
+
+/**
+ * How often the default invalidate of [QueryStore.of] reads the value again after another writer
+ * replaced it. Each try is one read and one write, so real writers never fill this many in a row.
+ */
+private const val MARK_ATTEMPTS = 100
 
 /** [QueryStore.write] of [value], fetched at [fetchedAt], or never fetched when that is null. */
 suspend fun <T> QueryStore<T>.write(value: T, fetchedAt: Instant?) {
