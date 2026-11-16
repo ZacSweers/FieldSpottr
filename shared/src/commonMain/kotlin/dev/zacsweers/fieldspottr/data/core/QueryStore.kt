@@ -28,7 +28,10 @@ data class Fetched<out T>(
    * When the value was fetched. Null when it never was, like local changes over an evicted truth.
    */
   val fetchedAt: Instant?,
-  /** Set by invalidate(). The next fetch's write clears it. */
+  /**
+   * Set by invalidate(), and by the write of a fetch that started before an invalidate() call. The
+   * next fetch's write clears it.
+   */
   val invalidated: Boolean = false,
 )
 
@@ -106,10 +109,11 @@ interface QueryStore<T> {
    *
    * The check and the write are one update, like one transaction. So when two queries share a
    * store, a fetch that read the server first never replaces what a later fetch stored meanwhile. A
-   * query's fetch writes its value with a real fetch time and no invalidated flag. It keeps only a
-   * stored value that is not invalidated and was fetched later than its own fetch but not ahead of
-   * the clock. So it always replaces a value that was never fetched, was invalidated, or has a
-   * fetch time ahead of the clock.
+   * query's fetch writes its value with a real fetch time. It keeps only a stored value that is not
+   * invalidated and was fetched later than its own fetch but not ahead of the clock. So it always
+   * replaces a value that was never fetched, was invalidated, or has a fetch time ahead of the
+   * clock. A fetch that started before an invalidate() call writes its value with the invalidated
+   * flag set. It also keeps a stored value fetched later that is already invalidated.
    */
   suspend fun writeFetched(fetched: Fetched<T>, keepsStored: KeepsStored)
 

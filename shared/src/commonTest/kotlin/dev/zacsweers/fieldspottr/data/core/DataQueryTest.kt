@@ -243,7 +243,7 @@ class DataQueryTest {
   }
 
   @Test
-  fun `invalidate lands after a fetch already in flight`() = runTest {
+  fun `a fetch in flight when invalidate is called stores its value marked stale`() = runTest {
     fetch.hold()
     val query = dataQuery()
 
@@ -253,7 +253,7 @@ class DataQueryTest {
     fetch.release()
     request.await()
     invalidate.await()
-    // The fetch's write came first, so the value it stored is the one marked stale
+    // The fetch started before the call, so it stored its value already marked stale
     assertThat(stored.value).isEqualTo(Fetched(1, START, invalidated = true))
   }
 

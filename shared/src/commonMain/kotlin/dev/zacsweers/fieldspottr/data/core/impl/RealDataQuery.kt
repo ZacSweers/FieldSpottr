@@ -605,7 +605,9 @@ internal class RealDataQuery<T>(
 
   /**
    * The newest command on the key from here on, so a later request waits for it and checks the
-   * store again instead of joining a fetch that started before the data changed.
+   * store again instead of joining a fetch that started before the data changed. The ticket is
+   * recorded before the command is queued, so from that moment a fetch that started earlier writes
+   * its value already marked stale, as [fetchOnce] describes.
    *
    * When its turn comes, it skips the mark if a fetch that started after this call has written,
    * like a forced fetch that took over an unforced one queued ahead of it. That data is already
@@ -748,6 +750,12 @@ internal class RealDataQuery<T>(
    *
    * From the write until [settleWrite], [progress] shows a write phase, so collectors of [state]
    * show a value with a new fetch time or flag as this write's, never beside `Fetching`.
+   *
+   * A fetch that started before the newest invalidate() call may have read the server before the
+   * change that call reports. Its value is written with the invalidated flag set, so the store
+   * never shows it as fresh, not even until the invalidation's own turn. The flag is decided just
+   * before the write. A call that comes after that finds the write already with the store, and the
+   * invalidation marks the value when its turn comes, which is next on this query's key.
    */
   private suspend fun fetchOnce(
     forced: Boolean,
@@ -770,17 +778,30 @@ internal class RealDataQuery<T>(
       if (replaceable != null && !replaceable.commit()) {
         throw CancellationException("Replaced by a forced fetch")
       }
-      progress.value = Progress(progress.value.status, writing = true, writingAt = fetchedAt)
+      val outdated = lastInvalidation.load() > started
+      progress.value =
+        Progress(
+          progress.value.status,
+          writing = true,
+          writingAt = fetchedAt,
+          writingStale = outdated,
+        )
       // A fetch also never overwrites data that another writer put in the store meanwhile with a
       // newer fetch time, like a second query's fetch or a sent change the server already holds.
       // The store checks and writes in one update, so such a write cannot land between the two. An
       // equal time is this fetch's own or as new, so it is replaced. A value never fetched or
       // invalidated is stale, so the fetch replaces it. A fetch time ahead of the clock is a bad
       // record, which isStale treats as stale, so the fetch replaces that too.
+      // An outdated fetch is stale itself, so it also keeps an invalidated value with a newer fetch
+      // time, like one another writer stored before the invalidation marked it.
       // The Fetched form, which every store overrides, so a store that delegates the other members
       // still sees this write
-      store.writeFetched(Fetched(value, fetchedAt)) { storedAt, invalidated ->
-        !invalidated && storedAt != null && storedAt > fetchedAt && storedAt <= clock.now()
+      store.writeFetched(Fetched(value, fetchedAt, invalidated = outdated)) { storedAt, invalidated
+        ->
+        (outdated || !invalidated) &&
+          storedAt != null &&
+          storedAt > fetchedAt &&
+          storedAt <= clock.now()
       }
       // Kept data is newer still, so an invalidation requested before this fetch started may skip
       lastWrite.update { maxOf(it, started) }
@@ -928,19 +949,24 @@ internal class RealDataQuery<T>(
 
 /**
  * What a query's fetches are doing. [writing] is true while a successful fetch writes and reads
- * back what it wrote, and [writingAt] is that fetch's time. [wrote] is the record of the write that
- * settled the last fetch, or null when the last change to [status] was something else. Each
- * instance is new, so a state flow of it emits every change.
+ * back what it wrote, [writingAt] is that fetch's time, and [writingStale] is whether it writes its
+ * value marked stale. [wrote] is the record of the write that settled the last fetch, or null when
+ * the last change to [status] was something else. Each instance is new, so a state flow of it emits
+ * every change.
  */
 private class Progress<T>(
   val status: FetchStatus,
   val writing: Boolean = false,
   val writingAt: Instant? = null,
+  val writingStale: Boolean = false,
   val wrote: Wrote<T>? = null,
 ) {
-  /** Whether [value] carries the time of the fetch that writes now, so it is that write's value. */
+  /**
+   * Whether [value] carries the time and flag of the fetch that writes now, so it is that write's
+   * value.
+   */
   fun isWriteOf(value: Fetched<*>?): Boolean =
-    writing && value != null && !value.invalidated && value.fetchedAt == writingAt
+    writing && value != null && value.invalidated == writingStale && value.fetchedAt == writingAt
 }
 
 /**

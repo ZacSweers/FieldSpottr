@@ -234,15 +234,33 @@ interface DataQuery<T> {
   fun requestFetch(force: Boolean): Operation
 
   /**
-   * Marks the stored data stale without fetching, so the next collector fetches. It runs after any
-   * fetch in flight, so a fetch that started before a write cannot leave old data marked fresh. An
-   * unforced request made after this returns fetches again. When the data is on screen, use a
-   * forced [requestFetch] instead.
+   * Marks the stored data stale without fetching, so the next collector fetches. Call it once
+   * something changed what the query reads, like after a write to the server. When the data is on
+   * screen, use [invalidateAndRefresh].
    *
-   * When its turn comes, it skips the mark if a fetch that started after this call has already
-   * written. That fetch read the server after the change, so its data stays fresh. This happens
-   * when a forced request replaces an unforced fetch queued ahead of the invalidation. A fetch that
-   * failed or was cancelled leaves the mark to land as usual.
+   * These hold from the moment the call returns, before the mark itself is stored:
+   * - A fetch that started before the call never stores a fresh value. Its value may be from before
+   *   the change, so it is stored already marked stale, in the fetch's one write. That write keeps
+   *   a stored value with a later fetch time, marked or not, like one a write stored meanwhile.
+   * - No request joins a fetch from before the call. An unforced request waits for the mark and
+   *   then checks. A forced request starts a fetch of its own, and forced requests made after the
+   *   call share that fetch.
+   * - What is stored stays visible. Nothing is cleared.
+   *
+   * The mark itself runs on the query's key, after the work queued before this call. So it marks
+   * whatever the store holds when its turn comes, like a value another writer stored meanwhile. It
+   * skips the mark if a fetch that started after this call has already written, since that fetch
+   * read the server after the change. This happens when a forced request replaces an unforced fetch
+   * queued ahead of the invalidation. A fetch that failed or was cancelled leaves the mark to land
+   * as usual.
+   *
+   * Two limits come from the store:
+   * - A fetch that has already handed its value to the store when this is called cannot take it
+   *   back. That write lands unmarked, and the mark follows as the next command on the query's key.
+   *   A collector of [QueryStore.data], [stored], [storedState] or [state] can see the value
+   *   unmarked in between. No request acts on it, since every request waits for the mark.
+   * - The mark is [QueryStore.invalidate]. A store that sets its flag in one update never loses a
+   *   value another writer stores at the same time. [QueryStore.of] says what its default does.
    */
   fun invalidate(): Operation
 }
@@ -260,3 +278,19 @@ fun <T> DataQuery<T>.refresh(): Operation = requestFetch(force = true)
 
 /** [DataQuery.requestFetch] with `force = false`: fetches only if the stored data is stale. */
 fun <T> DataQuery<T>.fetchIfStale(): Operation = requestFetch(force = false)
+
+/**
+ * [DataQuery.invalidate], then a forced [DataQuery.requestFetch], for data on screen that something
+ * just changed. The forced request stops a fetch from before this call and fetches in its place,
+ * and other forced requests made after this call share that fetch. The handle follows the fetch.
+ * The stored data keeps showing, marked stale, until the fetch writes.
+ *
+ * A later [invalidateAndRefresh], or any forced request after a later [DataQuery.invalidate], stops
+ * this call's fetch. This call's handle then settles `Cancelled`, and the later fetch brings the
+ * data.
+ */
+fun <T> DataQuery<T>.invalidateAndRefresh(): Operation {
+  // The handle of the mark is dropped: a mark that fails is reported, and the fetch replaces it
+  invalidate()
+  return refresh()
+}

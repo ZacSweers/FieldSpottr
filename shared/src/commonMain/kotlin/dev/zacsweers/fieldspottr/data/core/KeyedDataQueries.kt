@@ -84,8 +84,9 @@ interface KeyedDataQueries<K : Any, T> {
     Operation.all(keys.distinct().map { requestFetch(it, force) })
 
   /**
-   * Marks [key]'s stored data stale without fetching, so its next collector fetches. The mark lives
-   * in the store, so it holds even though nothing is collecting the key.
+   * Marks [key]'s stored data stale without fetching, so its next collector fetches, as
+   * [DataQuery.invalidate] describes. The mark lives in the store, so it holds even though nothing
+   * is collecting the key.
    */
   fun invalidate(key: K): Operation
 
@@ -127,6 +128,16 @@ fun <K : Any, T> KeyedDataQueries<K, T>.refresh(key: K): Operation = requestFetc
 /** [KeyedDataQueries.requestFetch] for [key] with `force = false`: fetches only if stale. */
 fun <K : Any, T> KeyedDataQueries<K, T>.fetchIfStale(key: K): Operation =
   requestFetch(key, force = false)
+
+/**
+ * [KeyedDataQueries.invalidate] for [key], then a forced [KeyedDataQueries.requestFetch], as
+ * [DataQuery.invalidateAndRefresh] describes. The handle follows the fetch. A later call for [key]
+ * stops this call's fetch, and this call's handle then settles `Cancelled`.
+ */
+fun <K : Any, T> KeyedDataQueries<K, T>.invalidateAndRefresh(key: K): Operation {
+  invalidate(key)
+  return refresh(key)
+}
 
 /** [refresh] for every key. The handle settles once every request has, failed if any failed. */
 fun <K : Any, T> KeyedDataQueries<K, T>.refresh(keys: Collection<K>): Operation =
