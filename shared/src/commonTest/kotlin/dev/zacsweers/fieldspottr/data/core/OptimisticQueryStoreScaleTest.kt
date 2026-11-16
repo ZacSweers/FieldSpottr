@@ -5,7 +5,9 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isLessThanOrEqualTo
+import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
@@ -16,6 +18,8 @@ import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -28,6 +32,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.KSerializer
@@ -174,10 +179,10 @@ class OptimisticQueryStoreScaleTest {
   /**
    * With eager dispatch each state update reaches the view on its own. A change whose send never
    * finishes takes three: [OptimisticQueryStores.mutate] records it, the list shows its row Queued,
-   * and then Sending. Each runs the overlay once, and no other update does.
+   * and then Sending. Only the first changes what the view applies.
    */
   @Test
-  fun `a waiting change runs the overlay once per update`() = runTest {
+  fun `a waiting change runs the overlay once`() = runTest {
     val failures = TestFailures()
     val data =
       testDataScopeFactory(eager = true)
@@ -202,7 +207,146 @@ class OptimisticQueryStoreScaleTest {
     runCurrent()
 
     assertThat(emitted).isEqualTo(listOf(null, Fetched(listOf("b"), fetchedAt = null)))
-    assertThat(applies.load()).isEqualTo(3)
+    assertThat(applies.load()).isEqualTo(1)
+    failures.assertNone()
+  }
+
+  /** A change handed off by an owner that stopped still shows, so its view has nothing to redo. */
+  @Test
+  fun `a change handed off to the next owner runs no overlay`() = runTest {
+    val failures = TestFailures()
+    val owner = Job(backgroundScope.coroutineContext.job)
+    val data =
+      testDataScopeFactory(eager = true)
+        .create(
+          CoroutineScope(backgroundScope.coroutineContext + owner),
+          setOf(TagsByItem.sender { _, _ -> awaitCancellation() }),
+        )
+    val applies = AtomicInt(0)
+    val tags =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        onFailure = failures,
+        apply = { current, add ->
+          applies.incrementAndFetch()
+          current.orEmpty() + add.tag
+        },
+      )
+    val emitted = mutableListOf<Fetched<List<String>>?>()
+    backgroundScope.launch { tags("k").data.collect { emitted += it } }
+    runCurrent()
+    val handle = tags.mutate("k", Add("b"))
+    runCurrent()
+    applies.store(0)
+
+    owner.cancel()
+    runCurrent()
+
+    handle.assertCancelled()
+    assertThat(emitted).isEqualTo(listOf(null, Fetched(listOf("b"), fetchedAt = null)))
+    assertThat(applies.load()).isEqualTo(0)
+    failures.assertNone()
+  }
+
+  /** A send that fails and waits to try again leaves the change showing as it was. */
+  @Test
+  fun `a send that waits to try again runs no overlay`() = runTest {
+    val failures = TestFailures()
+    var attempts = 0
+    val data =
+      testDataScopeFactory(eager = true, retry = RetryPolicy.exponential(initial = 1.seconds))
+        .create(
+          backgroundScope,
+          setOf(
+            TagsByItem.sender { _, _ ->
+              if (attempts++ == 0) {
+                throw IllegalStateException("offline")
+              }
+              awaitCancellation()
+            }
+          ),
+        )
+    val applies = AtomicInt(0)
+    val tags =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        onFailure = failures,
+        apply = { current, add ->
+          applies.incrementAndFetch()
+          current.orEmpty() + add.tag
+        },
+      )
+    val emitted = mutableListOf<Fetched<List<String>>?>()
+    backgroundScope.launch { tags("k").data.collect { emitted += it } }
+    runCurrent()
+    tags.mutate("k", Add("b"))
+    runCurrent()
+    assertThat(tags.pending("k").first().single().attempts).isEqualTo(1)
+    applies.store(0)
+
+    advanceTimeBy(2.seconds)
+    runCurrent()
+
+    assertThat(attempts).isEqualTo(2)
+    assertThat(emitted).isEqualTo(listOf(null, Fetched(listOf("b"), fetchedAt = null)))
+    assertThat(applies.load()).isEqualTo(0)
+    failures.assertNone()
+  }
+
+  /**
+   * A fetch from after a send confirms its record. The fetch changes the truth, so the view applies
+   * the change that still waits once. Marking the record confirmed changes nothing a view computes.
+   */
+  @Test
+  fun `a fetch that confirms a record runs the overlay once`() = runTest {
+    val failures = TestFailures()
+    val data =
+      testDataScopeFactory(eager = true)
+        .create(
+          backgroundScope,
+          setOf(
+            TagsByItem.sender { change, _ ->
+              if (change.mutation.tag == "c") {
+                awaitCancellation()
+              }
+            }
+          ),
+        )
+    val applies = AtomicInt(0)
+    val tags =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        onFailure = failures,
+        apply = { current, add ->
+          applies.incrementAndFetch()
+          val list = current.orEmpty()
+          if (add.tag in list) {
+            list
+          } else {
+            list + add.tag
+          }
+        },
+      )
+    val store = tags("k")
+    val emitted = mutableListOf<Fetched<List<String>>?>()
+    backgroundScope.launch { store.data.collect { emitted += it } }
+    runCurrent()
+    tags.mutate("k", Add("b")).awaitSucceeded()
+    tags.mutate("k", Add("c"))
+    runCurrent()
+    assertThat(tags.committedRecords).isEqualTo(1)
+    advanceTimeBy(1.seconds)
+    applies.store(0)
+
+    val fetchedAt = data.clock.now()
+    store.writeFetched(Fetched(listOf("a", "b"), fetchedAt)) { _, _ -> false }
+    runCurrent()
+
+    assertThat(emitted.last()).isEqualTo(Fetched(listOf("a", "b", "c"), fetchedAt))
+    assertThat(applies.load()).isEqualTo(1)
     failures.assertNone()
   }
 

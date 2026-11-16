@@ -128,8 +128,8 @@ import kotlinx.coroutines.sync.withLock
  *
  * [state] also holds each key's slice of the list, the known changes and the records, and a key's
  * view reads only its slice. An update keeps the slice instance of each key it leaves alone, so a
- * view runs its overlay only when its truth or its own slice changes, and a change on one key costs
- * the views of other keys one identity check.
+ * change on one key costs the views of other keys one identity check. A view whose truth or slice
+ * changed plans its overlay first, and runs [apply] only when the plan differs from the last one.
  *
  * A record is forgotten once a fetch from after its send landed and the list has moved past its
  * row: the list showed the row and a later list lacks it, or no shared subscription runs and a
@@ -826,23 +826,34 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * [stored] with every sent change it may lack put back, oldest first.
+   * [stored] with every sent change it may lack put back, oldest first, as [sentPlan] plans it. A
+   * change whose [apply] throws is left out.
+   */
+  private fun withSent(stored: Fetched<T>?, sent: List<Committed<K, T, M>>): Fetched<T>? =
+    run(sentPlan(stored, sent, ArrayList()))
+
+  /**
+   * The plan that puts back on [stored] every sent change it may lack, oldest first. It adds those
+   * changes to [changes] and returns the plan over them.
    *
    * [stored] holds a sent change when that change's commit or a later one wrote it, since each
    * commit carries the earlier changes, or when it was fetched after the send. Any other sent
    * change is missing: [stored] came from a fetch that read the server too early, or from a commit
    * whose write has not landed. A missing server answer holds everything sent before it, so the
-   * newest one replaces [stored], and only the changes after it are applied again. A change whose
-   * [apply] throws is left out.
+   * newest one replaces [stored], and only the changes after it are applied again.
    */
-  private fun withSent(stored: Fetched<T>?, sent: List<Committed<K, T, M>>): Fetched<T>? {
+  private fun sentPlan(
+    stored: Fetched<T>?,
+    sent: List<Committed<K, T, M>>,
+    changes: MutableList<Planned<M>>,
+  ): Plan<T, M> {
     // The newest record whose change the store holds. Every record up to it is in the truth.
     val held = sent.indexOfLast { it.isHeldBy(stored) }
     val missing = sent.filterIndexed { index, record ->
       index > held && stored?.fetchedAt.let { it == null || it <= record.sentAt }
     }
     val answer = missing.indexOfLast { it.replaced && it.hasValue }
-    var result =
+    val start =
       if (answer >= 0) {
         missing[answer].truth
       } else {
@@ -851,31 +862,37 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     // An answer after this one gave up its value to a newer answer that has since gone, which
     // leaves its change to apply again like a send's
     for (record in missing.drop(answer + 1)) {
-      result = appliedOrSkipped(result, record.mutation, record.change)
+      changes += Planned(record.change, record.mutation)
     }
-    return result
+    return Plan(start, changes)
   }
 
   /**
-   * A key's view of [stored] with its [slice], by the table in the class KDoc: records first, then
-   * the list's rows in queue order, then the changes the set knows that the list does not show yet,
-   * in the order the set learned of them. Each change applies at most once.
+   * A key's view of [stored] with its [slice], as [plan] plans it. It reads nothing but its
+   * arguments and [apply], so the same truth and slice give the same value. A null slice gives
+   * [stored].
+   */
+  private fun overlay(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Fetched<T>? =
+    run(plan(stored, slice))
+
+  /**
+   * The plan of a key's view of [stored] with its [slice], by the table in the class KDoc: records
+   * first, then the list's rows in queue order, then the changes the set knows that the list does
+   * not show yet, in the order the set learned of them. Each change applies at most once.
    *
    * A listed row applies in its queue position whatever the set knows of it, so a retry or a
    * discard that teaches the set a change never moves it past a newer row. What the set knows
    * decides whether the row applies, and the list decides only a row the set knows nothing about. A
    * known change missing from the list goes last. Its insert has not returned or the list lags, and
    * a key's inserts run in order, so its row comes after every row the list shows.
-   *
-   * It reads nothing but its arguments and [apply], so the same truth and slice give the same
-   * value. A null slice gives [stored].
    */
-  private fun overlay(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Fetched<T>? {
+  private fun plan(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Plan<T, M> {
     if (slice == null) {
-      return stored
+      return Plan(stored, emptyList())
     }
+    val changes = ArrayList<Planned<M>>()
+    val plan = sentPlan(stored, slice.committed, changes)
     val recorded = slice.committed.mapTo(HashSet()) { it.change }
-    var result = withSent(stored, slice.committed)
     val listed = HashSet<EntryId>(slice.rows.size)
     for (row in slice.rows) {
       val change = row.id
@@ -884,16 +901,24 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         continue
       }
       val shows = slice.known[change]?.kind?.shows ?: row.shows(stored)
-      if (!shows) {
-        continue
+      if (shows) {
+        changes += Planned(change, row.payload.mutation)
       }
-      result = appliedOrSkipped(result, row.payload.mutation, change)
     }
     for ((change, known) in slice.known) {
       if (known.kind?.shows != true || change in recorded || change in listed) {
         continue
       }
-      result = appliedOrSkipped(result, known.payload.mutation, change)
+      changes += Planned(change, known.payload.mutation)
+    }
+    return plan
+  }
+
+  /** The value [plan] gives: its start with each of its changes applied in order. */
+  private fun run(plan: Plan<T, M>): Fetched<T>? {
+    var result = plan.start
+    for (planned in plan.changes) {
+      result = appliedOrSkipped(result, planned.mutation, planned.change)
     }
     return result
   }
@@ -953,15 +978,17 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     private val truth = base.store
 
     override val data: Flow<Fetched<T>?> = flow {
-      // What this collection's last overlay read. The overlay reads only the truth and the
-      // key's slice, and a state update keeps the slice instance of each key it leaves alone.
-      // So the same truth and slice instance would give the last value again, which
-      // distinctUntilChanged drops anyway, and the update is skipped. A state without rows
-      // runs no overlay and keeps these, so the next list compares against the inputs of the
-      // last value sent.
-      var ran = false
+      // What this collection's last overlay read and planned. The overlay reads only the truth
+      // and the key's slice, and a state update keeps the slice instance of each key it leaves
+      // alone. So the same truth and slice instance would give the last value again, which
+      // distinctUntilChanged drops anyway, and the update is skipped by an identity check. An
+      // update that changes the slice but leaves the plan as it was, like a row that moves from
+      // Queued to Sending or a record marked confirmed, gives the last value too, so it runs no
+      // apply. A state without rows runs no overlay and keeps these, so the next list compares
+      // against the inputs of the last value sent.
       var lastStored: Fetched<T>? = null
       var lastSlice: KeySlice<K, T, M>? = null
+      var lastPlan: Plan<T, M>? = null
       // The truth and the state are combined in one step, so a commit's record, which lands in
       // the state before the commit writes the truth, reaches the overlay no later than that
       // write
@@ -971,13 +998,17 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             return@combineTransform
           }
           val slice = current.slice(key)
-          if (ran && stored === lastStored && slice === lastSlice) {
+          if (lastPlan != null && stored === lastStored && slice === lastSlice) {
             return@combineTransform
           }
-          ran = true
           lastStored = stored
           lastSlice = slice
-          emit(overlay(stored, slice))
+          val plan = plan(stored, slice)
+          if (plan == lastPlan) {
+            return@combineTransform
+          }
+          lastPlan = plan
+          emit(run(plan))
         }
       emitAll(views)
     }
@@ -1697,6 +1728,21 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
   /** A value a fetch was written as, which may be null when the folded changes removed it. */
   private class Fold<T>(val value: T?)
+
+  /**
+   * What a view computes its value from: the value it [start]s from and the [changes] it applies on
+   * top, in order. Equal plans give equal values, since [apply] reads nothing else. The start
+   * compares by identity, which is cheap and never calls two different values equal.
+   */
+  private class Plan<T, M>(val start: Fetched<T>?, val changes: List<Planned<M>>) {
+    override fun equals(other: Any?): Boolean =
+      other is Plan<*, *> && start === other.start && changes == other.changes
+
+    override fun hashCode(): Int = changes.hashCode()
+  }
+
+  /** One change a [Plan] applies: its row id and its mutation. */
+  private data class Planned<M>(val change: EntryId, val mutation: M)
 }
 
 /**
