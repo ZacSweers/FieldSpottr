@@ -179,9 +179,12 @@ internal class RealActionRunner(
         } else {
           current.putting(key, next)
         }
-      // The loop reads the key again either way. After a lost race it sees the newer state. After
-      // a write it checks whether the entry it chose settled in the meantime.
-      tails.compareAndSet(current, updated)
+      // A removed key has no entry left to check. In every other case the loop reads the key
+      // again. After a lost race it sees the newer state. After a write it checks whether the
+      // entry it chose settled in the meantime.
+      if (tails.compareAndSet(current, updated) && next == null) {
+        return
+      }
     }
   }
 
@@ -295,76 +298,29 @@ internal class RealActionRunner(
   }
 
   /**
-   * Walks back from the immediate predecessor to the first entry that started. That entry only got
-   * there once everything ahead of it was done.
+   * Waits for each entry ahead of [entry], newest first, until one that started has settled. That
+   * entry only started once everything ahead of it was done. [claimPredecessors] already replaced
+   * or cancelled what this command replaces, so this walk only waits. A Cancel command thus still
+   * waits for the commands of other modes ahead of it, and for a cancelled one to finish its
+   * cleanup.
+   *
+   * An entry that settles without starting never runs, so nothing needs it but its link to the
+   * entries ahead of it. Once one settles, this command's own link moves past it. So while this
+   * command waits for a long one, no settled entry stays reachable through it or through this
+   * coroutine, however many commands were replaced or cancelled meanwhile. The link stops at the
+   * entry this command waits for, which is still due to run or still running.
    */
   private suspend fun waitForTurn(entry: Entry) {
-    val mode = entry.mode
-    // Predecessors of this command's mode that it removed from the line. They are joined last, once
-    // the walk is done.
-    val cancelled = mutableListOf<Entry>()
-    // Only in Cancel mode: predecessors of another mode met on the walk, which this command must
-    // still wait for.
-    val survivors = mutableListOf<Entry>()
-    // Supersede replaces only the unbroken run of Supersede entries right behind this command
-    var superseding = mode == OnPrevious.Supersede
     var cursor = entry.predecessor
     while (cursor != null) {
-      val target = cursor
-      // A started entry ends the walk, since everything ahead of it has already finished
-      if (target.claim.load() == Claim.Started) {
-        when {
-          mode != OnPrevious.Cancel -> target.settled.join()
-          target.mode == OnPrevious.Cancel -> {
-            target.job?.cancel()
-            cancelled += target
-          }
-          else -> survivors += target
-        }
-        break
+      // Returns at once for a replaced or cancelled entry, since its block never starts
+      cursor.settled.join()
+      if (cursor.claim.load() == Claim.Started) {
+        return
       }
-      // A superseded entry never runs, usually replaced when a newer entry joined the key
-      if (target.claim.load() == Claim.Superseded) {
-        cancelled += target
-        cursor = target.predecessor
-        continue
-      }
-      // Queued and undecided: one branch per case
-      when (mode) {
-        OnPrevious.Cancel if target.mode == OnPrevious.Cancel -> {
-          // Keep its block from starting
-          target.claim.compareAndSet(Claim.Undecided, Claim.Superseded)
-          target.job?.cancel()
-          cancelled += target
-        }
-        OnPrevious.Cancel -> survivors += target
-        // The CAS is tested last, only when the rest hold
-        OnPrevious.Supersede if
-          superseding &&
-            target.mode == OnPrevious.Supersede &&
-            target.claim.compareAndSet(Claim.Undecided, Claim.Superseded)
-         -> {
-          target.job?.cancel()
-          cancelled += target
-        }
-        // Wait, or the end of a run of Supersedes
-        else -> {
-          superseding = false
-          target.settled.join()
-          if (target.claim.load() == Claim.Started) {
-            break
-          }
-        }
-      }
-      cursor = target.predecessor
+      cursor = cursor.predecessor
+      entry.predecessor = cursor
     }
-    for (s in survivors) {
-      s.settled.join()
-      if (s.claim.load() == Claim.Started) {
-        break
-      }
-    }
-    for (c in cancelled) c.settled.join()
   }
 }
 
@@ -437,8 +393,9 @@ internal class Entry(
   val settled = Job()
   // One CAS decides. Nothing observes it.
   val claim = AtomicReference(Claim.Undecided)
-  // Written before the entry is published on its key. Cleared on start. An entry that settles
-  // without starting keeps it, so walks from newer entries still reach the ones ahead of it.
+  // Written before the entry is published on its key. Moved past entries ahead that settled
+  // without starting while this one waits, and cleared on start. An entry that settles without
+  // starting keeps it, so walks from newer entries still reach the ones ahead of it.
   @Volatile var predecessor: Entry? = null
   private val runnerHandle =
     if (cancellable) {
