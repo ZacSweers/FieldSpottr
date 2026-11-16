@@ -174,11 +174,12 @@ interface DataQuery<T> {
    *
    * When the policy declines a failure by returning null, the query never fetches on its own again
    * for it. No collector, recheck or reconnect fetches until a [requestFetch] succeeds, like one
-   * from a retry button. [status] keeps showing the failure for such a button. A request that fails
-   * leaves the decline in place. When a later fetch fails while the decline holds, the count of
-   * failures in a row goes on from the declined one. A keyed set keeps the declined records of at
-   * most 1,024 keys. When a new one would pass that cap, the set drops the one declined longest
-   * ago, and that key fetches on its own once more.
+   * from a retry button. [status] keeps showing the failure for such a button. In a keyed set, this
+   * also holds for a key whose query was dropped and built again while its fetches hold off. A
+   * request that fails leaves the decline in place. When a later fetch fails while the decline
+   * holds, the count of failures in a row goes on from the declined one. A keyed set keeps the
+   * declined records of at most 1,024 keys. When a new one would pass that cap, the set drops the
+   * one declined longest ago, and that key fetches on its own once more.
    *
    * When the network comes back, a query with a collector checks again, and fetches when the data
    * is stale or the last fetch failed, whatever the window says. A declined failure holds off this

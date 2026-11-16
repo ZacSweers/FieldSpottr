@@ -9,6 +9,8 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotSameInstanceAs
+import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_DECLINED_HOLD_OFFS
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_REMEMBERED_KEYS
 import dev.zacsweers.fieldspottr.data.core.impl.holdOffsHeld
@@ -16,6 +18,7 @@ import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
 import dev.zacsweers.fieldspottr.data.core.impl.keysRemembered
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
@@ -565,6 +568,145 @@ class KeyedDataQueriesTest {
     values.data("k1").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("k1")).isEqualTo(2)
+  }
+
+  @Test
+  fun `a key's declined failure shows after its query is rebuilt and nothing fetches`() = runTest {
+    failing += "a"
+    val values = decliningValues()
+    val failure = failureOf(values, "a")
+    assertThat(values.keysHeld).isEqualTo(0)
+
+    // A new query for the key shows the failure that holds it off, so a retry button can show
+    advanceTimeBy(30.days)
+    assertThat(values.failureShownBy("a")).isSameInstanceAs(failure)
+    val states = mutableListOf<QueryState<String>>()
+    val collector = backgroundScope.launch { values.state("a").collect { states += it } }
+    testScheduler.runCurrent()
+    assertThat(states.last()).isEqualTo(QueryState(null, FetchStatus.Failed(failure)))
+    collector.cancel()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("a")).isEqualTo(1)
+    assertThat(data.fetchFailures.take()).containsExactly(failure)
+  }
+
+  @Test
+  fun `a key's failure inside its hold-off shows after a rebuild until the window ends`() =
+    runTest {
+      failing += "a"
+      val values = values()
+      val failure = failureOf(values, "a")
+
+      // Inside the 1 second window the failure opened
+      advanceTimeBy(500.milliseconds)
+      assertThat(values.failureShownBy("a")).isSameInstanceAs(failure)
+      values.data("a").first()
+      testScheduler.runCurrent()
+      assertThat(fetch.callCount("a")).isEqualTo(1)
+
+      // Once the window ends, a new query shows no failure and its collector fetches
+      advanceTimeBy(500.milliseconds)
+      failing -= "a"
+      assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
+      assertThat(values.data("a").first { it != null }?.value).isEqualTo("a#2")
+      assertThat(fetch.callCount("a")).isEqualTo(2)
+    }
+
+  @Test
+  fun `a requested fetch that fails under a declined record is the failure a rebuild shows`() =
+    runTest {
+      failing += "a"
+      val values = decliningValues()
+      val declined = failureOf(values, "a")
+
+      val retried = values.refresh("a").awaitFailed<IllegalStateException>()
+      testScheduler.runCurrent()
+      assertThat(retried).isNotSameInstanceAs(declined)
+      assertThat(values.keysHeld).isEqualTo(0)
+
+      assertThat(values.failureShownBy("a")).isSameInstanceAs(retried)
+      // The request left the decline in place
+      values.data("a").first()
+      testScheduler.runCurrent()
+      assertThat(fetch.callCount("a")).isEqualTo(2)
+    }
+
+  @Test
+  fun `a success clears the failure a rebuilt key shows`() = runTest {
+    failing += "a"
+    val values = decliningValues()
+    failureOf(values, "a")
+
+    failing -= "a"
+    values.refresh("a").awaitSucceeded()
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+
+    assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
+    assertThat(values.state("a").first())
+      .isEqualTo(QueryState(Fetched("a#2", START), FetchStatus.Idle))
+  }
+
+  @Test
+  fun `a key's failure made offline shows after a rebuild only while still offline`() = runTest {
+    failing += "a"
+    val values = decliningValues()
+    data.online.value = false
+    val failure = failureOf(values, "a")
+
+    assertThat(values.failureShownBy("a")).isSameInstanceAs(failure)
+
+    // Online again, a new query shows no failure, and its collector fetches at once
+    data.online.value = true
+    failing -= "a"
+    assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
+    assertThat(values.data("a").first { it != null }?.value).isEqualTo("a#2")
+  }
+
+  @Test
+  fun `a requested fetch that fails keeps a key's place among the declined records`() = runTest {
+    val keys = List(MAX_DECLINED_HOLD_OFFS) { "k$it" }
+    failing += keys
+    failing += "extra"
+    val values = decliningValues()
+    for (key in keys) {
+      values.data(key).first()
+      testScheduler.runCurrent()
+    }
+
+    // A retry that fails again is no new decline, so k0 still declined longest ago
+    values.refresh("k0").awaitFailed<IllegalStateException>()
+    values.data("extra").first()
+    testScheduler.runCurrent()
+    assertThat(values.holdOffsHeld).isEqualTo(MAX_DECLINED_HOLD_OFFS)
+
+    // k1 still holds off, and k0's record went, so it fetches on its own once more
+    values.data("k1").first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("k1")).isEqualTo(1)
+    values.data("k0").first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("k0")).isEqualTo(3)
+  }
+
+  /**
+   * Collects [key]'s state from [values] until its first fetch fails, lets the key's query drop,
+   * and returns the failure.
+   */
+  private suspend fun TestScope.failureOf(
+    values: KeyedDataQueries<String, String>,
+    key: String,
+  ): Throwable {
+    val failed = values.state(key).first { it.status is FetchStatus.Failed }
+    testScheduler.runCurrent()
+    return (failed.status as FetchStatus.Failed).cause
+  }
+
+  /** The failure that [key]'s status shows, from a query this call builds. */
+  private suspend fun KeyedDataQueries<String, String>.failureShownBy(key: String): Throwable {
+    val status = status(key).first()
+    assertThat(status).isInstanceOf<FetchStatus.Failed>()
+    return (status as FetchStatus.Failed).cause
   }
 
   // The eviction tests below check keysHeld without calling the queries again, since any keyed

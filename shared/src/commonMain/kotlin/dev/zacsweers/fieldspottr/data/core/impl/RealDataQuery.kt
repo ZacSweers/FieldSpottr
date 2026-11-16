@@ -103,8 +103,11 @@ internal class RealDataQuery<T>(
   // compare-and-set only.
   private val watching = AtomicReference(Watching(observers = 0, watcher = null))
   // What the fetches are doing, whether one is writing, and the write that settled the last one.
-  // Only commands on this query's key change it. status is a view of it.
-  private val progress = MutableStateFlow(Progress<T>(FetchStatus.Idle))
+  // Only commands on this query's key change it. status is a view of it. It starts as the failure
+  // that still holds off this query's own fetches, if any. A keyed set's record of that outlives
+  // each query it builds for the key, and without this a new query would neither fetch nor show
+  // why.
+  private val progress = MutableStateFlow(Progress<T>(heldFailure()))
 
   /**
    * The store's values with the status that applies to them, from one collection of the store per
@@ -132,6 +135,11 @@ internal class RealDataQuery<T>(
   private fun setStatus(next: FetchStatus) {
     progress.value = Progress(next)
   }
+
+  /** The failure that holds off this query's own fetches now as a status, or `Idle`. */
+  private fun heldFailure(): FetchStatus =
+    holdOff.heldFailure(clock.now(), online.value)?.let { FetchStatus.Failed(it) }
+      ?: FetchStatus.Idle
 
   /**
    * One collector of [state]. It merges three things in one coroutine: its own read of the store,
@@ -821,9 +829,12 @@ internal class RealDataQuery<T>(
       }
       // Set before the hold-off, so the status names this failure whatever the policy does
       setStatus(FetchStatus.Failed(t))
-      if (automatic) {
+      if (!automatic) {
+        // A request never opens or widens a hold-off. It only updates the failure a record shows.
+        holdOff.requestFailed(clock.now(), t)
+      } else {
         try {
-          holdOff.failed(clock.now(), offline = !online.value) { failures ->
+          holdOff.failed(clock.now(), offline = !online.value, cause = t) { failures ->
             retry.holdOffWindow(failures, t, onFailure)
           }
         } catch (policyError: Throwable) {

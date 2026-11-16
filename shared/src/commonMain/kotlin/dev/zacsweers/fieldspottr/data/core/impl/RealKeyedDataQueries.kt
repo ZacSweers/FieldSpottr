@@ -72,9 +72,9 @@ internal class RealKeyedDataQueries<K : Any, T>(
 ) : KeyedDataQueries<K, T> {
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val entries = AtomicReference(persistentHashMapOf<K, KeyEntry<T>>())
-  // Each key whose automatic fetches failed and have not succeeded since. It outlives the key's
-  // query, so a query rebuilt inside the window or after a decline still holds off. Updated by
-  // compare-and-set only.
+  // Each key whose automatic fetches failed and have not succeeded since, with the failure. It
+  // outlives the key's query, so a query rebuilt inside the window or after a decline still holds
+  // off, and starts with that failure as its status. Updated by compare-and-set only.
   private val holdOffs = AtomicReference(HoldOffs<K>())
   // The newest invalidateAll() call, or null before the first. Updated by compare-and-set only.
   private val allInvalidated = AtomicReference<AllInvalidated<K>?>(null)
@@ -272,6 +272,10 @@ internal class RealKeyedDataQueries<K : Any, T>(
     override fun store(next: HoldOff?, now: Instant) {
       holdOffs.update { it.withoutSpent(now).storing(key, next) }
     }
+
+    override fun replaceCause(next: HoldOff, now: Instant) {
+      holdOffs.update { it.withoutSpent(now).replacing(key, next) }
+    }
   }
 
   private fun pruneSpent(now: Instant) {
@@ -312,6 +316,17 @@ private class HoldOffs<K>(
       else -> HoldOffs(windows.putting(key, next), declined)
     }
   }
+
+  /**
+   * These records with [key]'s replaced by [next] in its place, so a declined key keeps its age.
+   * Nothing changes when [key] has no record, like one pruned since it was read.
+   */
+  fun replacing(key: K, next: HoldOff): HoldOffs<K> =
+    when (key) {
+      in declined -> HoldOffs(windows, declined.putting(key, next))
+      in windows -> HoldOffs(windows.putting(key, next), declined)
+      else -> this
+    }
 
   /** These records without the spent windows. */
   fun withoutSpent(now: Instant): HoldOffs<K> {
