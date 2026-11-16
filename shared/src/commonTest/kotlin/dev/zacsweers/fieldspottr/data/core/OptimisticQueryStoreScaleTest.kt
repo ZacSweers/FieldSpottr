@@ -8,6 +8,7 @@ import assertk.assertions.isLessThanOrEqualTo
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.decrementAndFetch
@@ -167,6 +168,41 @@ class OptimisticQueryStoreScaleTest {
       .isEqualTo(listOf(null, Fetched(listOf(mutated), fetchedAt = null)))
     // The change shows, then the commit, and the idempotence check applies it once more
     assertThat(mutatedApplies.load()).isEqualTo(3)
+    failures.assertNone()
+  }
+
+  /**
+   * With eager dispatch each state update reaches the view on its own. A change whose send never
+   * finishes takes three: [OptimisticQueryStores.mutate] records it, the list shows its row Queued,
+   * and then Sending. Each runs the overlay once, and no other update does.
+   */
+  @Test
+  fun `a waiting change runs the overlay once per update`() = runTest {
+    val failures = TestFailures()
+    val data =
+      testDataScopeFactory(eager = true)
+        .create(backgroundScope, setOf(TagsByItem.sender { _, _ -> awaitCancellation() }))
+    val applies = AtomicInt(0)
+    val tags =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        onFailure = failures,
+        apply = { current, add ->
+          applies.incrementAndFetch()
+          current.orEmpty() + add.tag
+        },
+      )
+    val emitted = mutableListOf<Fetched<List<String>>?>()
+    backgroundScope.launch { tags("k").data.collect { emitted += it } }
+    runCurrent()
+    assertThat(emitted).isEqualTo(listOf(null))
+
+    tags.mutate("k", Add("b"))
+    runCurrent()
+
+    assertThat(emitted).isEqualTo(listOf(null, Fetched(listOf("b"), fetchedAt = null)))
+    assertThat(applies.load()).isEqualTo(3)
     failures.assertNone()
   }
 

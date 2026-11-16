@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -17,11 +18,14 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
 
@@ -90,6 +94,59 @@ class OptimisticQueryStoreRetentionTest {
     assertThat(reopened.data.first()?.value).isEqualTo(Post(bodies.last(), starred = true))
     scopes.assertNoFailures()
   }
+
+  /**
+   * The outbox and the call's watcher follow the handle while the change waits. What the set knows
+   * of the change, which views read, needs only the change itself.
+   */
+  @Test
+  fun `a waiting change's state does not keep its handle`() = runTest {
+    val data =
+      testDataScopeFactory()
+        .create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> awaitCancellation() }))
+    val posts =
+      data.optimisticStores(
+        PostsOutbox,
+        base = QueryStore.inMemoryByKey<String, Post>(),
+        apply = { post, star -> post?.copy(starred = star.starred) },
+      )
+
+    val handle = posts.mutate("p", Star(true))
+    runCurrent()
+
+    assertThat(handle.state.value).isEqualTo(OperationState.Running)
+    assertThat(posts.knownChanges).isEqualTo(1)
+    assertThat(posts.stateValue().reaches(handle)).isFalse()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an idle set does not keep the stored milestone of its last change`() = runTest {
+    val data = testDataScopeFactory().create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> }))
+    val posts =
+      data.optimisticStores(
+        PostsOutbox,
+        base = QueryStore.inMemoryByKey<String, Post>(),
+        apply = { post, star -> post?.copy(starred = star.starred) },
+      )
+
+    val handle = posts.mutate("p", Star(true))
+    handle.awaitSucceeded()
+    runCurrent()
+
+    assertThat(posts.reaches(handle.stored)).isFalse()
+    data.assertNoFailures()
+  }
+}
+
+/**
+ * The set's current state, which every view reads. It is private to the set, so a test reads it by
+ * reflection to tell what the state itself keeps from what the outbox keeps.
+ */
+private fun OptimisticQueryStores<*, *, *>.stateValue(): Any {
+  val field = javaClass.getDeclaredField("state")
+  field.isAccessible = true
+  return (field.get(this) as StateFlow<*>).value!!
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)

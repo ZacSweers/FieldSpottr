@@ -212,8 +212,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   // lives, as optimisticStores promises. Updated by compare-and-set only.
   private val bases = AtomicReference(persistentHashMapOf<K, Base<T>>())
   // Changes whose rows are still being written, by key, so a write or clear can wait for the ones
-  // requested before it. Settled entries are dropped as new ones come in. Updated by
-  // compare-and-set only.
+  // requested before it. The watcher in mutate drops each entry once its row write settles, so an
+  // idle set keeps none. Updated by compare-and-set only.
   private val storing = AtomicReference(persistentListOf<Storing<K>>())
   // The changes whose commit wrote the truth while their rows may still be owed, each with whether
   // the row list has shown the row since, so a commit that runs again after its row write failed
@@ -374,22 +374,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     val payload = KeyedMutation(key, mutation)
     edit { it.knowing(id, Known(Kind.Pending, payload)) }
     val handle = outbox.enqueue(id, payload, key = orderKey(key))
-    edit { s ->
-      val known = s.known[id]
-      if (known?.settled == Kind.Pending) {
-        s.knowing(id, known.copy(handle = handle))
-      } else {
-        s
-      }
-    }
-    storing.update { all ->
-      all
-        .filter { it.stored.state.value !is OperationState.Terminal }
-        .toPersistentList()
-        .adding(Storing(key, handle.stored))
-    }
+    val write = Storing(key, handle.stored)
+    storing.update { it.adding(write) }
     sharing.launch {
-      if (handle.stored.await() != OperationState.Succeeded) {
+      val stored = handle.stored.await()
+      storing.update { it.remove(write) }
+      if (stored != OperationState.Succeeded) {
         // No row exists, so nothing can show it later
         edit { it.forgetting(id) }
       } else {
@@ -1111,14 +1101,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * provisional marks hold the entry and the list decides once they go. [marks] are the provisional
    * marks of [retry] and [discard] calls still running, newest last, and the newest one decides the
    * view. Each call removes only its own mark. The entry also keeps its [payload], whose key names
-   * the slice that holds the entry, its [handle] while Pending from [mutate], whether the list has
-   * shown its row, [since], when it left Pending, which starts its expiry, and the [expiry] timer
-   * of a HandedOff change.
+   * the slice that holds the entry, whether the list has shown its row, [since], when it left
+   * Pending, which starts its expiry, and the [expiry] timer of a HandedOff change. It keeps no
+   * handle, since the outbox and the watcher in [mutate] follow the row. A slice compares entries
+   * by identity, so the set replaces an entry only when what it knows of the change changes.
    */
   private class Known<K, M>(
     val settled: Kind?,
     val payload: KeyedMutation<K, M>,
-    val handle: OutboxOperation? = null,
     val shown: Boolean = false,
     val since: Instant? = null,
     val marks: PersistentList<Mark> = persistentListOf(),
@@ -1131,12 +1121,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     fun copy(
       settled: Kind? = this.settled,
       payload: KeyedMutation<K, M> = this.payload,
-      handle: OutboxOperation? = this.handle,
       shown: Boolean = this.shown,
       since: Instant? = this.since,
       marks: PersistentList<Mark> = this.marks,
       expiry: Job? = this.expiry,
-    ): Known<K, M> = Known(settled, payload, handle, shown, since, marks, expiry)
+    ): Known<K, M> = Known(settled, payload, shown, since, marks, expiry)
 
     fun isExpired(now: Instant): Boolean = since != null && now - since >= RECORD_LIFETIME
   }
@@ -1384,7 +1373,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       val next =
         entry.copy(
           settled = settled,
-          handle = null,
           // Each settle restarts the expiry, also into the same kind, so the lazy check and a
           // HandedOff timer count from the same moment. An outcome that Dropped ignores does not.
           since =
