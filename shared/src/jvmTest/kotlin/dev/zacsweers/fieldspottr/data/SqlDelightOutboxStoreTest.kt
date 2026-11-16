@@ -27,6 +27,7 @@ import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OLD_CHANGE
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OutboxChange
+import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -404,6 +405,68 @@ private class CountingDriver(private val driver: SqlDriver) : SqlDriver by drive
       parameters,
       binders,
     )
+  }
+}
+
+/** What a [SqlDelightOutboxStore] reads back after its database is closed and opened again. */
+class SqlDelightOutboxStoreReopenTest {
+  @get:Rule val temporaryDatabase = TemporaryDatabase()
+
+  /** A store over whatever database [temporaryDatabase] has open when each call runs. */
+  private fun store(clock: TestClock): OutboxStore<String> =
+    SqlDelightOutboxStore(
+      queries = { temporaryDatabase.db().outboxRowQueries },
+      outbox = "test",
+      codec = String.serializer().asCodec(Json),
+      io = Dispatchers.IO,
+      clock = clock,
+    )
+
+  @Test
+  fun `every read returns the same rows after a reopen`() = runTest {
+    val clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
+    val before = store(clock)
+    val queued = before.insertNew("a", "queued")
+    val sending = before.insertNew("b", "sending")
+    val sent = before.insertNew("c", "sent")
+    val failed = before.insertNew("d", "failed")
+    val done = before.insertNew("e", "done")
+    val now = clock.now()
+    before.write(queued) {
+      it.copy(attempts = 2, lastError = "timeout", retryAt = now + 30.seconds)
+    }
+    before.write(sending) { it.copy(status = OutboxStatus.Sending, attempts = 1) }
+    before.write(sent) { it.copy(status = OutboxStatus.Sent, sentAt = now, reply = "\"answer\"") }
+    before.write(failed) { it.copy(status = OutboxStatus.Failed("rejected"), attempts = 3) }
+    before.write(done) { it.copy(status = OutboxStatus.Sent, sentAt = now, committed = true) }
+    val ids = listOf(queued, sending, sent, failed, done)
+    val entries = before.entries().first()
+    val owed = before.owed()
+    val owedOnKey = before.owed("c")
+    val heads = before.heads().first()
+    val rows = ids.map { before.entry(it).first() }
+    assertThat(entries.map { it.id }).isEqualTo(listOf(queued, sending, sent, failed))
+    assertThat(owed.map { it.id }).isEqualTo(listOf(sent, failed))
+    assertThat(heads.map { it.id }).isEqualTo(listOf(queued, sending))
+    assertThat(rows.last()?.committed).isEqualTo(true)
+
+    temporaryDatabase.reopen()
+
+    val after = store(clock)
+    assertThat(after.entries().first()).isEqualTo(entries)
+    assertThat(after.owed()).isEqualTo(owed)
+    assertThat(after.owed("c")).isEqualTo(owedOnKey)
+    assertThat(after.heads().first()).isEqualTo(heads)
+    assertThat(ids.map { after.entry(it).first() }).isEqualTo(rows)
+  }
+
+  /** Writes what [change] makes of row [id] over the status it has. */
+  private suspend fun OutboxStore<String>.write(
+    id: EntryId,
+    change: (OutboxEntry<String>) -> OutboxEntry<String>,
+  ) {
+    val row = checkNotNull(entry(id).first())
+    assertThat(update(change(row), expected = row.status)).isTrue()
   }
 }
 

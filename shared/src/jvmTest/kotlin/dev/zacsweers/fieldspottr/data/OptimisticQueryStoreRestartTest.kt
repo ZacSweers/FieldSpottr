@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
@@ -20,6 +21,7 @@ import dev.zacsweers.fieldspottr.data.core.replying
 import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import java.util.concurrent.CopyOnWriteArrayList
@@ -73,7 +75,7 @@ class OptimisticQueryStoreRestartTest {
       onFailure = TestFailures(),
       onFetchFailure = TestFailures(),
       online = online,
-      stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO),
+      stores = stores(),
       clock = testClock(START),
     )
 
@@ -169,6 +171,116 @@ class OptimisticQueryStoreRestartTest {
       assertThat(committed.committed).isTrue()
       assertThat(committed.reply).isNull()
     }
+  }
+
+  @Test
+  fun `a stored server answer outlives a reopen and commits once a handle attaches`() = runTest {
+    val rows = stores().open(ReplyingTags.name, Add.serializer())
+    val ids = listOf(rows.insertNew("", Add("b")), rows.insertNew("", Add("c")))
+    online.value = true
+    val first = owner()
+    process().create(first, setOf(replyingSender()))
+    // No handle is attached, so each answer waits on its row
+    val sent =
+      rows.entries().first { list -> list.size == 2 && list.all { it.status == OutboxStatus.Sent } }
+    assertThat(sent.map { it.reply }).containsExactly("""["a","B"]""", """["a","C"]""")
+    stop(first)
+
+    temporaryDatabase.reopen()
+
+    val reopened = stores().open(ReplyingTags.name, Add.serializer())
+    // The answers, send times and commit flags come back from the file as they were written
+    assertThat(reopened.entries().first()).isEqualTo(sent)
+    assertThat(reopened.owed()).isEqualTo(sent)
+    val after = process().create(owner(), setOf(replyingSender()))
+    after.optimisticStore(
+      ReplyingTags,
+      base = truth,
+      apply = { current, add -> current.orEmpty() + add.tag },
+    )
+    reopened.entries().first { it.isEmpty() }
+
+    // The newest answer replaces the truth, and nothing was sent again
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START))
+    assertThat(replies.value).isEqualTo(2)
+    for (id in ids) {
+      val committed = checkNotNull(reopened.entry(id).first())
+      assertThat(committed.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(committed.committed).isTrue()
+      assertThat(committed.reply).isNull()
+    }
+  }
+
+  @Test
+  fun `a row committed before a reopen stays committed and applies once`() = runTest {
+    online.value = true
+    val first = owner()
+    val before = process().create(first, setOf(sender)).tags()
+    val handle = before.mutate(Add("b"))
+    handle.awaitSucceeded()
+    val rows = stores().open(Tags.name, Add.serializer())
+    val committed = rows.entry(handle.id).first { it?.committed == true }
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "b"), START))
+    stop(first)
+
+    temporaryDatabase.reopen()
+
+    val reopened = stores().open(Tags.name, Add.serializer())
+    assertThat(reopened.entry(handle.id).first()).isEqualTo(committed)
+    assertThat(reopened.owed()).isEmpty()
+    val after = process().create(owner(), setOf(sender)).tags()
+    assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b"))
+    assertThat(after.pending.first()).isEmpty()
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "b"), START))
+    assertThat(send.sent).containsExactly(Add("b"))
+    assertThat(reopened.entry(handle.id).first()).isEqualTo(committed)
+  }
+
+  @Test
+  fun `a change left sending before a reopen is sent again with the same id`() = runTest {
+    online.value = true
+    send.hold(Add("b"))
+    val first = owner()
+    val before = process().create(first, setOf(sender)).tags()
+    before.mutate(Add("b"))
+    attempts.first { it == 1 }
+    val sending =
+      before.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }.single()
+    first.cancel()
+    send.release(Add("b"))
+    stop(first)
+
+    temporaryDatabase.reopen()
+
+    val reopened = stores().open(Tags.name, Add.serializer())
+    assertThat(reopened.entry(sending.id).first()?.status).isEqualTo(OutboxStatus.Sending)
+    val after = process().create(owner(), setOf(sender)).tags()
+    after.pending.first { it.isEmpty() }
+
+    assertThat(send.attempts).containsExactly(Add("b"), Add("b"))
+    assertThat(send.sent).containsExactly(Add("b"))
+    assertThat(sentIds).containsExactly(sending.id, sending.id)
+    assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b"))
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "b"), START))
+  }
+
+  /** Stores over whatever database [temporaryDatabase] has open when each call runs. */
+  private fun stores(): SqlDelightOutboxStores =
+    SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+
+  /** Cancels [owner] and waits for its work to end, so no call reaches a driver that closes. */
+  private suspend fun stop(owner: CoroutineScope) {
+    owner.cancel()
+    owner.coroutineContext.job.join()
+  }
+
+  // How many changes the replying sender answered, across both processes
+  private val replies = MutableStateFlow(0)
+
+  /** Answers each change with the tag list the server holds after it. */
+  private fun replyingSender() = ReplyingTags.exchangingSender { add, _ ->
+    replies.update { it + 1 }
+    listOf("a", add.tag.uppercase())
   }
 }
 
