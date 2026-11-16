@@ -129,13 +129,30 @@ require_canonical_bbp_image_url() {
 
 schedule_year_from_url() {
   local url="$1"
+  local filename
   local year
+  local date_token
 
+  # Mirrors Bbp.kt scheduleYear(): read the filename only, since the uploads/YYYY/MM folder is the
+  # upload date. Prefer a standalone four-digit year, then the YY of an M.D.YY date like 11.3.26.
+  filename="${url##*/}"
   year="$(
-    printf '%s\n' "$url" |
-      grep -Eo '20[0-9]{2}' |
+    printf '%s\n' "$filename" |
+      tr -c '0-9' '\n' |
+      grep -E '^20[0-9]{2}$' |
       tail -n 1 || true
   )"
+  if [[ -z "$year" ]]; then
+    date_token="$(
+      printf '%s\n' "$filename" |
+        grep -Eo '(^|[^0-9])[0-9]{1,2}[._-][0-9]{1,2}[._-][0-9]{2}([^0-9]|$)' |
+        tail -n 1 |
+        grep -Eo '[0-9]{1,2}[._-][0-9]{1,2}[._-][0-9]{2}' || true
+    )"
+    if [[ -n "$date_token" ]]; then
+      year="20${date_token: -2}"
+    fi
+  fi
   if [[ ! "$year" =~ ^20[0-9]{2}$ ]]; then
     fail "Could not determine the BBP schedule year from: $url"
   fi

@@ -922,7 +922,7 @@ internal fun String.findBbpPier5ScheduleImageUrl(): String? {
 }
 
 private val bbpPier5AssetPattern =
-  Regex("""(?:^|[^a-z0-9])pier[\s_-]*5(?:[^a-z0-9]|$)""", RegexOption.IGNORE_CASE)
+  Regex("""(?:^|[^a-z0-9])pier[\s_-]*5(?![0-9])""", RegexOption.IGNORE_CASE)
 
 private fun String.isBbpPier5TurfAssetUrl(): Boolean {
   val filename = runCatching { URI(this).path.substringAfterLast('/') }.getOrNull() ?: return false
@@ -942,8 +942,23 @@ private fun String.toCanonicalBbpAssetUrl(): String {
   return url.substringBefore("?").replace(Regex("""-\d+x\d+(?=\.(?:png|jpe?g|webp|pdf)$)"""), "")
 }
 
+/**
+ * The schedule year comes from the filename only. The `/wp-content/uploads/YYYY/MM/` folder is the
+ * upload date, which BBP reuses across seasons. Prefer a standalone four-digit year, then the year
+ * of an `M.D.YY` date such as `11.3.26`.
+ */
 private fun String.scheduleYear(): Int {
-  return Regex("""\b(20\d{2})\b""").findAll(this).lastOrNull()?.value?.toIntOrNull() ?: 0
+  val filename = substringBefore("?").substringAfterLast('/')
+  Regex("""(?<![0-9])(20\d{2})(?![0-9])""").findAll(filename).lastOrNull()?.let {
+    return it.groupValues[1].toInt()
+  }
+  Regex("""(?<![0-9])\d{1,2}[._-]\d{1,2}[._-](\d{2})(?![0-9])""")
+    .findAll(filename)
+    .lastOrNull()
+    ?.let {
+      return 2000 + it.groupValues[1].toInt()
+    }
+  return 0
 }
 
 private fun String.seasonRank(): Int {
