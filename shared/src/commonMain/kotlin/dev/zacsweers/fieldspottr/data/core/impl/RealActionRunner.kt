@@ -56,8 +56,23 @@ internal class RealActionRunner(
     return tails.load()[key] == null
   }
 
-  override fun run(ordering: Ordering, block: suspend () -> Unit): Operation =
-    runOrJoin(ordering, tag = null, joins = { false }, block = block)
+  /**
+   * A command tagged with its join key, which joins the newest command on its key when that one
+   * carries an equal tag. A command without a join key has no tag, so nothing joins it, and that
+   * includes every command from [runCancellable].
+   */
+  override fun run(ordering: Ordering, joinKey: Any?, block: suspend () -> Unit): Operation {
+    require(joinKey == null || ordering.chainKey != null) {
+      "A join key needs an ordering with a key, and Ordering.Concurrent has none"
+    }
+    val joins: (Entry) -> Boolean =
+      if (joinKey == null) {
+        { false }
+      } else {
+        { it.tag == joinKey }
+      }
+    return runOrJoin(ordering, tag = joinKey, joins = joins, block = block)
+  }
 
   // A new command that joins nothing, so its entry is always the cancellable one built here
   override fun runCancellable(
@@ -373,7 +388,8 @@ private suspend fun runScoped(block: suspend () -> Unit): Boolean {
 /**
  * One submitted command: its job, its handle state, its claim and its link to the entry ahead. It
  * keeps its runner and [tag], and its key until it settles, so a wait on its handle can be checked
- * and a query can tell what kind of request it is.
+ * and a later request can tell whether to join it. A query's tag says what kind of request the
+ * command is, and a command from [ActionRunner.run] carries its join key.
  */
 @OptIn(ExperimentalAtomicApi::class)
 internal class Entry(
