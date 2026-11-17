@@ -1105,6 +1105,102 @@ class DataQueryTest {
     assertThat(fetch.callCount).isEqualTo(0)
   }
 
+  /**
+   * A query whose first fetch fails and whose later fetches succeed. Each failure goes to
+   * [onFailure], which runs before the command settles.
+   */
+  private fun TestScope.queryFailingOnce(
+    online: Boolean,
+    onFailure: (Throwable) -> Unit,
+  ): DataQuery<Int> {
+    val respond = fetch.respond
+    fetch.respond = {
+      if (fetch.callCount == 1) {
+        error("offline")
+      }
+      respond()
+    }
+    data = testDataScope(clock = testClock(START), online = online)
+    return data.query(store, Freshness.staleAfter(1.hours), onFailure = onFailure, fetch = fetch)
+  }
+
+  @Test
+  fun `a reconnect before the watcher collects the network fetches again after an offline check`() =
+    runTest {
+      var watchersAtReconnect = -1
+      // The network returns as the first check's failure is reported
+      val query =
+        queryFailingOnce(online = false) {
+          watchersAtReconnect = data.online.subscriptionCount.value
+          data.online.value = true
+        }
+
+      backgroundScope.launch { query.data.collect {} }
+      testScheduler.runCurrent()
+
+      // The check failed offline before the watcher collected the network state
+      assertThat(watchersAtReconnect).isEqualTo(0)
+      assertThat(fetch.callCount).isEqualTo(2)
+      assertThat(query.status.value).isEqualTo(FetchStatus.Idle)
+      assertThat(stored.value).isEqualTo(Fetched(1, START))
+    }
+
+  @Test
+  fun `a reconnect before the watcher collects the network adds no fetch after a success`() =
+    runTest {
+      data = testDataScope(clock = testClock(START), online = false)
+      val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+
+      backgroundScope.launch { query.data.collect {} }
+      // Runs after the collector counted in and before its watcher collects the network state
+      backgroundScope.launch { data.online.value = true }
+      testScheduler.runCurrent()
+
+      // The first check fetched fine offline, so the reconnect check finds fresh data
+      assertThat(fetch.callCount).isEqualTo(1)
+      assertThat(data.online.subscriptionCount.value).isEqualTo(1)
+    }
+
+  @Test
+  fun `a later collector's offline failure gets one reconnect fetch from the running watcher`() =
+    runTest {
+      stored.value = Fetched(1, START)
+      val query = queryFailingOnce(online = true) {}
+      backgroundScope.launch { query.data.collect {} }
+      testScheduler.runCurrent()
+      assertThat(fetch.callCount).isEqualTo(0)
+
+      data.online.value = false
+      testScheduler.runCurrent()
+      query.invalidate().awaitSucceeded()
+      // Its check fails offline, and the watcher it joins already saw the network drop
+      backgroundScope.launch { query.data.collect {} }
+      testScheduler.runCurrent()
+      assertThat(fetch.callCount).isEqualTo(1)
+
+      data.online.value = true
+      testScheduler.runCurrent()
+      assertThat(fetch.callCount).isEqualTo(2)
+      assertThat(stored.value).isEqualTo(Fetched(2, START))
+    }
+
+  @Test
+  fun `a declined failure holds off a reconnect before the watcher collects the network`() =
+    runTest {
+      val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
+      // Declined online, so the decline holds once online again
+      assertThat(collectOnce(query)).isEqualTo(1)
+      data.online.value = false
+      testScheduler.runCurrent()
+
+      backgroundScope.launch { query.data.collect {} }
+      backgroundScope.launch { data.online.value = true }
+      testScheduler.runCurrent()
+
+      assertThat(fetch.callCount).isEqualTo(1)
+      assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
+    }
+
   @Test
   fun `a takeover that its owner's cancellation reaches first leaves the status idle`() = runTest {
     val owner =

@@ -255,11 +255,14 @@ internal class RealDataQuery<T>(
       if (fetches) {
         counted = true
         val quiet = idle && submissions.load() == submitted
+        // Read before the check is queued, so a watcher this collector starts sees a reconnect that
+        // comes after the check ran offline and before the watcher collects the network state
+        val wasOnline = online.value
         val check = checkOnSubscribe(value, quiet)
         if (check != null) {
           holds.holdUntilSettled(check)
         }
-        startWatching(check, value)
+        startWatching(check, value, wasOnline)
         if (check != null && isStale(value)) {
           speculative = true
           speculation.value = check
@@ -358,10 +361,10 @@ internal class RealDataQuery<T>(
     }
 
   /**
-   * Counts an observer in, and starts the watcher for the first one, whose check is [check] and
-   * whose first value was [seen].
+   * Counts an observer in, and starts the watcher for the first one, whose check is [check], whose
+   * first value was [seen], and who saw the network as [wasOnline] before it queued that check.
    */
-  private fun startWatching(check: Operation?, seen: Fetched<T>?) {
+  private fun startWatching(check: Operation?, seen: Fetched<T>?, wasOnline: Boolean) {
     while (true) {
       val current = watching.load()
       if (current.observers > 0) {
@@ -371,7 +374,7 @@ internal class RealDataQuery<T>(
         continue
       }
       // The job takes the block itself, which can drop check, as [watch] describes
-      val watcher = scope.launch(start = CoroutineStart.LAZY, block = watch(check, seen))
+      val watcher = scope.launch(start = CoroutineStart.LAZY, block = watch(check, seen, wasOnline))
       if (watching.compareAndSet(current, Watching(observers = 1, watcher))) {
         // The watcher takes a hold on the owner, which also covers the requests the watcher makes
         if (holds.tryAcquire()) {
@@ -419,7 +422,8 @@ internal class RealDataQuery<T>(
    * check of its own unless that value is nothing stored. [check] may be one the observer joined,
    * which read a value before a clear and so never fetched. So the watcher waits for it, and checks
    * once more if it succeeded and the store is still empty. A failed check, like a fetch while
-   * offline, already made its attempt, so the watcher leaves it.
+   * offline, already made its attempt, so the watcher leaves it. [wasOnline] is how the first
+   * observer saw the network, for [watchNetwork].
    *
    * A store whose data fails is reported to [onFailure] and collected again after a pause that
    * doubles from [STORE_RETRY_FIRST] up to [STORE_RETRY_MAX], so the failure never reaches the
@@ -430,11 +434,15 @@ internal class RealDataQuery<T>(
    * keeps its error. Pass the block to `launch` as is, since a lambda that calls this would keep
    * [check].
    */
-  private fun watch(check: Operation?, seen: Fetched<T>?): suspend CoroutineScope.() -> Unit {
+  private fun watch(
+    check: Operation?,
+    seen: Fetched<T>?,
+    wasOnline: Boolean,
+  ): suspend CoroutineScope.() -> Unit {
     // Read for the first value only, then cleared
     var firstCheck: Operation? = check
     return watcher@{
-      launch { watchNetwork() }
+      launch { watchNetwork(wasOnline) }
       var previous: Fetched<T>? = seen
       var pause = STORE_RETRY_FIRST
       while (true) {
@@ -478,11 +486,16 @@ internal class RealDataQuery<T>(
    * Checks again each time [online] turns from false to true. The check fetches when the data is
    * stale or the last fetch failed, whatever the hold-off says, so a screen recovers from an
    * offline failure as soon as the network returns.
+   *
+   * The watcher starts to collect [online] some time after the first observer queued its check, and
+   * that check can run and fail offline in between. So the first value counts as a reconnect when
+   * it is online and [startedOnline], how that observer saw the network, is false. Changes of
+   * [online] that come and go before a collector sees them are lost, as with any state flow.
    */
-  private suspend fun watchNetwork() {
-    var wasOnline: Boolean? = null
+  private suspend fun watchNetwork(startedOnline: Boolean) {
+    var wasOnline = startedOnline
     online.collect { up ->
-      if (up && wasOnline == false) {
+      if (up && !wasOnline) {
         holds.holdUntilSettled(reconnectCheck())
       }
       wasOnline = up
