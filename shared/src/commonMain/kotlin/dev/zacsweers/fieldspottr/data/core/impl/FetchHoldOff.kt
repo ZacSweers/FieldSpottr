@@ -136,11 +136,11 @@ internal abstract class FetchHoldOff {
   }
 
   /**
-   * Records that a requested fetch failed with [cause] at [now]. A request never opens or widens a
-   * hold-off, so this changes only the failure an existing record shows, like after a retry button
-   * that failed again under a declined record.
+   * Makes [cause] the failure that the record at [now] shows, if there is one, and changes nothing
+   * else. For a failure that must never open or widen a hold-off, like a requested fetch that
+   * failed again under a declined record, or a fetch whose policy threw an Error.
    */
-  fun requestFailed(now: Instant, cause: Throwable) {
+  fun recordCause(now: Instant, cause: Throwable) {
     val current = load(now) ?: return
     replaceCause(current.withCause(cause), now)
   }

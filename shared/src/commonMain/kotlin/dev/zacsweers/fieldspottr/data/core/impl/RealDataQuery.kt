@@ -844,7 +844,7 @@ internal class RealDataQuery<T>(
       setStatus(FetchStatus.Failed(t))
       if (!automatic) {
         // A request never opens or widens a hold-off. It only updates the failure a record shows.
-        holdOff.requestFailed(clock.now(), t)
+        holdOff.recordCause(clock.now(), t)
       } else {
         try {
           holdOff.failed(clock.now(), offline = !online.value, cause = t) { failures ->
@@ -853,7 +853,9 @@ internal class RealDataQuery<T>(
         } catch (policyError: Throwable) {
           // holdOffWindow reports an Exception itself, so only an Error, like TODO()'s, gets here.
           // The fetch's own failure is reported first, then the Error fails the command and goes to
-          // the failure handler, and no hold-off is recorded.
+          // the failure handler, and no hold-off is recorded. A record from earlier failures stays
+          // as it is, and shows this failure.
+          holdOff.recordCause(clock.now(), t)
           onFetchFailure(t)
           throw policyError
         }

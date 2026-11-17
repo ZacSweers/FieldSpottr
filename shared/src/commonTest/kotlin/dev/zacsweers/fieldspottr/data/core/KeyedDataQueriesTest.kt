@@ -664,6 +664,49 @@ class KeyedDataQueriesTest {
   }
 
   @Test
+  fun `a failure whose policy throws an Error is the failure a rebuilt key shows`() = runTest {
+    failing += "a"
+    data = testDataScope(clock = testClock(START))
+    // A 1 minute window after the first failure, and a policy left as TODO() after that
+    val values =
+      data.keyed(
+        store = QueryStore.inMemoryByKey(),
+        freshness = Freshness.staleAfter(1.hours),
+        retry =
+          RetryPolicy { attempt ->
+            if (attempt == 1) {
+              1.minutes
+            } else {
+              TODO()
+            }
+          },
+        fetch = fetch,
+      )
+    val collector = backgroundScope.launch { values.state("a").collect {} }
+    testScheduler.runCurrent()
+    val first = (values.status("a").first() as FetchStatus.Failed).cause
+
+    // A reconnect fetches inside the window, and the policy throws for that failure
+    data.online.value = false
+    testScheduler.runCurrent()
+    data.online.value = true
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("a")).isEqualTo(2)
+    val second = (values.status("a").first() as FetchStatus.Failed).cause
+    assertThat(second).isNotSameInstanceAs(first)
+    assertThat(data.actionFailures.take().single()).isInstanceOf<NotImplementedError>()
+    collector.cancel()
+    testScheduler.runCurrent()
+    assertThat(values.keysHeld).isEqualTo(0)
+
+    // The first failure's window still holds, and a new query shows the newest failure
+    assertThat(values.failureShownBy("a")).isSameInstanceAs(second)
+    values.data("a").first()
+    testScheduler.runCurrent()
+    assertThat(fetch.callCount("a")).isEqualTo(2)
+  }
+
+  @Test
   fun `a requested fetch that fails keeps a key's place among the declined records`() = runTest {
     val keys = List(MAX_DECLINED_HOLD_OFFS) { "k$it" }
     failing += keys
