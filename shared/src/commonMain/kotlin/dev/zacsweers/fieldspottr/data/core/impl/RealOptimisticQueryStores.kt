@@ -1041,7 +1041,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     /**
      * Stores [fetched], or removes the truth when it is null, with the sent changes it may lack
      * folded in, unless [keepsStored] says the truth should stay. The truth's own conditional write
-     * or removal checks again, for a writer that shares the base store without this lock.
+     * or removal checks again, for a writer that shares the base store without this lock. A
+     * [fetched] marked invalidated lands marked, whatever the sent changes do to its value.
      */
     private suspend fun land(fetched: Fetched<T>?, keepsStored: KeepsStored) {
       awaitStored(key)
@@ -1053,7 +1054,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             state.value.slice(key)?.committed.orEmpty().filter { record ->
               fetched?.fetchedAt.let { it == null || record.sentAt >= it }
             }
-          val next = withSent(fetched, sentSince)
+          val folded = withSent(fetched, sentSince)
+          // A server answer on record replaces the fetched value with its own, which is not
+          // stale. A write marked stale stays stale, so the truth never holds it as fresh.
+          val next =
+            if (fetched?.invalidated == true && folded != null && !folded.invalidated) {
+              folded.copy(invalidated = true)
+            } else {
+              folded
+            }
           // Before the write, so views count every change on record as in the folded truth both
           // before and after it lands, and never apply one twice
           sentSince.lastOrNull()?.let { newest ->
