@@ -15,7 +15,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The drain request's worker. It sends nothing itself. It reads [dataScope] first, which creates
+ * The drain request's worker. It sends nothing itself. It calls [startSenders] first, which creates
  * the app data scope if the app has not yet. That scope drains every outbox sender in the graph,
  * with no repository built. Then this awaits the factory's backlog to keep the process alive until
  * nothing can send now. Rows left in a backoff are covered by the deadline request the scheduler
@@ -26,12 +26,11 @@ class OutboxDrainWorker(
   context: Context,
   params: WorkerParameters,
   private val factory: DataScope.Factory,
-  private val dataScope: () -> DataScope,
+  private val startSenders: () -> Unit,
   private val timeout: Duration = 8.minutes,
 ) : CoroutineWorker(context, params) {
   override suspend fun doWork(): Result {
-    // Reading the scope creates it and starts its senders. The worker needs nothing else from it.
-    @Suppress("RETURN_VALUE_NOT_USED") dataScope()
+    startSenders()
     return when (withTimeoutOrNull(timeout) { factory.awaitDrained() }) {
       OutboxBacklog.Empty,
       is OutboxBacklog.BackingOff -> Result.success()
@@ -43,15 +42,15 @@ class OutboxDrainWorker(
 }
 
 /**
- * Hands the graph's data scope factory and [dataScope] to each [OutboxDrainWorker]. Null for every
- * other worker, so WorkManager builds those with its default factory. Set it on the app's
- * WorkManager configuration. [dataScope] reads the graph's app data scope, a graph singleton, so
- * the outboxes the worker waits for are the ones the app runs, and the one-sender-per-name check
- * holds.
+ * Hands the graph's data scope factory and [startSenders] to each [OutboxDrainWorker]. Null for
+ * every other worker, so WorkManager builds those with its default factory. Set it on the app's
+ * WorkManager configuration. [startSenders] reads the graph's app data scope, a graph singleton,
+ * which creates it on the first read. So the outboxes the worker waits for are the ones the app
+ * runs, and the one-sender-per-name check holds.
  */
 class OutboxDrainWorkerFactory(
   private val factory: DataScope.Factory,
-  private val dataScope: () -> DataScope,
+  private val startSenders: () -> Unit,
 ) : WorkerFactory() {
   override fun createWorker(
     appContext: Context,
@@ -61,6 +60,6 @@ class OutboxDrainWorkerFactory(
     if (workerClassName != OutboxDrainWorker::class.java.name) {
       return null
     }
-    return OutboxDrainWorker(appContext, workerParameters, factory, dataScope)
+    return OutboxDrainWorker(appContext, workerParameters, factory, startSenders)
   }
 }

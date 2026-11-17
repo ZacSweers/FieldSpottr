@@ -6,6 +6,7 @@ import app.cash.turbine.test
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotSameInstanceAs
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Fetching
@@ -409,9 +410,9 @@ class QueryInvalidationTest {
         write = { fetched, keepsStored ->
           if (!retried) {
             retried = true
-            // A first try that saw the value the mark read, then lost a race to another writer.
-            // That try never writes, so its answer goes unused.
-            @Suppress("RETURN_VALUE_NOT_USED") keepsStored(START - 1.minutes, false)
+            // A first try that saw the value the mark read, so it may write, then lost a race to
+            // another writer
+            assertThat(keepsStored(START - 1.minutes, false)).isFalse()
             stored.value = Fetched(2, START)
           }
           stored.writeFetched(fetched, keepsStored)
