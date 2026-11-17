@@ -236,8 +236,10 @@ interface DataQuery<T> {
 
   /**
    * Marks the stored data stale without fetching, so the next collector fetches. Call it once
-   * something changed what the query reads, like after a write to the server. When the data is on
-   * screen, use [invalidateAndRefresh].
+   * something changed what the query reads, like after a write to the server. A write that also
+   * stores the server's answer gives it the current time as its fetch time, then calls this. A
+   * fetch from before the write then keeps that value. When the data is on screen, use
+   * [invalidateAndRefresh].
    *
    * These hold from the moment the call returns, before the mark itself is stored:
    * - A fetch that started before the call never stores a fresh value. Its value may be from before

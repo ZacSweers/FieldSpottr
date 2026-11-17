@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -231,6 +232,55 @@ class QueryInvalidationTest {
     refresh.assertSucceeded()
     // The fetch is older than that value and stale itself, so it never replaces it
     assertThat(store.data.value).isEqualTo(written)
+  }
+
+  @Test
+  fun `an outdated fetch keeps a newer value that a writer stored before invalidating`() = runTest {
+    val store = QueryStore.inMemory(Fetched("cached", START))
+    val query = query(store)
+    val seen = mutableListOf<Fetched<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it } }
+    fetch.hold()
+    val refresh = query.refresh()
+    runCurrent()
+    advanceTimeBy(1.minutes)
+
+    // Another writer stores the server's answer to a change with the current time, unmarked,
+    // then invalidates the query
+    store.update { Fetched("written", START + 1.minutes) }
+    runCurrent()
+    query.invalidate()
+    fetch.release()
+    runCurrent()
+
+    refresh.assertSucceeded()
+    // The fetch began before that value was stored, so it never replaces it, and the value
+    // stays visible marked stale
+    val marked = Fetched("written", START + 1.minutes, invalidated = true)
+    assertThat(store.data.value).isEqualTo(marked)
+    assertThat(seen.dropWhile { it?.value != "written" }.map { it?.value }.distinct())
+      .containsExactly("written")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an outdated fetch still replaces a value stored at the time it began`() = runTest {
+    val store = QueryStore.inMemory(Fetched("cached", START))
+    val query = query(store)
+    fetch.hold()
+    val refresh = query.refresh()
+    runCurrent()
+
+    // A limit of the clock: the writer stores its answer with the same time the fetch took when
+    // it began. An equal time counts as the fetch's own, so the fetch's value wins, marked stale.
+    store.update { Fetched("written", START) }
+    query.invalidate()
+    fetch.release()
+    runCurrent()
+
+    refresh.assertSucceeded()
+    assertThat(store.data.value).isEqualTo(Fetched("old", START, invalidated = true))
+    data.assertNoFailures()
   }
 
   @Test
