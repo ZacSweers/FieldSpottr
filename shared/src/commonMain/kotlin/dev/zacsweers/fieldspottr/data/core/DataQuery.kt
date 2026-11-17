@@ -257,6 +257,10 @@ interface DataQuery<T> {
    * queued ahead of the invalidation. A fetch that failed or was cancelled leaves the mark to land
    * as usual.
    *
+   * These promises cover this query's own fetches. Call this on every query that reads what
+   * changed, also when queries share a store. A fetch another query began before the change
+   * replaces a marked value with its own, unmarked.
+   *
    * Two limits come from the store:
    * - A fetch that has already handed its value to the store when this is called cannot take it
    *   back. That write lands unmarked, and the mark follows as the next command on the query's key.

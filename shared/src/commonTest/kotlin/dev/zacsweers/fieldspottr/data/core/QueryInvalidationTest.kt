@@ -284,6 +284,65 @@ class QueryInvalidationTest {
   }
 
   @Test
+  fun `a fetch on a second query replaces a marked value when only the first query invalidates`() =
+    runTest {
+      val store = QueryStore.inMemory(Fetched("cached", START))
+      val first = query(store)
+      val secondFetch = TestFetch { "second" }
+      val second = data.query(store, Freshness.staleAfter(1.hours), fetch = secondFetch)
+      secondFetch.hold()
+      val refresh = second.refresh()
+      runCurrent()
+      advanceTimeBy(1.minutes)
+
+      // A limit of sharing a store: the writer invalidates only the first query. The second
+      // query's fetch is not outdated, so once the mark lands it replaces the marked value with
+      // its own, unmarked.
+      store.update { Fetched("written", START + 1.minutes) }
+      first.invalidate()
+      runCurrent()
+      assertThat(store.data.value)
+        .isEqualTo(Fetched("written", START + 1.minutes, invalidated = true))
+      secondFetch.release()
+      runCurrent()
+
+      refresh.assertSucceeded()
+      assertThat(store.data.value).isEqualTo(Fetched("second", START))
+      data.assertNoFailures()
+    }
+
+  @Test
+  fun `a fetch on a second query keeps a newer value when every query invalidates`() = runTest {
+    val store = QueryStore.inMemory(Fetched("cached", START))
+    val first = query(store)
+    val secondFetch = TestFetch { "second" }
+    val second = data.query(store, Freshness.staleAfter(1.hours), fetch = secondFetch)
+    val seen = mutableListOf<Fetched<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it } }
+    secondFetch.hold()
+    val refresh = second.refresh()
+    runCurrent()
+    advanceTimeBy(1.minutes)
+
+    // The writer invalidates every query that reads the store, so the second query's fetch is
+    // outdated and keeps the newer value
+    store.update { Fetched("written", START + 1.minutes) }
+    runCurrent()
+    first.invalidate()
+    second.invalidate()
+    secondFetch.release()
+    runCurrent()
+
+    refresh.assertSucceeded()
+    val marked = Fetched("written", START + 1.minutes, invalidated = true)
+    assertThat(store.data.value).isEqualTo(marked)
+    assertThat(seen.dropWhile { it?.value != "written" }.map { it?.value }.distinct())
+      .containsExactly("written")
+    assertThat(fetch.callCount).isEqualTo(0)
+    data.assertNoFailures()
+  }
+
+  @Test
   fun `a collector shows an outdated fetch's value marked stale and fetches nothing more`() =
     runTest {
       val query = query(QueryStore.inMemory())
