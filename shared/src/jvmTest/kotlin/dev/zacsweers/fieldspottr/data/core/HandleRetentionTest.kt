@@ -261,7 +261,7 @@ class HandleRetentionTest {
     val executor = Executors.newSingleThreadExecutor()
     val owner = CoroutineScope(executor.asCoroutineDispatcher() + Job())
     // Runs everything the runner's thread has queued so far, so each command reached its wait
-    val drain = { executor.submit(Runnable {}).get(10, SECONDS) }
+    val drain: () -> Unit = { executor.submit(Runnable {}).get(10, SECONDS) }
     try {
       val actions = RealActionRunner(owner, onFailure = {})
       val release = CompletableDeferred<Unit>()

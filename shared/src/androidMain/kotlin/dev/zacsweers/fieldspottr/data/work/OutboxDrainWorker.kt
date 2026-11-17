@@ -30,7 +30,8 @@ class OutboxDrainWorker(
   private val timeout: Duration = 8.minutes,
 ) : CoroutineWorker(context, params) {
   override suspend fun doWork(): Result {
-    dataScope()
+    // Reading the scope creates it and starts its senders. The worker needs nothing else from it.
+    @Suppress("RETURN_VALUE_NOT_USED") dataScope()
     return when (withTimeoutOrNull(timeout) { factory.awaitDrained() }) {
       OutboxBacklog.Empty,
       is OutboxBacklog.BackingOff -> Result.success()

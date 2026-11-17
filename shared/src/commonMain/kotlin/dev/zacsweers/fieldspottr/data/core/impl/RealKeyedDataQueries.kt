@@ -379,7 +379,7 @@ private class KeyEntry<T>(
    * caller holds the entry, so it never revives a dropped one.
    */
   override fun holdUntilSettled(operation: Operation) {
-    holds.incrementAndFetch()
+    holds.update { it + 1 }
     operation.invokeOnSettled(::release)
   }
 

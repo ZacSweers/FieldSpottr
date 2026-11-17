@@ -536,7 +536,7 @@ internal class RealDataQuery<T>(
    * changed.
    */
   private fun fetchNow(): Operation {
-    submissions.incrementAndFetch()
+    submissions.update { it + 1 }
     val forced = ForcedFetch(tickets.incrementAndFetch())
     return actions.runOrJoin(
       Ordering.Keyed(key, OnPrevious.Cancel),
@@ -580,7 +580,7 @@ internal class RealDataQuery<T>(
    * check that may still hold off is not joined, since an explicit request never holds off.
    */
   private fun fetchIfStale(): Operation {
-    submissions.incrementAndFetch()
+    submissions.update { it + 1 }
     val check = Check(CheckKind.Requested)
     return actions.runOrJoin(
       ordering,
@@ -596,7 +596,7 @@ internal class RealDataQuery<T>(
    * on this query's key, else checks the stored time and fetches if stale and not held off.
    */
   private fun autoCheck(): Operation {
-    submissions.incrementAndFetch()
+    submissions.update { it + 1 }
     val check = Check(CheckKind.Automatic)
     return actions.runOrJoin(ordering, check, joins = { it.tag is Request }) { runCheck(check) }
   }
@@ -606,7 +606,7 @@ internal class RealDataQuery<T>(
    * started, which reads the store later anyway, and never work that may have read it already.
    */
   private fun recheck(): Operation {
-    submissions.incrementAndFetch()
+    submissions.update { it + 1 }
     val check = Check(CheckKind.Automatic)
     return actions.runOrJoin(
       ordering,
@@ -619,7 +619,7 @@ internal class RealDataQuery<T>(
 
   /** A check of its own after a reconnect, which never joins one that may skip a failed fetch. */
   private fun reconnectCheck(): Operation {
-    submissions.incrementAndFetch()
+    submissions.update { it + 1 }
     val check = Check(CheckKind.Reconnected)
     return actions.runOrJoin(ordering, check, joins = { false }) { runCheck(check) }
   }
@@ -636,7 +636,7 @@ internal class RealDataQuery<T>(
    * since clock times can tie.
    */
   override fun invalidate(): Operation {
-    submissions.incrementAndFetch()
+    submissions.update { it + 1 }
     val ticket = tickets.incrementAndFetch()
     lastInvalidation.update { maxOf(it, ticket) }
     return actions.runOrJoin(ordering, Invalidation, joins = { false }) {

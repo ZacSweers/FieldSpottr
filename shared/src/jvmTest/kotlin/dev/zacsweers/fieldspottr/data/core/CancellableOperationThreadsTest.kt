@@ -133,6 +133,8 @@ class CancellableOperationThreadsTest {
   /** Waits up to a few seconds for [actions] to release its key, which follows the settlement. */
   private fun waitForKeys(actions: RealActionRunner): Boolean {
     val done = CountDownLatch(1)
+    // The latch reports when the thread is done, so the thread itself goes unused.
+    @Suppress("RETURN_VALUE_NOT_USED")
     thread(isDaemon = true) {
       while (actions.keysHeld != 0) {
         Thread.sleep(1)

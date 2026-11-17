@@ -13,8 +13,6 @@ import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.decrementAndFetch
-import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
@@ -133,9 +131,9 @@ class OptimisticQueryStoreScaleTest {
         base = QueryStore.inMemoryByKey(),
         apply = { current, add ->
           if (add.tag == mutated) {
-            mutatedApplies.incrementAndFetch()
+            mutatedApplies.update { it + 1 }
           } else {
-            otherApplies.incrementAndFetch()
+            otherApplies.update { it + 1 }
           }
           val list = current.orEmpty()
           if (add.tag in list) {
@@ -194,7 +192,7 @@ class OptimisticQueryStoreScaleTest {
         base = QueryStore.inMemoryByKey(),
         onFailure = failures,
         apply = { current, add ->
-          applies.incrementAndFetch()
+          applies.update { it + 1 }
           current.orEmpty() + add.tag
         },
       )
@@ -229,7 +227,7 @@ class OptimisticQueryStoreScaleTest {
         base = QueryStore.inMemoryByKey(),
         onFailure = failures,
         apply = { current, add ->
-          applies.incrementAndFetch()
+          applies.update { it + 1 }
           current.orEmpty() + add.tag
         },
       )
@@ -274,7 +272,7 @@ class OptimisticQueryStoreScaleTest {
         base = QueryStore.inMemoryByKey(),
         onFailure = failures,
         apply = { current, add ->
-          applies.incrementAndFetch()
+          applies.update { it + 1 }
           current.orEmpty() + add.tag
         },
       )
@@ -321,7 +319,7 @@ class OptimisticQueryStoreScaleTest {
         base = QueryStore.inMemoryByKey(),
         onFailure = failures,
         apply = { current, add ->
-          applies.incrementAndFetch()
+          applies.update { it + 1 }
           val list = current.orEmpty()
           if (add.tag in list) {
             list
@@ -365,9 +363,9 @@ class OptimisticQueryStoreScaleTest {
         override fun entries(): Flow<List<OutboxEntry<E>>> =
           rows
             .entries()
-            .onStart { live.incrementAndFetch() }
+            .onStart { live.update { it + 1 } }
             .onEach { reads.update { it + 1 } }
-            .onCompletion { live.decrementAndFetch() }
+            .onCompletion { live.update { it - 1 } }
       }
     }
 

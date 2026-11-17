@@ -13,7 +13,6 @@ import dev.zacsweers.fieldspottr.data.core.testing.discardDirectly
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.decrementAndFetch
 import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlin.test.Test
@@ -99,14 +98,14 @@ class OutboxScaleTest {
       }
 
     override suspend fun head(key: String): OutboxEntry<E>? =
-      rows.head(key)?.also { delivered.incrementAndFetch() }
+      rows.head(key)?.also { delivered.update { it + 1 } }
 
     private fun <T> Flow<T>.counted(size: (T) -> Int): Flow<T> = onStart {
       val now = live.incrementAndFetch()
       maxLive.update { maxOf(it, now) }
     }
       .onEach { value -> delivered.update { it + size(value) } }
-      .onCompletion { live.decrementAndFetch() }
+      .onCompletion { live.update { it - 1 } }
   }
 
   private companion object {

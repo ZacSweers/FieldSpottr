@@ -300,8 +300,9 @@ class QueryInvalidationTest {
         write = { fetched, keepsStored ->
           if (!retried) {
             retried = true
-            // A first try that saw the value the mark read, then lost a race to another writer
-            keepsStored(START - 1.minutes, false)
+            // A first try that saw the value the mark read, then lost a race to another writer.
+            // That try never writes, so its answer goes unused.
+            @Suppress("RETURN_VALUE_NOT_USED") keepsStored(START - 1.minutes, false)
             stored.value = Fetched(2, START)
           }
           stored.writeFetched(fetched, keepsStored)
