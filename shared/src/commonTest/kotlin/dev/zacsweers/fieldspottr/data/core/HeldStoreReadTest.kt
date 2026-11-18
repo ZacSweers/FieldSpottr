@@ -28,7 +28,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
-/** [DataQuery.state] and [DataQuery.storedState] over a store whose reads the test holds. */
+/** [DataQuery.state] and [DataQuery.stateEager] over a store whose reads the test holds. */
 class HeldStoreReadTest {
   // Returns how many calls have started, so each fetch returns a value of its own
   private val fetch: TestFetch<Int> = TestFetch { fetch.callCount }
@@ -38,15 +38,15 @@ class HeldStoreReadTest {
       .query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
   @Test
-  fun `storedState's first value shows a refresh that settled while the first read waited`() =
-    runTest {
-      assertFirstValueShowsRefresh { it.storedState }
-    }
-
-  @Test
   fun `state's first value shows a refresh that settled while the first read waited`() = runTest {
     assertFirstValueShowsRefresh { it.state }
   }
+
+  @Test
+  fun `stateEager's first value shows a refresh that settled while the first read waited`() =
+    runTest {
+      assertFirstValueShowsRefresh { it.stateEager }
+    }
 
   /**
    * Holds the first read of [states] after it read the stored 0, completes a refresh that stores 1
@@ -83,11 +83,11 @@ class HeldStoreReadTest {
           fetch = keyedFetch,
         )
     val seen = mutableListOf<QueryState<String>>()
-    backgroundScope.launch { values.storedState("a").collect { seen += it } }
+    backgroundScope.launch { values.state("a").collect { seen += it } }
     runCurrent()
     advanceTimeBy(1.minutes)
 
-    // Nothing reads the store back for a collector of storedState, so after the refresh it starts a
+    // Nothing reads the store back for a collector of state, so after the refresh it starts a
     // new read, which waits here before it collects the key
     val a = checkNotNull(held["a"])
     a.holdNextRead(HeldRead.BeforeSubscribe)

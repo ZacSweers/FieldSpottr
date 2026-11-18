@@ -59,9 +59,9 @@ import kotlinx.coroutines.selects.select
 
 /**
  * [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. Its
- * watcher runs in [scope] while anyone collects [state]. [holds] keeps whatever owns this query
- * alive, such as the per-key entry inside a keyed query, for as long as the watcher or a request
- * still needs it.
+ * watcher runs in [scope] while anyone collects [stateEager]. [holds] keeps whatever owns this
+ * query alive, such as the per-key entry inside a keyed query, for as long as the watcher or a
+ * request still needs it.
  */
 @OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealDataQuery<T>(
@@ -81,7 +81,7 @@ internal class RealDataQuery<T>(
   private val online: StateFlow<Boolean> = MutableStateFlow(true),
   /** How long automatic fetches hold off after failures, as [holdOffWindow] describes. */
   private val retry: RetryPolicy,
-  /** When automatic fetches may run again after failures, as [DataQuery.state] describes. */
+  /** When automatic fetches may run again after failures, as [DataQuery.stateEager] describes. */
   private val holdOff: FetchHoldOff = FetchHoldOff.inMemory(),
   /** A staleness rule the query's owner adds, like a keyed set's invalidateAll(). */
   private val staleMark: StaleMark = StaleMark.None,
@@ -101,7 +101,7 @@ internal class RealDataQuery<T>(
   private val lastInvalidation = AtomicInt(0)
   // The start ticket of the newest fetch that wrote. Only moves forward.
   private val lastWrite = AtomicInt(0)
-  // How many observers collect state, and the watcher that runs while any do. Updated by
+  // How many observers collect stateEager, and the watcher that runs while any do. Updated by
   // compare-and-set only.
   private val watching = AtomicReference(Watching(observers = 0, watcher = null))
   // What the fetches are doing, whether one is writing, and the write that settled the last one.
@@ -118,16 +118,16 @@ internal class RealDataQuery<T>(
    * its own, so an observer that leaves after one value, like `first()`, still started it. The
    * first observer then starts the watcher, which can wait for that check, as [watch] describes.
    */
-  override val state: Flow<QueryState<T>> = flow { StateObserver(fetches = true).observe(this) }
+  override val stateEager: Flow<QueryState<T>> = flow {
+    StateObserver(fetches = true).observe(this)
+  }
 
   /**
-   * [state] from an observer that starts no check and no watcher, and is not counted. So a fetch
-   * that settles while only such observers collect leaves no record of what the store showed, and
-   * each of them reads the store again, as [StateObserver] describes.
+   * [stateEager] from an observer that starts no check and no watcher, and is not counted. So a
+   * fetch that settles while only such observers collect leaves no record of what the store showed,
+   * and each of them reads the store again, as [StateObserver] describes.
    */
-  override val storedState: Flow<QueryState<T>> = flow {
-    StateObserver(fetches = false).observe(this)
-  }
+  override val state: Flow<QueryState<T>> = flow { StateObserver(fetches = false).observe(this) }
 
   override val stored: Flow<Fetched<T>?> = store.data.distinctUntilChanged(::sameFetched)
 
@@ -144,8 +144,8 @@ internal class RealDataQuery<T>(
       ?: FetchStatus.Idle
 
   /**
-   * One collector of [state]. It merges three things in one coroutine: its own read of the store,
-   * the query's [progress], and the end of its first check.
+   * One collector of [stateEager]. It merges three things in one coroutine: its own read of the
+   * store, the query's [progress], and the end of its first check.
    *
    * The status it shows is the status of [progress], with two exceptions. When its first value was
    * stale or absent and it queued a check, it shows `Fetching` until the check settles or a fetch
@@ -164,11 +164,11 @@ internal class RealDataQuery<T>(
    * it starts its read again and shows the new status with the first value of that read. So it
    * never shows `Idle` before the data of the fetch that set it.
    *
-   * With [fetches] false it is a collector of [storedState]. It does all of the above except that
-   * it starts no check, is not counted, and starts no watcher. A fetch reads the store back only
-   * for counted observers, so with none it leaves no record, and this collector takes the path
-   * without one: it reads the store again. That gives it the same order of values and statuses with
-   * no count of its own and no copy of the value kept for it.
+   * With [fetches] false it is a collector of [state]. It does all of the above except that it
+   * starts no check, is not counted, and starts no watcher. A fetch reads the store back only for
+   * counted observers, so with none it leaves no record, and this collector takes the path without
+   * one: it reads the store again. That gives it the same order of values and statuses with no
+   * count of its own and no copy of the value kept for it.
    */
   private inner class StateObserver(private val fetches: Boolean) {
     // Read before the store, so a quiet key at both ends means no command ran around the read
@@ -798,9 +798,10 @@ internal class RealDataQuery<T>(
 
   /**
    * Ends a successful fetch's write phase: sets `Idle` with a record of the write, so each
-   * collector of [state] can line its value up with it, as [StateObserver] describes. While any
-   * observer is counted, the record holds what the store shows right after the write. A read that
-   * fails leaves the record without it, and collectors then read again on their own.
+   * collector of [stateEager] or [state] can line its value up with it, as [StateObserver]
+   * describes. While any observer is counted, the record holds what the store shows right after the
+   * write. A read that fails leaves the record without it, and collectors then read again on their
+   * own.
    */
   private suspend fun settleWrite() {
     var read = false
@@ -823,8 +824,9 @@ internal class RealDataQuery<T>(
    * failed fetch sets [status] before the hold-off, so an [Error] from [retry] cannot hide the
    * fetch's own failure.
    *
-   * From the write until [settleWrite], [progress] shows a write phase, so collectors of [state]
-   * show a value with a new fetch time or flag as this write's, never beside `Fetching`.
+   * From the write until [settleWrite], [progress] shows a write phase, so collectors of
+   * [stateEager] and [state] show a value with a new fetch time or flag as this write's, never
+   * beside `Fetching`.
    *
    * A fetch that started before the newest invalidate() call may have read the server before the
    * change that call reports. Its value is written with the invalidated flag set, so the store
@@ -1063,7 +1065,7 @@ private class Progress<T>(
  */
 private class Wrote<T>(val snapshot: Fetched<T>?, val read: Boolean)
 
-/** What one collector of [DataQuery.state] reacts to. */
+/** What one collector of [DataQuery.stateEager] or [DataQuery.state] reacts to. */
 private sealed interface StateEvent<out T> {
   /** A value from the collector's read number [read] of the store. */
   class Value<T>(val value: Fetched<T>?, val read: Int) : StateEvent<T>

@@ -9,6 +9,9 @@ import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Failed
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Fetching
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Idle
+import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
+import dev.zacsweers.fieldspottr.data.core.testing.HeldStoreReadQueryStore
+import dev.zacsweers.fieldspottr.data.core.testing.HeldStoreReadQueryStore.HeldRead
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
@@ -23,7 +26,7 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -31,7 +34,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
-/** [DataQuery.state], and the one distinctness rule that it shares with `data` and `stored`. */
+/**
+ * [DataQuery.state] and [KeyedDataQueries.state]: the values and statuses of `stateEager` for a
+ * collector that starts no work.
+ */
 class QueryStateTest {
   private val offline = IllegalStateException("offline")
   // Returns how many calls have started, so each fetch returns a value of its own
@@ -44,67 +50,32 @@ class QueryStateTest {
   }
 
   @Test
-  fun `collecting state fetches stale data and an uncollected query fetches nothing`() = runTest {
-    val query = query(QueryStore.inMemory(Fetched(0, START - 2.hours)))
-    runCurrent()
-    assertThat(fetch.callCount).isEqualTo(0)
+  fun `collecting state starts no fetch for stale or unfetched or missing data`() = runTest {
+    val stale = Fetched(0, START - 2.hours)
+    val staleQuery = query(QueryStore.inMemory(stale))
+    assertThat(staleQuery.state.first()).isEqualTo(QueryState(stale, Idle))
 
-    assertThat(query.state.first { it.value == 1 }).isEqualTo(QueryState(Fetched(1, START), Idle))
-    assertThat(fetch.callCount).isEqualTo(1)
-  }
+    val unfetched = Fetched(0, fetchedAt = null)
+    val unfetchedQuery = query(QueryStore.inMemory(unfetched))
+    assertThat(unfetchedQuery.state.first()).isEqualTo(QueryState(unfetched, Idle))
 
-  @Test
-  fun `the first value shows Fetching at once when this collector queued a check`() = runTest {
-    fetch.hold()
-    val empty = query(QueryStore.inMemory())
-    assertThat(empty.state.first()).isEqualTo(QueryState(null, Fetching(forced = false)))
-
-    val stale = query(QueryStore.inMemory(Fetched(0, START - 2.hours)))
-    assertThat(stale.state.first())
-      .isEqualTo(QueryState(Fetched(0, START - 2.hours), Fetching(forced = false)))
-
-    val unfetched = query(QueryStore.inMemory(Fetched(0, fetchedAt = null)))
-    assertThat(unfetched.state.first())
-      .isEqualTo(QueryState(Fetched(0, fetchedAt = null), Fetching(forced = false)))
-    fetch.release()
-  }
-
-  @Test
-  fun `a fresh first value shows the query's status`() = runTest {
-    val seed = Fetched(0, START)
-    val query = query(QueryStore.inMemory(seed))
-    fetch.respond = { throw offline }
-    query.refresh().awaitFailed<IllegalStateException>()
-
-    assertThat(query.state.first()).isEqualTo(QueryState(seed, Failed(offline)))
-    assertThat(fetch.callCount).isEqualTo(1)
-  }
-
-  @Test
-  fun `a check that holds off shows the query's status again`() = runTest {
-    fetch.respond = { throw offline }
-    val query = query(QueryStore.inMemory())
-    query.state.first { it.status is Failed }
-    assertThat(fetch.callCount).isEqualTo(1)
-
-    // Inside the hold-off window, so this collector's check decides not to fetch
-    query.state.test {
-      assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
-      assertThat(awaitItem()).isEqualTo(QueryState(null, Failed(offline)))
+    val emptyQuery = query(QueryStore.inMemory())
+    emptyQuery.state.test {
+      assertThat(awaitItem()).isEqualTo(QueryState(null, Idle))
+      advanceTimeBy(1.hours)
       expectNoEvents()
     }
-    assertThat(fetch.callCount).isEqualTo(1)
-    data.fetchFailures.take()
+    assertThat(fetch.callCount).isEqualTo(0)
   }
 
   @Test
-  fun `a refresh shows the old value fetching then the new value idle`() = runTest {
+  fun `state shows a refresh as the old value fetching then the new value idle`() = runTest {
     val query = query(QueryStore.inMemory(Fetched(0, START)))
     assertRefreshSequence(query)
   }
 
   @Test
-  fun `a refresh never shows idle before the new value from a store that lags`() = runTest {
+  fun `state never shows idle before the new value from a store that lags`() = runTest {
     val store = LaggingQueryStore<Int>(lag = 1.seconds)
     store.delegate.update { Fetched(0, START) }
     val query = query(store)
@@ -112,46 +83,15 @@ class QueryStateTest {
   }
 
   @Test
-  fun `a refresh never shows the new value fetching from a store whose write returns late`() =
-    runTest {
-      val store = LaggingQueryStore<Int>(writeReturnsAfter = 1.seconds)
-      store.delegate.update { Fetched(0, START) }
-      val query = query(store)
-      assertRefreshSequence(query)
-    }
-
-  @Test
-  fun `a collector that subscribes during a fetch's write shows its value idle`() = runTest {
-    val store = LaggingQueryStore<Int>(writeReturnsAfter = 10.seconds)
+  fun `state never shows the new value fetching from a store whose write returns late`() = runTest {
+    val store = LaggingQueryStore<Int>(writeReturnsAfter = 1.seconds)
     store.delegate.update { Fetched(0, START) }
     val query = query(store)
-    val early = mutableListOf<QueryState<Int>>()
-    val late = mutableListOf<QueryState<Int>>()
-    backgroundScope.launch { query.state.collect { early += it } }
-    runCurrent()
-    advanceTimeBy(1.minutes)
-
-    val refresh = query.refresh()
-    advanceTimeBy(1.seconds)
-    // The fetch has written and its write call is still running
-    val written = Fetched(1, START + 1.minutes)
-    assertThat(store.delegate.data.value).isEqualTo(written)
-    backgroundScope.launch { query.state.collect { late += it } }
-    runCurrent()
-    refresh.awaitSucceeded()
-    advanceTimeBy(5.seconds)
-
-    assertThat(early)
-      .containsExactly(
-        QueryState(Fetched(0, START), Idle),
-        QueryState(Fetched(0, START), Fetching(forced = true)),
-        QueryState(written, Idle),
-      )
-    assertThat(late).containsExactly(QueryState(written, Idle))
+    assertRefreshSequence(query)
   }
 
   @Test
-  fun `every collector of a store that lags shows the refresh in order`() = runTest {
+  fun `every collector of state over a store that lags shows the refresh in order`() = runTest {
     val store = LaggingQueryStore<Int>(lag = 1.seconds)
     store.delegate.update { Fetched(0, START) }
     val query = query(store)
@@ -169,20 +109,301 @@ class QueryStateTest {
     refresh.awaitSucceeded()
     advanceTimeBy(5.seconds)
 
-    val fetched = Fetched(1, START + 1.minutes)
     for (list in seen) {
       assertThat(list)
         .containsExactly(
           QueryState(Fetched(0, START), Idle),
           QueryState(Fetched(0, START), Fetching(forced = true)),
-          QueryState(fetched, Idle),
+          QueryState(Fetched(1, START + 1.minutes), Idle),
         )
     }
   }
 
+  @Test
+  fun `state over a store that lags shows nothing new while its new read waits`() = runTest {
+    val lagging = LaggingQueryStore<Int>(lag = 1.seconds)
+    lagging.delegate.update { Fetched(0, START) }
+    val store = HeldStoreReadQueryStore(lagging)
+    val query = query(store)
+    val seen = mutableListOf<QueryState<Int>>()
+    backgroundScope.launch { query.state.collect { seen += it } }
+    runCurrent()
+    advanceTimeBy(1.minutes)
+
+    // The read that starts after the refresh waits, while the old read still delivers the write
+    store.holdNextRead(HeldRead.BeforeSubscribe)
+    fetch.hold()
+    val refresh = query.refresh()
+    runCurrent()
+    fetch.release()
+    refresh.awaitSucceeded()
+    advanceTimeBy(5.seconds)
+
+    assertThat(store.reads).isEqualTo(2)
+    assertThat(seen)
+      .containsExactly(
+        QueryState(Fetched(0, START), Idle),
+        QueryState(Fetched(0, START), Fetching(forced = true)),
+      )
+
+    store.release()
+    advanceTimeBy(5.seconds)
+    assertThat(seen)
+      .containsExactly(
+        QueryState(Fetched(0, START), Idle),
+        QueryState(Fetched(0, START), Fetching(forced = true)),
+        QueryState(Fetched(1, START + 1.minutes), Idle),
+      )
+  }
+
+  @Test
+  fun `state shows a failed refresh with the value it keeps`() = runTest {
+    val seed = Fetched(0, START)
+    val query = query(QueryStore.inMemory(seed))
+    fetch.respond = { throw offline }
+
+    query.state.test {
+      assertThat(awaitItem()).isEqualTo(QueryState(seed, Idle))
+      fetch.hold()
+      val refresh = query.refresh()
+      assertThat(awaitItem()).isEqualTo(QueryState(seed, Fetching(forced = true)))
+      fetch.release()
+      assertThat(awaitItem()).isEqualTo(QueryState(seed, Failed(offline)))
+      refresh.awaitFailed<IllegalStateException>()
+      expectNoEvents()
+    }
+    // A later collector starts from the status as it is
+    assertThat(query.state.first()).isEqualTo(QueryState(seed, Failed(offline)))
+    assertThat(fetch.callCount).isEqualTo(1)
+    data.fetchFailures.take()
+  }
+
+  @Test
+  fun `the first state value shows a fetch that already runs`() = runTest {
+    val seed = Fetched(0, START)
+    val query = query(QueryStore.inMemory(seed))
+    fetch.hold()
+    val refresh = query.refresh()
+    runCurrent()
+
+    query.state.test {
+      assertThat(awaitItem()).isEqualTo(QueryState(seed, Fetching(forced = true)))
+      fetch.release()
+      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(1, START), Idle))
+    }
+    refresh.awaitSucceeded()
+  }
+
+  @Test
+  fun `state shows the fetch that a collector of stateEager starts`() = runTest {
+    val query = query(QueryStore.inMemory())
+    fetch.hold()
+
+    query.state.test {
+      assertThat(awaitItem()).isEqualTo(QueryState(null, Idle))
+      val screen = backgroundScope.launch { query.stateEager.collect {} }
+      assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
+      fetch.release()
+      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(1, START), Idle))
+      screen.cancelAndJoin()
+      expectNoEvents()
+    }
+    assertThat(fetch.callCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `a collector of state fetches nothing when the value goes away`() = runTest {
+    val store = QueryStore.inMemory(Fetched(0, START))
+    val query = query(store)
+
+    query.state.test {
+      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(0, START), Idle))
+      // A collector of stateEager would fetch again here
+      store.update { null }
+      assertThat(awaitItem()).isEqualTo(QueryState(null, Idle))
+      store.update { Fetched(5, fetchedAt = null) }
+      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(5, fetchedAt = null), Idle))
+      store.invalidate()
+      assertThat(awaitItem())
+        .isEqualTo(QueryState(Fetched(5, fetchedAt = null, invalidated = true), Idle))
+      advanceTimeBy(1.hours)
+      expectNoEvents()
+    }
+    assertThat(fetch.callCount).isEqualTo(0)
+  }
+
+  @Test
+  fun `a collector of state starts no watcher and fetches nothing on a reconnect`() = runTest {
+    val query = query(QueryStore.inMemory(Fetched(0, START - 2.hours)))
+    fetch.respond = { throw offline }
+    query.fetchIfStale().awaitFailed<IllegalStateException>()
+    data.fetchFailures.take()
+    fetch.respond = { fetch.callCount }
+
+    val collector = backgroundScope.launch { query.state.collect {} }
+    runCurrent()
+    // Nothing collects the network state for this collector
+    assertThat(data.online.subscriptionCount.value).isEqualTo(0)
+    data.online.value = false
+    runCurrent()
+    data.online.value = true
+    runCurrent()
+    advanceTimeBy(1.hours)
+
+    // A collector of stateEager would fetch again after the reconnect, since the last fetch
+    // failed
+    assertThat(fetch.callCount).isEqualTo(1)
+    assertThat(query.status.value).isEqualTo(Failed(offline))
+    collector.cancelAndJoin()
+  }
+
+  @Test
+  fun `state collectors read the store themselves and the query reads nothing for them`() =
+    runTest {
+      val store = RecordingQueryStore(QueryStore.inMemory(Fetched(0, START)))
+      val query = query(store)
+      val collectors = List(3) { backgroundScope.launch { query.state.collect {} } }
+      runCurrent()
+      assertThat(store.dataCollections).isEqualTo(3)
+
+      query.refresh().awaitSucceeded()
+      runCurrent()
+
+      // Each collector read the store once more after the fetch wrote. The fetch made no read to
+      // share, which it makes only for collectors of stateEager, so no copy of the value was kept.
+      assertThat(store.dataCollections).isEqualTo(6)
+      collectors.forEach { it.cancelAndJoin() }
+
+      // Nothing was counted, so nothing is left to stop: a later fetch reads nothing
+      query.refresh().awaitSucceeded()
+      assertThat(store.dataCollections).isEqualTo(6)
+    }
+
+  @Test
+  fun `a collector of state beside a collector of stateEager shows the same order`() = runTest {
+    val store = RecordingQueryStore(QueryStore.inMemory(Fetched(0, START)))
+    val query = query(store)
+    val active = mutableListOf<QueryState<Int>>()
+    val passive = mutableListOf<QueryState<Int>>()
+    backgroundScope.launch { query.stateEager.collect { active += it } }
+    backgroundScope.launch { query.state.collect { passive += it } }
+    runCurrent()
+    advanceTimeBy(1.minutes)
+
+    fetch.hold()
+    val refresh = query.refresh()
+    runCurrent()
+    fetch.release()
+    refresh.awaitSucceeded()
+    runCurrent()
+
+    // Both line up with the one record the fetch left, so both show the same order
+    assertThat(passive)
+      .containsExactly(
+        QueryState(Fetched(0, START), Idle),
+        QueryState(Fetched(0, START), Fetching(forced = true)),
+        QueryState(Fetched(1, START + 1.minutes), Idle),
+      )
+    assertThat(active).isEqualTo(passive)
+  }
+
+  @Test
+  fun `a collector of state that leaves keeps the watcher of a collector of stateEager`() =
+    runTest {
+      val store = QueryStore.inMemory(Fetched(0, START))
+      val query = query(store)
+      val screen = backgroundScope.launch { query.stateEager.collect {} }
+      runCurrent()
+      val passive = backgroundScope.launch { query.state.collect {} }
+      runCurrent()
+      passive.cancelAndJoin()
+
+      // The screen's watcher still runs, so a value that goes away is fetched again
+      store.update { null }
+      runCurrent()
+      assertThat(fetch.callCount).isEqualTo(1)
+      assertThat(store.data.value).isEqualTo(Fetched(1, START))
+      screen.cancelAndJoin()
+    }
+
+  @Test
+  fun `a key's state shows its value with its status and starts no fetch`() = runTest {
+    val keyedFetch = TestKeyedFetch<String, String> { key -> "$key!" }
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    val values =
+      testDataScope(clock = testClock(START))
+        .keyed(store = stores, freshness = Freshness.staleAfter(1.hours), fetch = keyedFetch)
+
+    values.state("a").test {
+      assertThat(awaitItem()).isEqualTo(QueryState(null, Idle))
+      runCurrent()
+      assertThat(keyedFetch.callCount).isEqualTo(0)
+
+      keyedFetch.hold()
+      val refresh = values.refresh("a")
+      assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = true)))
+      keyedFetch.release()
+      assertThat(awaitItem()).isEqualTo(QueryState(Fetched("a!", START), Idle))
+      refresh.awaitSucceeded()
+      expectNoEvents()
+    }
+  }
+
+  @Test
+  fun `each key's state follows only its own key`() = runTest {
+    val keyedFetch = TestKeyedFetch<String, String> { key -> "$key!" }
+    val values =
+      testDataScope(clock = testClock(START))
+        .keyed(
+          store = QueryStore.inMemoryByKey<String, String>(),
+          freshness = Freshness.staleAfter(1.hours),
+          fetch = keyedFetch,
+        )
+    val a = mutableListOf<QueryState<String>>()
+    val b = mutableListOf<QueryState<String>>()
+    backgroundScope.launch { values.state("a").collect { a += it } }
+    backgroundScope.launch { values.state("b").collect { b += it } }
+    runCurrent()
+
+    keyedFetch.hold()
+    val refresh = values.refresh("a")
+    runCurrent()
+    keyedFetch.release()
+    refresh.awaitSucceeded()
+    runCurrent()
+
+    val nothing = QueryState<String>(null, Idle)
+    assertThat(a)
+      .containsExactly(
+        nothing,
+        QueryState<String>(null, Fetching(forced = true)),
+        QueryState(Fetched("a!", START), Idle),
+      )
+    assertThat(b).containsExactly(nothing)
+    assertThat(keyedFetch.calls).containsExactly("a")
+  }
+
+  @Test
+  fun `collecting a key's state keeps its query until the collector leaves`() = runTest {
+    val values =
+      testDataScope(clock = testClock(START))
+        .keyed(
+          store = QueryStore.inMemoryByKey<String, String>(),
+          freshness = Freshness.staleAfter(1.hours),
+          fetch = TestKeyedFetch { key -> "$key!" },
+        )
+
+    val collector = backgroundScope.launch { values.state("a").collect {} }
+    runCurrent()
+    assertThat(values.keysHeld).isEqualTo(1)
+
+    collector.cancelAndJoin()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
   /**
    * Refreshes [query] a minute after [START], over a stored 0 that is fresh, and checks that its
-   * state shows exactly the old value idle, then fetching, then the new value idle.
+   * `state` shows exactly the old value idle, then fetching, then the new value idle.
    */
   private suspend fun TestScope.assertRefreshSequence(query: DataQuery<Int>) {
     query.state.test {
@@ -198,167 +419,6 @@ class QueryStateTest {
       expectNoEvents()
     }
   }
-
-  @Test
-  fun `a failed refresh keeps the value and shows the failure`() = runTest {
-    val seed = Fetched(0, START)
-    val query = query(QueryStore.inMemory(seed))
-    query.state.test {
-      assertThat(awaitItem()).isEqualTo(QueryState(seed, Idle))
-      fetch.hold()
-      fetch.respond = { throw offline }
-      query.refresh()
-      assertThat(awaitItem()).isEqualTo(QueryState(seed, Fetching(forced = true)))
-      fetch.release()
-      assertThat(awaitItem()).isEqualTo(QueryState(seed, Failed(offline)))
-      expectNoEvents()
-    }
-    data.fetchFailures.take()
-  }
-
-  @Test
-  fun `a check that decides not to fetch emits nothing`() = runTest {
-    val query = query(QueryStore.inMemory(Fetched(0, START)))
-    query.state.test {
-      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(0, START), Idle))
-      query.fetchIfStale().awaitSucceeded()
-      runCurrent()
-      expectNoEvents()
-    }
-    assertThat(fetch.callCount).isEqualTo(0)
-  }
-
-  @Test
-  fun `a forced request that takes over an unforced fetch shows both`() = runTest {
-    val stale = Fetched(0, START - 2.hours)
-    val query = query(QueryStore.inMemory(stale))
-    fetch.hold()
-    query.state.test {
-      assertThat(awaitItem()).isEqualTo(QueryState(stale, Fetching(forced = false)))
-      // The collector's check starts its unforced fetch
-      runCurrent()
-      assertThat(fetch.callCount).isEqualTo(1)
-      query.refresh()
-      assertThat(awaitItem()).isEqualTo(QueryState(stale, Fetching(forced = true)))
-      fetch.release()
-      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(2, START), Idle))
-      expectNoEvents()
-    }
-  }
-
-  @Test
-  fun `equal values that the store emits again show once`() = runTest {
-    val emitted = MutableSharedFlow<Fetched<List<String>>?>(replay = 1)
-    emitted.tryEmit(Fetched(listOf("a"), START))
-    val store = sharedStore(emitted)
-    val query =
-      testDataScope(clock = testClock(START)).query(store, Freshness.staleAfter(1.hours)) {
-        listOf("fetched")
-      }
-
-    query.state.test {
-      assertThat(awaitItem()).isEqualTo(QueryState(Fetched(listOf("a"), START), Idle))
-      // A new list with the same contents and stamp, like a database reading the row again
-      emitted.emit(Fetched(listOf("a"), START))
-      runCurrent()
-      expectNoEvents()
-    }
-    query.data.test {
-      assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
-      emitted.emit(Fetched(listOf("a"), START))
-      runCurrent()
-      expectNoEvents()
-    }
-    query.stored.test {
-      assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
-      emitted.emit(Fetched(listOf("a"), START))
-      runCurrent()
-      expectNoEvents()
-    }
-  }
-
-  @Test
-  fun `a change over the same fetch time and a new flag both show`() = runTest {
-    val emitted = MutableSharedFlow<Fetched<List<String>>?>(replay = 1)
-    emitted.tryEmit(Fetched(listOf("a"), START))
-    val query =
-      testDataScope(clock = testClock(START)).query(
-        sharedStore(emitted),
-        Freshness.staleAfter(1.hours),
-      ) {
-        listOf("a")
-      }
-
-    query.data.test {
-      assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
-      // Like an optimistic change over a truth that did not change
-      emitted.emit(Fetched(listOf("a", "b"), START))
-      assertThat(awaitItem()).isEqualTo(Fetched(listOf("a", "b"), START))
-      emitted.emit(Fetched(listOf("a", "b"), START, invalidated = true))
-      assertThat(awaitItem()).isEqualTo(Fetched(listOf("a", "b"), START, invalidated = true))
-      cancelAndIgnoreRemainingEvents()
-    }
-  }
-
-  @Test
-  fun `collecting status starts no work and reads no store`() = runTest {
-    val store = RecordingQueryStore<Int>()
-    val query = query(store)
-
-    assertThat(query.status.first()).isEqualTo(Idle)
-    runCurrent()
-    assertThat(store.dataCollections).isEqualTo(0)
-    assertThat(fetch.callCount).isEqualTo(0)
-  }
-
-  @Test
-  fun `a keyed state shows a key's value with its status`() = runTest {
-    val keyedFetch = TestKeyedFetch<String, String> { key -> "$key!" }
-    val values =
-      testDataScope(clock = testClock(START))
-        .keyed(
-          store = QueryStore.inMemoryByKey<String, String>(),
-          freshness = Freshness.staleAfter(1.hours),
-          fetch = keyedFetch,
-        )
-    keyedFetch.hold()
-
-    values.state("a").test {
-      assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
-      keyedFetch.release()
-      assertThat(awaitItem()).isEqualTo(QueryState(Fetched("a!", START), Idle))
-    }
-    assertThat(values.data("a").first()).isEqualTo(Fetched("a!", START))
-  }
-
-  @Test
-  fun `map changes the value and keeps the stamp and status`() {
-    val state = QueryState(Fetched(2, START, invalidated = true), Fetching(forced = true))
-
-    assertThat(state.map { "$it" })
-      .isEqualTo(QueryState(Fetched("2", START, invalidated = true), Fetching(forced = true)))
-    assertThat(state.value).isEqualTo(2)
-    assertThat(state.fetchedAt).isEqualTo(START)
-    assertThat(QueryState<Int>(null, Idle).map { it + 1 }).isEqualTo(QueryState(null, Idle))
-  }
-
-  /** A store over [emitted], which a test can make emit an equal value again. */
-  private fun <T> sharedStore(emitted: MutableSharedFlow<Fetched<T>?>): QueryStore<T> =
-    QueryStore.of(
-      emitted,
-      clear = { keepsStored ->
-        val current = emitted.replayCache.lastOrNull()
-        if (current == null || !keepsStored(current.fetchedAt, current.invalidated)) {
-          emitted.emit(null)
-        }
-      },
-      write = { fetched, keepsStored ->
-        val current = emitted.replayCache.lastOrNull()
-        if (current == null || !keepsStored(current.fetchedAt, current.invalidated)) {
-          emitted.emit(fetched)
-        }
-      },
-    )
 
   private companion object {
     val START: Instant = Instant.parse("2026-06-10T12:00:00Z")

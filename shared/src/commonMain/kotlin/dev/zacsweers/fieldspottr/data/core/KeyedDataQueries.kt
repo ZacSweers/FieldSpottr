@@ -15,10 +15,17 @@ import kotlinx.coroutines.flow.map
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface KeyedDataQueries<K : Any, T> {
   /**
-   * [key]'s stored value with the fetch status that applies to it. Collecting this may fetch, as
-   * [DataQuery.state] describes. Use [storedState] to watch without starting any work.
+   * [key]'s stored value with the fetch status that applies to it, without checking freshness or
+   * fetching, as [DataQuery.state] describes. Collecting it keeps the key's query but starts no
+   * work.
    */
   fun state(key: K): Flow<QueryState<T>>
+
+  /**
+   * [key]'s stored value with the fetch status that applies to it. Collecting this may fetch, as
+   * [DataQuery.stateEager] describes. Use [state] to watch without starting any work.
+   */
+  fun stateEager(key: K): Flow<QueryState<T>>
 
   /**
    * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
@@ -36,13 +43,6 @@ interface KeyedDataQueries<K : Any, T> {
       distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
     }
   }
-
-  /**
-   * [key]'s stored value with the fetch status that applies to it, without checking freshness or
-   * fetching, as [DataQuery.storedState] describes. Collecting it keeps the key's query but starts
-   * no work.
-   */
-  fun storedState(key: K): Flow<QueryState<T>>
 
   /**
    * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
@@ -115,12 +115,12 @@ interface KeyedDataQueries<K : Any, T> {
 }
 
 /**
- * [key]'s values from [KeyedDataQueries.state] without the status. Collecting this may fetch, as
- * [DataQuery.state] describes, and it emits when the stored value, its fetch time or its flag
- * changes.
+ * [key]'s values from [KeyedDataQueries.stateEager] without the status. Collecting this may fetch,
+ * as [DataQuery.stateEager] describes, and it emits when the stored value, its fetch time or its
+ * flag changes.
  */
 fun <K : Any, T> KeyedDataQueries<K, T>.data(key: K): Flow<Fetched<T>?> =
-  state(key).map { it.fetched }.distinctUntilChanged(::sameFetched)
+  stateEager(key).map { it.fetched }.distinctUntilChanged(::sameFetched)
 
 /** [KeyedDataQueries.requestFetch] for [key] with `force = true`: fetches now. */
 fun <K : Any, T> KeyedDataQueries<K, T>.refresh(key: K): Operation = requestFetch(key, force = true)

@@ -541,7 +541,7 @@ class KeyedDataQueriesTest {
     advanceTimeBy(30.days)
     assertThat(values.failureShownBy("a")).isSameInstanceAs(failure)
     val states = mutableListOf<QueryState<String>>()
-    val collector = backgroundScope.launch { values.state("a").collect { states += it } }
+    val collector = backgroundScope.launch { values.stateEager("a").collect { states += it } }
     testScheduler.runCurrent()
     assertThat(states.last()).isEqualTo(QueryState(null, FetchStatus.Failed(failure)))
     collector.cancel()
@@ -557,7 +557,7 @@ class KeyedDataQueriesTest {
     assertThat(values.holdOffsHeld).isEqualTo(0)
     assertThat(values.keysHeld).isEqualTo(0)
     assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
-    assertThat(values.state("a").first())
+    assertThat(values.stateEager("a").first())
       .isEqualTo(QueryState(Fetched("a#2", START + 30.days), FetchStatus.Idle))
   }
 
@@ -638,7 +638,7 @@ class KeyedDataQueriesTest {
           },
         fetch = fetch,
       )
-    val collector = backgroundScope.launch { values.state("a").collect {} }
+    val collector = backgroundScope.launch { values.stateEager("a").collect {} }
     testScheduler.runCurrent()
     val first = (values.status("a").first() as FetchStatus.Failed).cause
 
@@ -689,14 +689,14 @@ class KeyedDataQueriesTest {
   }
 
   /**
-   * Collects [key]'s state from [values] until its first fetch fails, lets the key's query drop,
-   * and returns the failure.
+   * Collects [key]'s `stateEager` from [values] until its first fetch fails, lets the key's query
+   * drop, and returns the failure.
    */
   private suspend fun TestScope.failureOf(
     values: KeyedDataQueries<String, String>,
     key: String,
   ): Throwable {
-    val failed = values.state(key).first { it.status is FetchStatus.Failed }
+    val failed = values.stateEager(key).first { it.status is FetchStatus.Failed }
     testScheduler.runCurrent()
     return (failed.status as FetchStatus.Failed).cause
   }

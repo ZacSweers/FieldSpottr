@@ -54,7 +54,7 @@ interface DataScope {
    * moves that part to an I/O dispatcher with `withContext`.
    *
    * @param retry sets how long the fetches the query starts on its own hold off after failures, as
-   *   [DataQuery.state] describes. Null uses the factory's `fetchRetry` policy.
+   *   [DataQuery.stateEager] describes. Null uses the factory's `fetchRetry` policy.
    * @param onFailure hears every failure this query reports, failed fetches included. Null uses the
    *   factory's handlers.
    */
@@ -290,12 +290,12 @@ interface DataScope {
        * explains.
        *
        * Each outbox collects [online] for as long as its data scope lives. A query collects it only
-       * while its `state` has a collector, and checks again on each reconnect. Queries also read
-       * its value while nothing collects it, such as when one records whether a failed fetch ran
-       * offline. So its value must stay current with no collector, as a flow from `stateIn` with
-       * `SharingStarted.Eagerly` does. A flow shared with `SharingStarted.WhileSubscribed` keeps a
-       * stale value between subscribers, so a query can record a failure made offline as one made
-       * online and hold off after it.
+       * while its `stateEager` has a collector, and checks again on each reconnect. Queries also
+       * read its value while nothing collects it, such as when one records whether a failed fetch
+       * ran offline. So its value must stay current with no collector, as a flow from `stateIn`
+       * with `SharingStarted.Eagerly` does. A flow shared with `SharingStarted.WhileSubscribed`
+       * keeps a stale value between subscribers, so a query can record a failure made offline as
+       * one made online and hold off after it.
        *
        * [retry] decides for every sender built without a policy of its own whether a failed send
        * may succeed later, like after a timeout, and how long its row waits first. When the policy
@@ -303,10 +303,10 @@ interface DataScope {
        * next row on its key sends. The default retries every failure with no attempt limit.
        *
        * [fetchRetry] sets for every query built without a policy of its own how long the fetches it
-       * starts on its own hold off after failures, as [DataQuery.state] describes. When it declines
-       * a failure, the query fetches on its own again only after a requested fetch succeeds. The
-       * default waits 1 second after the first failure in a row, doubles the wait up to 1 minute,
-       * and never declines.
+       * starts on its own hold off after failures, as [DataQuery.stateEager] describes. When it
+       * declines a failure, the query fetches on its own again only after a requested fetch
+       * succeeds. The default waits 1 second after the first failure in a row, doubles the wait up
+       * to 1 minute, and never declines.
        */
       operator fun invoke(
         onFailure: (Throwable) -> Unit,
