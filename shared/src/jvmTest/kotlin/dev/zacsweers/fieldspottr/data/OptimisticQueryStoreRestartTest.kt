@@ -46,6 +46,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -353,6 +354,106 @@ class OptimisticQueryStoreRestartTest {
     }
   }
 
+  @Test
+  fun `a stop while the read of older owed rows waits keeps the sent row after a reopen`() =
+    runTest {
+      val rows = stores().open(Tags.name, Add.serializer())
+      val older = rows.insertNew("", Add("b"))
+      val newer = rows.insertNew("", Add("c"))
+      send.hold(Add("c"))
+      online.value = true
+      val gate = CompletableDeferred<Unit>()
+      val first = realTimeOwner()
+      try {
+        // No handle is attached, so the older row is stored owed, and the newer send waits
+        val data = process(FROZEN, OwedReadHooks(stores())).create(first, setOf(sender))
+        bounded("the newer send") { attempts.first { it == 2 } }
+        val read = CompletableDeferred<Unit>()
+        afterOwedRead.set { read.complete(Unit) }
+        data.tags()
+        // The hook runs on the owner's one thread, which marks the handle ready before it runs the
+        // released send
+        bounded("the handle's read of the owed rows") { read.await() }
+        val held = CompletableDeferred<Unit>()
+        nextOwedKeyRead.set {
+          held.complete(Unit)
+          gate.await()
+        }
+        send.release(Add("c"))
+        bounded("the held read") { held.await() }
+
+        // Saved before the read, one millisecond after the older row, so it commits second
+        val saved = checkNotNull(rows.entry(newer).first())
+        assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
+        assertThat(saved.committed).isFalse()
+        assertThat(saved.sentAt).isEqualTo(START + 1.milliseconds)
+        assertThat(checkNotNull(rows.entry(older).first()).sentAt).isEqualTo(START)
+        bounded("the owner to stop") { stop(first) }
+        assertThat(gate.isCompleted).isFalse()
+
+        nextOwedKeyRead.set(null)
+        temporaryDatabase.reopen()
+
+        val reopened = stores().open(Tags.name, Add.serializer())
+        val owed = reopened.owed().associateBy { it.id }
+        assertThat(owed.getValue(older).sentAt).isEqualTo(START)
+        assertThat(owed.getValue(newer).sentAt).isEqualTo(START + 1.milliseconds)
+        val after = process().create(owner(), setOf(sender)).tags()
+        bounded("the owed rows to commit") { reopened.entries().first { it.isEmpty() } }
+
+        // b commits before c, and neither row sent again
+        assertThat(truth.data.value?.value).isEqualTo(listOf("a", "b", "c"))
+        assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
+        assertThat(sentIds).containsExactly(older, newer)
+      } finally {
+        gate.complete(Unit)
+        send.release(Add("c"))
+        first.cancel()
+      }
+    }
+
+  @Test
+  fun `a send that returns after the owner stopped is stored and not sent again`() = runTest {
+    val rows = stores().open(Tags.name, Add.serializer())
+    val id = rows.insertNew("", Add("b"))
+    online.value = true
+    val gate = CompletableDeferred<Unit>()
+    // The owner's stop cannot cut the wait off, so the send returns after the stop
+    val gated = Tags.sender { _, sent ->
+      sentIds += sent
+      attempts.update { it + 1 }
+      withContext(NonCancellable) { gate.await() }
+    }
+    val first = realTimeOwner()
+    try {
+      process().create(first, setOf(gated))
+      bounded("the send") { attempts.first { it == 1 } }
+
+      first.cancel()
+      gate.complete(Unit)
+      bounded("the owner to stop") { first.coroutineContext.job.join() }
+
+      // No handle is attached, so the row is stored owed
+      val saved = checkNotNull(rows.entry(id).first())
+      assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(saved.committed).isFalse()
+
+      temporaryDatabase.reopen()
+
+      val reopened = stores().open(Tags.name, Add.serializer())
+      val after = process().create(owner(), setOf(gated)).tags()
+      bounded("the row to commit") { reopened.entries().first { it.isEmpty() } }
+
+      assertThat(sentIds).containsExactly(id)
+      assertThat(checkNotNull(reopened.entry(id).first()).committed).isTrue()
+      assertThat(truth.data.value?.value).isEqualTo(listOf("a", "b"))
+      assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b"))
+    } finally {
+      gate.complete(Unit)
+      first.cancel()
+    }
+  }
+
   /**
    * A flag server that rejects the first change that turns the flag on, so a retry sends it after a
    * newer change. It counts each row's accepted sends across processes.
@@ -479,11 +580,24 @@ class OptimisticQueryStoreRestartTest {
   // Runs once, before the next read of one key's owed rows, and is then cleared
   private val nextOwedKeyRead = AtomicReference<(suspend () -> Unit)?>(null)
 
-  /** [stores] whose reads of one key's owed rows run [nextOwedKeyRead] first. */
+  // Runs once, after the next read of every owed row returns and before its caller resumes, and is
+  // then cleared
+  private val afterOwedRead = AtomicReference<(() -> Unit)?>(null)
+
+  /**
+   * [stores] whose reads of one key's owed rows run [nextOwedKeyRead] first, and whose reads of
+   * every owed row run [afterOwedRead] last.
+   */
   private inner class OwedReadHooks(private val stores: OutboxStores) : OutboxStores by stores {
     override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
       val rows = stores.open(name, serializer)
       return object : OutboxStore<E> by rows {
+        override suspend fun owed(): List<OutboxEntry<E>> {
+          val owed = rows.owed()
+          afterOwedRead.getAndSet(null)?.invoke()
+          return owed
+        }
+
         override suspend fun owed(key: String): List<OutboxEntry<E>> {
           nextOwedKeyRead.getAndSet(null)?.invoke()
           return rows.owed(key)
@@ -513,6 +627,12 @@ class OptimisticQueryStoreRestartTest {
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+
+/** A clock that stands still at [START], so sends tie. */
+private val FROZEN =
+  object : Clock {
+    override fun now(): Instant = START
+  }
 
 private val Tags = OutboxKey<OptimisticQueryStoreRestartTest.Add>("tags")
 

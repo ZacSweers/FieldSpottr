@@ -58,6 +58,27 @@ class OutboxScaleTest {
   }
 
   @Test
+  fun `draining one key with a ready handle and no owed rows reads no owed rows`() = runTest {
+    val store = CountingOutboxStore(inMemoryOutboxStore<String>())
+    val send = TestSend<String>()
+    val rows = OutboxKey<String>("store")
+    val data =
+      testDataScope(online = false, senders = setOf(rows.sender(store = store, send = send)))
+    val outbox = data.outbox(rows)
+    val handles = List(ROWS) { outbox.enqueue("p$it", key = "k") }
+    handles.forEach { it.stored.awaitSucceeded() }
+    // The handle reads the owed rows, finds none, and is ready
+    testScheduler.runCurrent()
+
+    data.online.value = true
+    handles.forEach { it.awaitSucceeded() }
+
+    assertThat(send.sent.size).isEqualTo(ROWS)
+    assertThat(store.owedKeyReads.load()).isEqualTo(0)
+    data.assertNoFailures()
+  }
+
+  @Test
   fun `a row another writer discards deep in a backlog is read alone`() = runTest {
     val store = CountingOutboxStore(inMemoryOutboxStore<String>())
     val rows = OutboxKey<String>("store")

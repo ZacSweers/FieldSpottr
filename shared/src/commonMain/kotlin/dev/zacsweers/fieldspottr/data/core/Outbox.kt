@@ -171,7 +171,8 @@ class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throw
  * The write that marks a row Sent after its send can fail, like on a store error. The row then
  * stays Sending, the sender's handler hears the failure, and the drain sends the row again with the
  * same id after a pause that doubles up to 1 minute while the write keeps failing. So the server
- * must take the id as an idempotency key.
+ * must take the id as an idempotency key. Once a send has returned, that write still runs when the
+ * data scope's scope stops.
  *
  * A sent row that waits for its commit stays in the store, and an optimistic store's data keeps
  * showing its change until the commit lands. A failed row that waits for its revert stays too. Both

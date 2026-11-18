@@ -24,6 +24,7 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -31,12 +32,14 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
 /**
- * Reads of the rows a key owes its handle that throw or never return. A read that throws must not
- * leave a row sent without a send time after the key's owed rows, and a read that waits must not
- * keep the owner from stopping.
+ * Reads of the rows a key owes its handle that throw or never return, and an owner that stops
+ * around them. A read that throws must not leave a row sent without a send time after the key's
+ * owed rows, and a read that waits must not keep the owner from stopping. An owner's stop must not
+ * leave a row Sending once its send returned, or skip a revert once its row is marked reverted.
  */
 class OutboxOwedReadTest {
   @Serializable data class Flag(val on: Boolean)
@@ -229,15 +232,21 @@ class OutboxOwedReadTest {
   }
 
   @Test
-  fun `the owner can stop while the read before a live commit waits`() = runTest {
+  fun `a stop while the read of older owed rows waits keeps the sent row`() = runTest {
     val settling = CompletableDeferred<Unit>()
     val send = TestSend<String>()
+    val attempts = mutableListOf<EntryId>()
+    val sender =
+      Rows.sender(store = textRows) { payload, id ->
+        attempts += id
+        send(payload, id)
+      }
     try {
       val y1 = textRows.insertNew("k", "y1")
       val y2 = textRows.insertNew("k", "y2")
       send.hold("y2")
       // No handle is attached, so y1 is stored owed, and y2's send waits
-      val data = dataScope(Rows.sender(store = textRows, send = send))
+      val data = dataScope(sender)
       runCurrent()
       assertThat(textRows.row(y1).isOwed).isTrue()
       assertThat(textRows.row(y2).status).isEqualTo(OutboxStatus.Sending)
@@ -256,20 +265,279 @@ class OutboxOwedReadTest {
       send.release("y2")
       runCurrent()
       assertThat(entered.isCompleted).isTrue()
+      assertThat(send.sent).containsExactly("y1", "y2")
 
       ownerJob.cancel()
       runCurrent()
 
       assertThat(ownerJob.isCompleted).isTrue()
       assertThat(settling.isCompleted).isFalse()
-      assertThat(send.sent).containsExactly("y1", "y2")
-      assertThat(textRows.row(y2).status).isEqualTo(OutboxStatus.Sending)
+      // Saved before the read, one millisecond after the older row, so it commits second
+      val saved = textRows.row(y2)
+      assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(saved.committed).isFalse()
+      assertThat(saved.sentAt).isEqualTo(START + 1.milliseconds)
       assertThat(textRows.row(y1).isOwed).isTrue()
+
+      // The next owner sends neither row again and settles both
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+        .outbox(Rows)
+      runCurrent()
+
+      assertThat(attempts).containsExactly(y1, y2)
+      assertThat(textRows.owed("k")).isEmpty()
+      failures.assertNone()
     } finally {
       settling.complete(Unit)
       ownerJob.cancel()
     }
   }
+
+  @Test
+  fun `a send that returns after the owner stopped is saved with no handle`() = runTest {
+    val gate = CompletableDeferred<Unit>()
+    val attempts = mutableListOf<EntryId>()
+    val sender = gatedSender(gate, attempts)
+    try {
+      val id = textRows.insertNew("k", "a")
+      dataScope(sender)
+      runCurrent()
+      assertThat(attempts).containsExactly(id)
+
+      ownerJob.cancel()
+      runCurrent()
+      assertThat(ownerJob.isCompleted).isFalse()
+      gate.complete(Unit)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      val saved = textRows.row(id)
+      assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(saved.committed).isFalse()
+
+      // The next owner commits the row and does not send it again
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+        .outbox(Rows)
+      runCurrent()
+
+      assertThat(attempts).containsExactly(id)
+      assertThat(textRows.owed("k")).isEmpty()
+      failures.assertNone()
+    } finally {
+      gate.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a send that returns after the owner stopped is committed with a ready handle`() = runTest {
+    val gate = CompletableDeferred<Unit>()
+    val attempts = mutableListOf<EntryId>()
+    val sender = gatedSender(gate, attempts)
+    try {
+      val outbox = dataScope(sender).outbox(Rows)
+      // The handle reads the owed rows, so it is ready
+      runCurrent()
+      val handle = outbox.enqueue("a", key = "k")
+      runCurrent()
+      assertThat(attempts).containsExactly(handle.id)
+
+      ownerJob.cancel()
+      runCurrent()
+      assertThat(ownerJob.isCompleted).isFalse()
+      gate.complete(Unit)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      val saved = textRows.row(handle.id)
+      assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(saved.committed).isTrue()
+
+      // The next owner finds nothing to send
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+        .outbox(Rows)
+      runCurrent()
+
+      assertThat(attempts).containsExactly(handle.id)
+      assertThat(textRows.owed("k")).isEmpty()
+      failures.assertNone()
+    } finally {
+      gate.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stopped owner sends no further row`() = runTest {
+    val gate = CompletableDeferred<Unit>()
+    val attempts = mutableListOf<EntryId>()
+    val sender = gatedSender(gate, attempts)
+    try {
+      val first = textRows.insertNew("k", "a")
+      val second = textRows.insertNew("k", "b")
+      dataScope(sender)
+      runCurrent()
+      assertThat(attempts).containsExactly(first)
+
+      ownerJob.cancel()
+      gate.complete(Unit)
+      runCurrent()
+
+      // The first send returned after the stop, so its row is saved, and the drain ends there. The
+      // in-memory store never checks for cancellation, so the drain has to.
+      assertThat(ownerJob.isCompleted).isTrue()
+      assertThat(textRows.row(first).status).isEqualTo(OutboxStatus.Sent)
+      assertThat(attempts).containsExactly(first)
+      assertThat(textRows.row(second).status).isEqualTo(OutboxStatus.Queued)
+    } finally {
+      gate.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stopped owner settles no owed row`() = runTest {
+    val gate = CompletableDeferred<Unit>()
+    val attempts = mutableListOf<EntryId>()
+    val sender = gatedSender(gate, attempts)
+    try {
+      val id = textRows.insertNew("k", "a")
+      val data = dataScope(sender)
+      runCurrent()
+      // The handle attaches while the send waits, so the sent row is stored owed
+      val attached = CompletableDeferred<Unit>()
+      textRows.nextAllRead = { attached.await() }
+      data.outbox(Rows)
+      runCurrent()
+
+      ownerJob.cancel()
+      gate.complete(Unit)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      assertThat(attached.isCompleted).isFalse()
+      // Saved, and left for the next owner's handle to commit
+      assertThat(textRows.row(id).isOwed).isTrue()
+
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+        .outbox(Rows)
+      runCurrent()
+
+      assertThat(attempts).containsExactly(id)
+      assertThat(textRows.owed("k")).isEmpty()
+      failures.assertNone()
+    } finally {
+      gate.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stop while the write of a sent row waits keeps the row`() = runTest {
+    val writing = CompletableDeferred<Unit>()
+    val attempts = mutableListOf<EntryId>()
+    try {
+      val entered = CompletableDeferred<Unit>()
+      val sender =
+        Rows.sender(store = textRows) { _, id ->
+          attempts += id
+          // The next write is the one that records this send
+          textRows.nextUpdate = {
+            entered.complete(Unit)
+            writing.await()
+          }
+        }
+      val outbox = dataScope(sender).outbox(Rows)
+      // The handle reads the owed rows, so it is ready
+      runCurrent()
+      val handle = outbox.enqueue("a", key = "k")
+      runCurrent()
+      assertThat(entered.isCompleted).isTrue()
+      assertThat(textRows.row(handle.id).status).isEqualTo(OutboxStatus.Sending)
+
+      ownerJob.cancel()
+      runCurrent()
+      // The write has started on the row's key, so the stop waits for it
+      assertThat(ownerJob.isCompleted).isFalse()
+      writing.complete(Unit)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      val saved = textRows.row(handle.id)
+      assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(saved.committed).isTrue()
+
+      // The next owner finds nothing to send
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+        .outbox(Rows)
+      runCurrent()
+
+      assertThat(attempts).containsExactly(handle.id)
+      failures.assertNone()
+    } finally {
+      writing.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stop after an owed failed row is marked reverted still reverts it`() = runTest {
+    val reverting = CompletableDeferred<Unit>()
+    val reverted = mutableListOf<String>()
+    try {
+      val sender =
+        Rows.sender(store = textRows) { payload, _ -> throw PermanentFailure("Rejected $payload") }
+      val id = textRows.insertNew("k", "a")
+      // No handle is attached, so the failed row is stored owed
+      val data = dataScope(sender)
+      runCurrent()
+      assertThat(textRows.row(id).isOwed).isTrue()
+      assertThat(failures.take().map { it.message }).containsExactly("Rejected a")
+
+      val entered = CompletableDeferred<Unit>()
+      data.outbox(
+        Rows,
+        revert = { payload, _ ->
+          entered.complete(Unit)
+          reverting.await()
+          reverted += payload
+        },
+      )
+      runCurrent()
+      assertThat(entered.isCompleted).isTrue()
+      assertThat(textRows.row(id).reverted).isTrue()
+
+      ownerJob.cancel()
+      runCurrent()
+      // No later owner reverts a row marked reverted, so the stop waits for this revert
+      assertThat(ownerJob.isCompleted).isFalse()
+      reverting.complete(Unit)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      assertThat(reverted).containsExactly("a")
+      failures.assertNone()
+    } finally {
+      reverting.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  /**
+   * A sender over [textRows] that records each attempt in [attempts], then waits for [gate] where
+   * the owner's stop cannot cut the wait off, and then returns. So a send can return after its
+   * owner stopped.
+   */
+  private fun gatedSender(gate: CompletableDeferred<Unit>, attempts: MutableList<EntryId>) =
+    Rows.sender(store = textRows) { _, id ->
+      attempts += id
+      withContext(NonCancellable) { gate.await() }
+    }
 
   @Test
   fun `the owner can stop while the read after a failed row waits`() = runTest {
@@ -311,8 +579,9 @@ class OutboxOwedReadTest {
   }
 
   /**
-   * [rows] with a hook before each kind of owed read. A hook runs once, before the next such read,
-   * and a hook that throws fails that read. [failKeyReads] fails every read of one key.
+   * [rows] with a hook before each kind of owed read and before a row update. A hook runs once,
+   * before the next such call, and a hook that throws fails that call. [failKeyReads] fails every
+   * read of one key.
    */
   private class OwedReads<E>(private val rows: OutboxStore<E>) : OutboxStore<E> by rows {
     /** Runs before the next read of every owed row. */
@@ -323,6 +592,17 @@ class OutboxOwedReadTest {
 
     /** Whether every read of one key's owed rows throws, until it is cleared. */
     @Volatile var failKeyReads = false
+
+    /** Runs before the next write that updates a row. */
+    @Volatile var nextUpdate: (suspend () -> Unit)? = null
+
+    override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
+      nextUpdate?.let { hook ->
+        nextUpdate = null
+        hook()
+      }
+      return rows.update(entry, expected)
+    }
 
     override suspend fun owed(): List<OutboxEntry<E>> {
       nextAllRead?.let { hook ->
