@@ -390,9 +390,9 @@ private class RealDataScope(
    * every sender's rows and claims each name opened from the factory's store set, and only then
    * builds the engines, so a failure in the first part leaves nothing running. Opening comes before
    * the claim, so a store that fails to open leaves its name free, and opening again is harmless. A
-   * failure releases every claim made, and an engine that fails to build cancels the engines built
-   * before it, so the caller can create the scope again. A sender over a store of its own is
-   * checked only within this scope, since nothing else knows its store.
+   * failure cancels the engines built before it and releases every claim made once they have
+   * stopped, so the caller can create the scope again. A sender over a store of its own is checked
+   * only within this scope, since nothing else knows its store.
    */
   private fun engines(senders: Set<OutboxSender<*>>): Map<String, RealOutbox<*>> {
     if (senders.isEmpty()) {
@@ -420,8 +420,10 @@ private class RealDataScope(
         sender.key.name to newEngine(sender, store, engineScope)
       }
     } catch (t: Throwable) {
+      // An engine built before the failure may still run cleanup, so its name stays claimed until
+      // the engines have stopped
+      engineJob.invokeOnCompletion { releases.forEach { it() } }
       engineJob.cancel()
-      releases.forEach { it() }
       throw t
     }
   }

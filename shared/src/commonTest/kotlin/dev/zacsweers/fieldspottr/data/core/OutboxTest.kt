@@ -40,6 +40,7 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -49,10 +50,13 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.job
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
 
@@ -836,6 +840,51 @@ class OutboxTest {
   }
 
   @Test
+  fun `a name stays claimed until an engine stopped by a failed build has finished`() = runTest {
+    val rows = InMemoryOutboxStores()
+    val reading = CompletableDeferred<Unit>()
+    val cleanup = CompletableDeferred<Unit>()
+    val stores =
+      object : OutboxStores {
+        override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+          val opened = rows.open(name, serializer)
+          return object : OutboxStore<E> by opened {
+            override fun entries(): Flow<List<OutboxEntry<E>>> {
+              check(name != Broken.name) { "Rows did not open" }
+              // The first read of the rows ignores cancellation until the test lets it finish
+              return flow {
+                reading.complete(Unit)
+                withContext(NonCancellable) { cleanup.await() }
+                emitAll(opened.entries())
+              }
+            }
+          }
+        }
+
+        override suspend fun clearAll() = rows.clearAll()
+      }
+    val factory = DataScope.Factory(onFailure = {}, stores = stores)
+    val eager = backgroundScope + UnconfinedTestDispatcher(testScheduler)
+
+    assertFailsWith<IllegalStateException> {
+      factory.create(eager, setOf(Notes.sender(send = send), Broken.sender(send = send)))
+    }
+    assertThat(reading.isCompleted).isTrue()
+    assertFailsWith<IllegalStateException> {
+      factory.create(backgroundScope, setOf(Notes.sender(send = send)))
+    }
+    cleanup.complete(Unit)
+    runCurrent()
+
+    factory
+      .create(backgroundScope, setOf(Notes.sender(send = send)))
+      .outbox(Notes)
+      .enqueue("a")
+      .awaitSucceeded()
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
   fun `two senders with one name in one data scope throw`() = runTest {
     val other = TestSend<String>()
 
@@ -1462,6 +1511,7 @@ class OutboxTest {
     val START = Instant.parse("2026-06-10T12:00:00Z")
     val Changes = OutboxKey<String>("changes")
     val Notes = OutboxKey<String>("notes")
+    val Broken = OutboxKey<String>("broken")
     /** The outbox of tests that keep its rows in a store of their own. */
     val Rows = OutboxKey<String>("rows")
   }
