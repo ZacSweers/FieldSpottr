@@ -430,26 +430,6 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `a key's hold-off outlives its query`() = runTest {
-    failing += "a"
-    val values = values()
-
-    values.data("a").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("a")).isEqualTo(1)
-    assertThat(values.keysHeld).isEqualTo(0)
-    // A new query for the key, inside the window the failure opened
-    values.data("a").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("a")).isEqualTo(1)
-
-    advanceTimeBy(1.seconds)
-    values.data("a").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("a")).isEqualTo(2)
-  }
-
-  @Test
   fun `a hold-off record goes once its window ended more than the longest wait ago`() = runTest {
     failing += "a"
     val values = values()
@@ -521,27 +501,6 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `a key's declined record outlives its query`() = runTest {
-    failing += "a"
-    val values = decliningValues()
-
-    values.data("a").first()
-    testScheduler.runCurrent()
-    assertThat(values.keysHeld).isEqualTo(0)
-    advanceTimeBy(30.days)
-    // A new query for the key still holds off
-    values.data("a").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("a")).isEqualTo(1)
-    assertThat(values.holdOffsHeld).isEqualTo(1)
-
-    // A requested fetch that succeeds clears the record
-    failing -= "a"
-    assertThat(values.requestFetch("a", force = true).await()).isEqualTo(OperationState.Succeeded)
-    assertThat(values.holdOffsHeld).isEqualTo(0)
-  }
-
-  @Test
   fun `a keyed set drops the oldest declined record past its cap`() = runTest {
     val keys = List(MAX_DECLINED_HOLD_OFFS + 1) { "k$it" }
     failing += keys
@@ -571,13 +530,14 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `a key's declined failure shows after its query is rebuilt and nothing fetches`() = runTest {
+  fun `a key's declined failure outlives its query until a requested fetch succeeds`() = runTest {
     failing += "a"
     val values = decliningValues()
     val failure = failureOf(values, "a")
     assertThat(values.keysHeld).isEqualTo(0)
 
-    // A new query for the key shows the failure that holds it off, so a retry button can show
+    // A new query for the key still holds off and shows the failure that holds it off, so a retry
+    // button can show
     advanceTimeBy(30.days)
     assertThat(values.failureShownBy("a")).isSameInstanceAs(failure)
     val states = mutableListOf<QueryState<String>>()
@@ -587,7 +547,18 @@ class KeyedDataQueriesTest {
     collector.cancel()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(1)
+    assertThat(values.holdOffsHeld).isEqualTo(1)
     assertThat(data.fetchFailures.take()).containsExactly(failure)
+
+    // A requested fetch that succeeds clears the record, so a rebuilt key shows no failure
+    failing -= "a"
+    assertThat(values.requestFetch("a", force = true).await()).isEqualTo(OperationState.Succeeded)
+    testScheduler.runCurrent()
+    assertThat(values.holdOffsHeld).isEqualTo(0)
+    assertThat(values.keysHeld).isEqualTo(0)
+    assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
+    assertThat(values.state("a").first())
+      .isEqualTo(QueryState(Fetched("a#2", START + 30.days), FetchStatus.Idle))
   }
 
   @Test
@@ -596,6 +567,7 @@ class KeyedDataQueriesTest {
       failing += "a"
       val values = values()
       val failure = failureOf(values, "a")
+      assertThat(values.keysHeld).isEqualTo(0)
 
       // Inside the 1 second window the failure opened
       advanceTimeBy(500.milliseconds)
@@ -630,22 +602,6 @@ class KeyedDataQueriesTest {
       testScheduler.runCurrent()
       assertThat(fetch.callCount("a")).isEqualTo(2)
     }
-
-  @Test
-  fun `a success clears the failure a rebuilt key shows`() = runTest {
-    failing += "a"
-    val values = decliningValues()
-    failureOf(values, "a")
-
-    failing -= "a"
-    values.refresh("a").awaitSucceeded()
-    testScheduler.runCurrent()
-    assertThat(values.keysHeld).isEqualTo(0)
-
-    assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
-    assertThat(values.state("a").first())
-      .isEqualTo(QueryState(Fetched("a#2", START), FetchStatus.Idle))
-  }
 
   @Test
   fun `a key's failure made offline shows after a rebuild only while still offline`() = runTest {
