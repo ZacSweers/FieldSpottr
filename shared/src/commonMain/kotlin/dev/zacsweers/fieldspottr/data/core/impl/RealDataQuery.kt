@@ -250,8 +250,10 @@ internal class RealDataQuery<T>(
     }
 
     /**
-     * Shows the first value at once. A collector that fetches first runs the check for it and
-     * starts the watcher.
+     * Shows the first value at once, unless a write settled while the first read ran. That write
+     * may be missing from the value, so the collector first lines up with its record, as [settle]
+     * does for later values. Without a record read back, nothing shows until a new read delivers
+     * its first value. A collector that fetches first runs the check for it and starts the watcher.
      */
     private suspend fun first(value: Fetched<T>?, out: FlowCollector<QueryState<T>>) {
       started = true
@@ -276,11 +278,13 @@ internal class RealDataQuery<T>(
       if (current.isWriteOf(value)) {
         wroteEarly = true
       }
-      show(value, current, out)
-      // A write that settled while the first read ran may be missing from it
+      // A write that settled while the first read ran may be missing from it, so the record comes
+      // before anything shows
       val wrote = current.wrote
       if (wrote != null && wrote !== handled) {
         settle(wrote, current, out)
+      } else {
+        show(value, current, out)
       }
     }
 
