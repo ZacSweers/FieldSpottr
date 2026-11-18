@@ -221,7 +221,8 @@ interface DataScope {
    *
    * [keySerializer] encodes each key, and each key's encoded form orders its rows. Keys that are
    * equal must encode to the same form, so they share one order. [apply] and [onFailure] work as in
-   * [optimisticStore].
+   * [optimisticStore]. So an acknowledged change must give the same value when [apply] runs it
+   * twice, like setting a star, or adding an item only when its id is absent.
    */
   fun <K : Any, T, M> optimisticStores(
     key: OutboxKey<KeyedMutation<K, M>, T>,
