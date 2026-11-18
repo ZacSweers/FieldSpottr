@@ -518,6 +518,38 @@ class OutboxTest {
   }
 
   @Test
+  fun `a handle whose insert returns after its row failed and was retried keeps the failure`() =
+    runTest {
+      send.failPermanently()
+      val rows = inMemoryOutboxStore<String>()
+      val finishInsert = CompletableDeferred<Unit>()
+      // Shows the row before the insert returns, like a database that notifies inside its
+      // transaction
+      val slowInsert =
+        object : OutboxStore<String> by rows {
+          override suspend fun insert(id: EntryId, key: String, payload: String) {
+            rows.insert(id, key, payload)
+            finishInsert.await()
+          }
+        }
+      val outbox = dataOver(slowInsert).outbox(Rows, revert = send::revert)
+      val original = outbox.enqueue("a")
+      runCurrent()
+      // The watcher saw the row and its first send failed
+      assertThat(send.attempts("a")).isEqualTo(1)
+
+      send.succeed()
+      val retried = outbox.retry(rows.entries().first().single().id)
+      runCurrent()
+      finishInsert.complete(Unit)
+      runCurrent()
+
+      original.assertFailed<PermanentFailure>()
+      retried.assertSucceeded()
+      assertThat(send.sent).containsExactly("a")
+    }
+
+  @Test
   fun `a retry whose requeue throws fails with that exception`() = runTest {
     send.failTransiently()
     val rows = inMemoryOutboxStore<String>()

@@ -213,6 +213,9 @@ internal class RealOutbox<E>(
   // them and a recheck finds them. Updated by compare-and-set only, and nothing observes it, so it
   // needs no StateFlow.
   private val follows = AtomicReference(Follows())
+  // Rows whose insert has not returned yet, which their handles already follow. A recheck skips
+  // them, since a read before the insert finds no row. Updated by compare-and-set only.
+  private val insertingRows = AtomicReference(persistentHashSetOf<EntryId>())
   // Set once the scope stops. A handle that starts following after that settles Cancelled itself.
   private val stopped = AtomicBoolean(false)
   // Bounds the handles' row reads in flight, as readRow describes
@@ -396,6 +399,10 @@ internal class RealOutbox<E>(
   /**
    * Runs the handle's apply for [payload], then inserts it as row [id], in one command. The id
    * comes first, so the handle knows it before the row exists.
+   *
+   * The handle follows the row before the insert. A store can show the row before its insert
+   * returns, and a drain can send it and settle its attempt then. The handle hears that first
+   * attempt, so a retry that follows never reaches it.
    */
   fun enqueue(id: EntryId, payload: E, key: String?): OutboxOperation {
     val owner = checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner
@@ -405,7 +412,12 @@ internal class RealOutbox<E>(
       // Once the change is applied, the row goes in or the change is undone, even if the owner
       // stops meanwhile. A store that throws stored nothing, so no send or revert would reach it.
       withContext(NonCancellable) {
-        rollbackOnFailure({ owner.revert(payload, id) }) { store.insert(id, rowKey, payload) }
+        attempt.inserting(id)
+        val undo: suspend () -> Unit = {
+          attempt.notInserted(id)
+          owner.revert(payload, id)
+        }
+        rollbackOnFailure(undo) { store.insert(id, rowKey, payload) }
         attempt.started(id)
       }
       // Without waiting for the watcher, which may be pausing after a store failure
@@ -1060,8 +1072,27 @@ internal class RealOutbox<E>(
     // Whether the row is in the store, for the handle's stored milestone
     val stored = MutableStateFlow<OperationState>(OperationState.Queued)
 
-    /** Follows [row] before anything can settle the attempt, then records it. */
+    /**
+     * Follows [row] before its insert, since a drain can settle the attempt before the insert
+     * returns. A recheck skips the row until the insert ends, as [recheckOnce] describes.
+     */
+    fun inserting(row: EntryId) {
+      insertingRows.update { it.adding(row) }
+      follow(row, state)
+    }
+
+    /** Stops following [row], whose insert stored nothing. */
+    fun notInserted(row: EntryId) {
+      unfollow(row, state)
+      insertingRows.update { it.removing(row) }
+    }
+
+    /**
+     * Follows [row] before anything can settle the attempt, then records it. A second follow of the
+     * same handle changes nothing.
+     */
     fun started(row: EntryId) {
+      insertingRows.update { it.removing(row) }
       follow(row, state)
       this.row = row
       id.complete(row)
@@ -1189,9 +1220,12 @@ internal class RealOutbox<E>(
    * A read that throws settles nothing. It is reported, and the row is rechecked after a pause that
    * doubles while reads keep failing, so its handles settle once reads work even when no other
    * write comes.
+   *
+   * A row whose insert has not returned is skipped. A read then could find no row and settle its
+   * handle Cancelled. The handle reads the row once the insert returns.
    */
   private suspend fun recheckOnce(id: EntryId) {
-    if (id !in follows.load().byRow) {
+    if (id !in follows.load().byRow || id in insertingRows.load()) {
       return
     }
     val state = readState(id)
