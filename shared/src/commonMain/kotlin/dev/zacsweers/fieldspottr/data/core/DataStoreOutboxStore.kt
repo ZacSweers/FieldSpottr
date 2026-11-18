@@ -117,7 +117,9 @@ fun outboxDataStore(
  * One DataStore file per outbox under [directory]. Suits an outbox of a few dozen rows that rewrite
  * as a whole. [scope] needs a dispatcher that suits blocking I/O, as with [outboxDataStore]. A name
  * becomes one file name in [directory], with any character but letters, digits, `-`, `_` and `.`
- * written as `%XX`, so no name reaches outside it.
+ * written as `%XX`, so no name reaches outside it. Names that differ only in case would share one
+ * file on a file system that ignores case, like on iOS and macOS, so [open] throws
+ * [IllegalArgumentException] for the second such name.
  *
  * DataStore allows one active instance per file, so build one set per directory. Each name gets one
  * store for as long as this set lives, and an outbox built again for that name gets the same store.
@@ -152,6 +154,12 @@ class DataStoreOutboxStores(
       current[name]?.let {
         @Suppress("UNCHECKED_CAST")
         return it.checked(name, serializer).value as OutboxStore<E>
+      }
+      val clash =
+        current.keys.firstOrNull { fileName(it).equals(fileName(name), ignoreCase = true) }
+      require(clash == null) {
+        "Outbox $name differs from outbox $clash only in case, so both would use one file on a " +
+          "file system that ignores case, like on iOS and macOS"
       }
       val store = lazy {
         DataStoreOutboxStore(

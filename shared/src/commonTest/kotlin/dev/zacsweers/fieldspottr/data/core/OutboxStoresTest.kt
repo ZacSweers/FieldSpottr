@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.containsExactly
 import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.isEmpty
@@ -213,6 +214,21 @@ class OutboxStoresTest {
     assertFailsWith<IOException> { stores.clearAll() }
 
     assertThat(fileSystem.read(directory) { readUtf8() }).isEqualTo("not a directory")
+  }
+
+  @Test
+  fun `DataStore stores reject a second name that differs only in case`() = runTest {
+    val fileSystem = FakeFileSystem()
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+    stores.open("Upload", String.serializer())
+
+    val failure =
+      assertFailsWith<IllegalArgumentException> { stores.open("upload", String.serializer()) }
+
+    assertThat(failure.message.orEmpty()).contains("Upload")
+    assertThat(failure.message.orEmpty()).contains("upload")
   }
 
   /**
