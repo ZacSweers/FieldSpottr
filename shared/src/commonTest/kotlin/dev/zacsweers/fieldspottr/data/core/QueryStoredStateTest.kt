@@ -10,6 +10,8 @@ import dev.zacsweers.fieldspottr.data.core.FetchStatus.Failed
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Fetching
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Idle
 import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
+import dev.zacsweers.fieldspottr.data.core.testing.HeldStoreReadQueryStore
+import dev.zacsweers.fieldspottr.data.core.testing.HeldStoreReadQueryStore.HeldRead
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
@@ -25,7 +27,6 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -91,37 +92,6 @@ class QueryStoredStateTest {
     }
 
   @Test
-  fun `stored and status combined by hand show the old value idle after a refresh`() = runTest {
-    // The order a reader gets without storedState, over the same store as the test above
-    val store = LaggingQueryStore<Int>(lag = 1.seconds)
-    store.delegate.update { Fetched(0, START) }
-    val query = query(store)
-    val seen = mutableListOf<QueryState<Int>>()
-    backgroundScope.launch {
-      combine(query.stored, query.status) { fetched, status -> QueryState(fetched, status) }
-        .collect { seen += it }
-    }
-    runCurrent()
-    advanceTimeBy(1.minutes)
-
-    fetch.hold()
-    val refresh = query.refresh()
-    runCurrent()
-    fetch.release()
-    refresh.awaitSucceeded()
-    advanceTimeBy(5.seconds)
-
-    assertThat(seen)
-      .containsExactly(
-        QueryState(Fetched(0, START), Idle),
-        QueryState(Fetched(0, START), Fetching(forced = true)),
-        // The status reached this reader before the store's value did
-        QueryState(Fetched(0, START), Idle),
-        QueryState(Fetched(1, START + 1.minutes), Idle),
-      )
-  }
-
-  @Test
   fun `every collector of storedState over a store that lags shows the refresh in order`() =
     runTest {
       val store = LaggingQueryStore<Int>(lag = 1.seconds)
@@ -150,6 +120,43 @@ class QueryStoredStateTest {
           )
       }
     }
+
+  @Test
+  fun `storedState over a store that lags shows nothing new while its new read waits`() = runTest {
+    val lagging = LaggingQueryStore<Int>(lag = 1.seconds)
+    lagging.delegate.update { Fetched(0, START) }
+    val store = HeldStoreReadQueryStore(lagging)
+    val query = query(store)
+    val seen = mutableListOf<QueryState<Int>>()
+    backgroundScope.launch { query.storedState.collect { seen += it } }
+    runCurrent()
+    advanceTimeBy(1.minutes)
+
+    // The read that starts after the refresh waits, while the old read still delivers the write
+    store.holdNextRead(HeldRead.BeforeSubscribe)
+    fetch.hold()
+    val refresh = query.refresh()
+    runCurrent()
+    fetch.release()
+    refresh.awaitSucceeded()
+    advanceTimeBy(5.seconds)
+
+    assertThat(store.reads).isEqualTo(2)
+    assertThat(seen)
+      .containsExactly(
+        QueryState(Fetched(0, START), Idle),
+        QueryState(Fetched(0, START), Fetching(forced = true)),
+      )
+
+    store.release()
+    advanceTimeBy(5.seconds)
+    assertThat(seen)
+      .containsExactly(
+        QueryState(Fetched(0, START), Idle),
+        QueryState(Fetched(0, START), Fetching(forced = true)),
+        QueryState(Fetched(1, START + 1.minutes), Idle),
+      )
+  }
 
   @Test
   fun `storedState shows a failed refresh with the value it keeps`() = runTest {

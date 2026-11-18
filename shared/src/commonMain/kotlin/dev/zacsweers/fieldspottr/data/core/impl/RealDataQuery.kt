@@ -31,7 +31,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -45,10 +44,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
@@ -64,7 +63,7 @@ import kotlinx.coroutines.selects.select
  * alive, such as the per-key entry inside a keyed query, for as long as the watcher or a request
  * still needs it.
  */
-@OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class, ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalAtomicApi::class, DelicateDataLayerApi::class)
 internal class RealDataQuery<T>(
   private val store: QueryStore<T>,
   private val fetch: suspend () -> T,
@@ -198,7 +197,7 @@ internal class RealDataQuery<T>(
     suspend fun observe(out: FlowCollector<QueryState<T>>) {
       try {
         merge(
-            reads.flatMapLatest { read -> store.data.map { StateEvent.Value(it, read) } },
+            storeReads(),
             progress.map { StateEvent.Progressed },
             speculation.filterNotNull().take(1).map { check ->
               check.state.first { it is OperationState.Terminal }
@@ -220,6 +219,37 @@ internal class RealDataQuery<T>(
       } finally {
         if (counted) {
           stopWatching()
+        }
+      }
+    }
+
+    /**
+     * The store's values, from one collection of the store per number in [reads]. A new number
+     * starts a new collection, and the one before it keeps running until the new one delivers its
+     * first value. So a store that counts its collectors, like one from [QueryStore.inMemoryByKey],
+     * counts this collector through the whole handoff and never drops its key in between. Each
+     * value carries its read's number, and [onValue] drops the values of a read that was replaced.
+     *
+     * A collection ends once a newer one has delivered a value, or once it ends itself. Either way
+     * it then cancels the one before it, so no older collection outlives a newer one.
+     */
+    private fun storeReads(): Flow<StateEvent.Value<T>> = channelFlow {
+      var previous: Job? = null
+      reads.collect { read ->
+        val before = previous
+        previous = launch {
+          try {
+            var first = true
+            store.data.collect { value ->
+              send(StateEvent.Value(value, read))
+              if (first) {
+                first = false
+                before?.cancel()
+              }
+            }
+          } finally {
+            before?.cancel()
+          }
         }
       }
     }

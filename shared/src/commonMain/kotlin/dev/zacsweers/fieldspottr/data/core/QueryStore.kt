@@ -331,6 +331,11 @@ class InMemoryQueryStores<K : Any, T> internal constructor(private val maxEntrie
   internal val size: Int
     get() = stored.value.values.size
 
+  /**
+   * Whether anything collects [key]'s store now, which keeps the cap from dropping it. For tests.
+   */
+  internal fun isCollected(key: K): Boolean = key in stored.value.collected
+
   /** One key's store, a view of that key in [stored]. */
   private inner class KeyStore(private val key: K) : InMemoryQueryStore<T>() {
     override val data: StateFlow<Fetched<T>?> = KeyState(key)
