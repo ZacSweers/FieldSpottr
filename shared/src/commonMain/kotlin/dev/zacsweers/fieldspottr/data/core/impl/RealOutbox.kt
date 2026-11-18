@@ -546,8 +546,22 @@ internal class RealOutbox<E>(
     settledOwed(key)
   }
 
-  /** Sends [key]'s head until none is left, the key backs off or the network drops. */
+  /**
+   * Sends [key]'s head until none is left, the key backs off or the network drops.
+   *
+   * [inSendOrder] commits owed rows by send time, so a row that will be owed records a time later
+   * than every owed Sent row on [key]. Two sends can read the same time, and the clock can be set
+   * back between them. A call reads the latest of those times at most once, before a send, and only
+   * when [mayHoldOwed] says the key may hold such a row. Only this lane writes owed Sent rows on
+   * [key], so after the read the call keeps the time current itself.
+   *
+   * The read comes before the timer check and the claim. If it throws, or the owner stops while it
+   * runs, the key's timer stays and the row is not sent, so no row is sent and then stored without
+   * that time.
+   */
   private suspend fun sendHeads(key: String) {
+    var latestOwed: Instant? = null
+    var readOwed = false
     while (online.value) {
       val head = store.head(key)
       if (head == null) {
@@ -559,7 +573,12 @@ internal class RealOutbox<E>(
         }
         break
       }
-      // The read suspends, so the network may have dropped meanwhile
+      // Before the timer check and the claim, so a read that throws leaves both as they were
+      if (!readOwed && mayHoldOwed(key)) {
+        latestOwed = latestOwedSend(key)
+        readOwed = true
+      }
+      // The reads suspend, so the network may have dropped meanwhile
       if (!online.value) {
         break
       }
@@ -607,8 +626,12 @@ internal class RealOutbox<E>(
       val attempts = head.attempts + 1
       if (failure == null) {
         val sentAt = clock.now()
-        // The server has the change, so the row records it even if the owner stops now
-        withContext(NonCancellable) { delivered(head, result.getOrThrow(), sentAt) }
+        // One millisecond is the precision the stores keep
+        val owedAt = latestOwed?.let { maxOf(sentAt, it + 1.milliseconds) } ?: sentAt
+        delivered(head, result.getOrThrow(), sentAt, owedAt)
+        // An upper bound from here on. A row committed at once is not owed, and a later time on the
+        // next owed row does no harm.
+        latestOwed = owedAt
         continue
       }
       // A PermanentFailure fails the row whatever the policy says
@@ -641,30 +664,55 @@ internal class RealOutbox<E>(
 
   /**
    * Records that [head] sent at [sentAt] with the server's answer [delivery]. It runs once per
-   * send, NonCancellable, since the server already has the change.
+   * send.
    *
    * With a handle that is ready and no older row on the key still owed, the handle commits the row
-   * first, and then one write marks it Sent and committed, with no answer kept. A crash between the
-   * two leaves the row Sending, so it sends again, which the idempotency key makes safe.
+   * first, and then one write marks it Sent and committed, with no answer kept. The server already
+   * has the change, so the commit is not cut off when the owner stops. A crash or an owner's stop
+   * between the two leaves the row Sending, so it sends again, which the idempotency key makes
+   * safe.
    *
-   * Otherwise the row is written Sent and not committed, with the answer encoded on it, and it is
-   * owed to the handle. So is a row whose live commit threw, and then the commit runs again after a
-   * pause, as [settleLater] describes. An answer that fails to encode is reported to the sender's
-   * handler once, and the row keeps [UNKNOWN_REPLY] in place of the answer. It is owed like any
-   * other row, and its commit runs with the answer unknown.
+   * Otherwise the row is written Sent and not committed, with the answer encoded on it and [owedAt]
+   * as its send time, as [sendHeads] describes, and it is owed to the handle. So is a row whose
+   * live commit threw, and then the commit runs again after a pause, as [settleLater] describes. An
+   * answer that fails to encode is reported to the sender's handler once, and the row keeps
+   * [UNKNOWN_REPLY] in place of the answer. It is owed like any other row, and its commit runs with
+   * the answer unknown.
+   *
+   * The reads of the key's owed rows, before the commit and after the write, stop when the owner
+   * stops. So does the write of an owed row, which may or may not land. A row left Sending sends
+   * again, and a row stored owed settles once a handle next reads the owed rows.
    */
-  private suspend fun delivered(head: OutboxEntry<E>, delivery: Delivery<*>, sentAt: Instant) {
+  private suspend fun delivered(
+    head: OutboxEntry<E>,
+    delivery: Delivery<*>,
+    sentAt: Instant,
+    owedAt: Instant,
+  ) {
     val handle = attached.load()
     var retry = false
     if (handle != null && handle.ready && settledOwed(head.key)) {
-      if (commit(handle, head, delivery, sentAt, expected = OutboxStatus.Sending)) {
-        // Written or lost to a clear, no commit for the row runs again. A write that throws leaves
-        // the row Sending, so it sends and commits again, and the handle keeps what it knows.
-        writeSent(
-          head,
-          head.copy(status = OutboxStatus.Sent, committed = true, sentAt = sentAt, reply = null),
-        )
-        handle.owner.committed(head.id)
+      val committed =
+        withContext(NonCancellable) {
+          val committed = commit(handle, head, delivery, sentAt, expected = OutboxStatus.Sending)
+          if (committed) {
+            // Written or lost to a clear, no commit for the row runs again. A write that throws
+            // leaves the row Sending, so it sends and commits again, and the handle keeps what it
+            // knows.
+            writeSent(
+              head,
+              head.copy(
+                status = OutboxStatus.Sent,
+                committed = true,
+                sentAt = sentAt,
+                reply = null,
+              ),
+            )
+            handle.owner.committed(head.id)
+          }
+          committed
+        }
+      if (committed) {
         return
       }
       retry = true
@@ -677,7 +725,7 @@ internal class RealOutbox<E>(
         head.copy(
           status = OutboxStatus.Sent,
           committed = false,
-          sentAt = afterOwed(head.key, sentAt),
+          sentAt = owedAt,
           reply = encoded.getOrElse { UNKNOWN_REPLY },
         ),
       )
@@ -736,25 +784,15 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * The send time to record on a row that will be owed on [key]: [sentAt], or one millisecond after
-   * the latest send time among [key]'s owed Sent rows when [sentAt] is not later than that.
-   *
-   * [inSendOrder] commits owed rows by send time, and this row sent after every one of them. Two
-   * sends can read the same time, and the clock can be set back between them. One millisecond is
-   * the precision the stores keep.
-   *
-   * A read that throws is reported to the sender's handler, and the row keeps [sentAt].
+   * Whether [key] may hold a row owed to the handle. It cannot once a ready handle has read the
+   * owed rows and [key] is not marked, which is also when [settledOwed] reads nothing.
    */
-  private suspend fun afterOwed(key: String, sentAt: Instant): Instant {
-    val latest =
-      runCatchingCancellable { store.owed(key) }
-        .onFailure(onFailure)
-        .getOrDefault(emptyList())
-        .filter { it.status == OutboxStatus.Sent }
-        .mapNotNull { it.sentAt }
-        .maxOrNull() ?: return sentAt
-    return maxOf(sentAt, latest + 1.milliseconds)
-  }
+  private fun mayHoldOwed(key: String): Boolean =
+    attached.load()?.ready != true || key in owedKeys.load()
+
+  /** The latest send time among [key]'s owed Sent rows, or null when it holds none. */
+  private suspend fun latestOwedSend(key: String): Instant? =
+    store.owed(key).filter { it.status == OutboxStatus.Sent }.mapNotNull { it.sentAt }.maxOrNull()
 
   /**
    * Writes [sent] over the Sending [head] on the row's key and settles the handles that follow it.
@@ -946,8 +984,8 @@ internal class RealOutbox<E>(
     val reverting = handle != null && handle.ready && settledOwed(head.key)
     // The row marked reverted promises an undo attempt, so the write and that attempt finish
     // together even if the owner stops meanwhile. A retry of the row waits for both.
-    withContext(NonCancellable) {
-      val failed =
+    val failed =
+      withContext(NonCancellable) {
         onRow(head.id) {
           withContext(NonCancellable) {
             // Before the write, so a handle that reads the Failed row before it settles gets this
@@ -974,9 +1012,10 @@ internal class RealOutbox<E>(
             failed
           }
         }
-      if (failed && !reverting && !head.reverted) {
-        owe(head.key)
       }
+    // After the write, so the read of the key's owed rows stops when the owner stops
+    if (failed && !reverting && !head.reverted) {
+      owe(head.key)
     }
   }
 
