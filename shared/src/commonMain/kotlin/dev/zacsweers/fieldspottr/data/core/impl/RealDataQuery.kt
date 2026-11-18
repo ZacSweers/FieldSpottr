@@ -34,6 +34,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -54,6 +55,8 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.SelectClause0
+import kotlinx.coroutines.selects.select
 
 /**
  * [DataQuery] over a runner of its own, which orders its checks, fetches and writes on one key. Its
@@ -653,7 +656,7 @@ internal class RealDataQuery<T>(
   private suspend fun runCheck(check: Check) = settlingStatus {
     val fetches =
       try {
-        check.isReplaced || needsFetch(check.kind)
+        check.isReplaced || needsFetchUnlessReplaced(check)
       } catch (t: Throwable) {
         // A check taken over while it read still owes its forced fetch, unless it was stopped
         if (check.commit()) {
@@ -666,6 +669,23 @@ internal class RealDataQuery<T>(
       check.isReplaced -> fetchOnce(forced = true)
       fetches -> fetchReplaceable(check)
       !check.commit() -> fetchOnce(forced = true)
+    }
+  }
+
+  /**
+   * [needsFetch] for [check], or true as soon as a forced request takes [check] over. A store whose
+   * data has emitted no value, like an optimistic store before its first row list, keeps the read
+   * waiting. So a takeover cancels the read, and [runCheck] then runs the forced fetch. The read
+   * runs in a child coroutine, so it starts at once and a value that is already there wins.
+   */
+  private suspend fun needsFetchUnlessReplaced(check: Check): Boolean = coroutineScope {
+    val read = async(start = CoroutineStart.UNDISPATCHED) { needsFetch(check.kind) }
+    select {
+      read.onAwait { it }
+      check.onWake {
+        read.cancel()
+        true
+      }
     }
   }
 
@@ -956,6 +976,13 @@ internal class RealDataQuery<T>(
     suspend fun awaitWake() {
       woken.await()
     }
+
+    /**
+     * Selects once the check is woken. Before the check fetches, only a takeover wakes it, since
+     * [wake] runs only once its fetch has finished.
+     */
+    val onWake: SelectClause0
+      get() = woken.onJoin
   }
 
   /** Where a check stands for a takeover. */

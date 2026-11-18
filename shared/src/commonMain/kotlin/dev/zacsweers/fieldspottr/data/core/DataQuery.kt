@@ -121,8 +121,8 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
  * A forced request that arrives while an unforced fetch runs cancels that fetch before it writes
  * and runs a forced fetch in its place. The unforced request's handle follows the forced fetch, so
  * a background caller never sees `Cancelled` because a user pulled to refresh. [status] shows
- * `Fetching(forced = true)` as soon as the forced request takes over a running fetch. When the
- * takeover lands while the check still reads the store, it shows once that read returns.
+ * `Fetching(forced = true)` as soon as the forced request takes over a running fetch. A takeover
+ * while the check still reads the store stops that read.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface DataQuery<T> {
@@ -231,6 +231,9 @@ interface DataQuery<T> {
    * the caller just made. It replaces one instead, as [DataQuery] describes. An unforced request
    * joins a fetch in flight, so it never fetches fresh data twice. The handle follows the fetch
    * this request ran or joined, and [status] shows `Fetching` while it runs.
+   *
+   * While the store has emitted no value, an unforced request waits for one, and so does a handle
+   * queued behind it, like one from [invalidate]. A forced request does not wait.
    */
   fun requestFetch(force: Boolean): Operation
 
@@ -261,13 +264,15 @@ interface DataQuery<T> {
    * changed, also when queries share a store. A fetch another query began before the change
    * replaces a marked value with its own, unmarked.
    *
-   * Two limits come from the store:
+   * Three limits come from the store:
    * - A fetch that has already handed its value to the store when this is called cannot take it
    *   back. That write lands unmarked, and the mark follows as the next command on the query's key.
    *   A collector of [QueryStore.data], [stored], [storedState] or [state] can see the value
    *   unmarked in between. No request acts on it, since every request waits for the mark.
    * - The mark is [QueryStore.invalidate]. A store that sets its flag in one update never loses a
    *   value another writer stores at the same time. [QueryStore.of] says what its default does.
+   * - While the store has emitted no value, the mark waits behind an unforced request that waits
+   *   for one, as [requestFetch] describes.
    */
   fun invalidate(): Operation
 }
