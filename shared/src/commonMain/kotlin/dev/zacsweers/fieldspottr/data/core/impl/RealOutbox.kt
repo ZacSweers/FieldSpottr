@@ -352,7 +352,7 @@ internal class RealOutbox<E>(
    * would never run its apply, revert or commit.
    *
    * It then reads the rows owed to a handle, like rows sent in an earlier process that no handle
-   * committed, and drains their keys, which settles them oldest first per key. Until that read is
+   * committed, and drains their keys, which settles them in send order per key. Until that read is
    * done, a drain records a sent row as owed and settles it at once, so a live commit never
    * overtakes an older owed row on its key.
    */
@@ -770,10 +770,32 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Settles [key]'s rows owed to the handle, oldest first, and returns whether none is left. It
-   * does nothing without a handle, or when no row on [key] is known to be owed. A sent row is
-   * committed with its stored answer and then marked committed. A failed row is marked reverted and
-   * then reverted, at most once, on its row key. It reads only [key]'s owed rows.
+   * [owed], one key's owed rows oldest first, with the Sent rows in the order they sent: by
+   * [OutboxEntry.sentAt], and in queue order when two sent at the same time. Failed rows keep their
+   * places. A retried older row can send after a newer one, and the server then holds the older
+   * row's change, so its commit comes last too.
+   */
+  private fun inSendOrder(owed: List<OutboxEntry<E>>): List<OutboxEntry<E>> {
+    val sent = owed.filter { it.status == OutboxStatus.Sent }
+    if (sent.size < 2) {
+      return owed
+    }
+    // A stable sort, so equal times keep queue order
+    val bySendTime = sent.sortedBy { it.sentAt ?: Instant.DISTANT_FUTURE }.iterator()
+    return owed.map { row ->
+      if (row.status == OutboxStatus.Sent) {
+        bySendTime.next()
+      } else {
+        row
+      }
+    }
+  }
+
+  /**
+   * Settles [key]'s rows owed to the handle in the order [inSendOrder] gives, and returns whether
+   * none is left. It does nothing without a handle, or when no row on [key] is known to be owed. A
+   * sent row is committed with its stored answer and then marked committed. A failed row is marked
+   * reverted and then reverted, at most once, on its row key. It reads only [key]'s owed rows.
    *
    * It runs on [key]'s drain lane, so no two settles of a key overlap. A store read that throws is
    * reported to the sender's handler, and so is a row write that throws, like the one that marks a
@@ -793,7 +815,7 @@ internal class RealOutbox<E>(
     // Before the read, so a row marked owed while this reads is settled by the next drain
     owedKeys.update { it.removing(key) }
     try {
-      for (row in store.owed(key)) {
+      for (row in inSendOrder(store.owed(key))) {
         if (!settleOwed(handle, row)) {
           owedKeys.update { it.adding(key) }
           settleLater(key)

@@ -207,7 +207,9 @@ interface Outbox<E> {
 
   /**
    * Requeues a failed row with its attempts reset, or ends a backoff early. The handle follows the
-   * row from here.
+   * row from here. A retried row sends before later rows on its key that the drain has not claimed,
+   * and a row already claimed goes first, so a retried older change can reach the server after a
+   * newer one.
    */
   fun retry(id: EntryId): Operation
 
