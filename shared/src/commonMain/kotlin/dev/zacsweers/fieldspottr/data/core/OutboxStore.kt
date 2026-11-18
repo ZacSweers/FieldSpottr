@@ -118,7 +118,8 @@ interface OutboxStore<E> {
 
   /**
    * Compare-and-set. Writes status, attempts, lastError, reverted, retryAt, committed, sentAt and
-   * reply only if the row's status is still [expected]. Returns whether it wrote.
+   * reply only if the row's status is still [expected]. Returns whether it wrote. A row that is
+   * gone, or that expired as [entry] describes, is never written, so the update returns false.
    */
   suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean
 

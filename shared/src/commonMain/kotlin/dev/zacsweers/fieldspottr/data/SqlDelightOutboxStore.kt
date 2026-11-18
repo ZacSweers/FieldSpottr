@@ -160,11 +160,15 @@ class SqlDelightOutboxStore<E>(
       // since the expectation was built no longer matches, and a status written by a newer app
       // version still matches the Failed it decodes to. The row is read outside the transaction, so
       // the transaction below starts with its write, like every other write in this store.
+      // An expired row reads as absent, so it fails like a missing one.
       val row = queries.byId(outbox, entry.id.value).executeAsOneOrNull()
-      if (row == null || OutboxStatus(row.status, row.cause) != expected) {
+      if (row == null || row.isExpired() || OutboxStatus(row.status, row.cause) != expected) {
         return@withContext false
       }
       val written = queries.transactionWithResult {
+        // Deletes the expired rows first, so a row that expired since the read is gone and the
+        // write below finds nothing
+        queries.pruneSettled(outbox, cutoff())
         // The WHERE on what was read makes the write a compare-and-set. changes() reports it.
         queries.compareAndSet(
           status = entry.status.storedName,

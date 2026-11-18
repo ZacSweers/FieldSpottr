@@ -220,6 +220,32 @@ abstract class OutboxStoreContract {
   }
 
   @Test
+  fun `an update of an expired row fails and leaves the row gone`() = runTest {
+    val store = newStore(1.minutes)
+    val sent = store.insertNew("k", "a")
+    val discarded = store.insertNew("k", "b")
+    val sentRow = checkNotNull(store.entry(sent).first())
+    val discardedRow = checkNotNull(store.entry(discarded).first())
+    val done = sentRow.copy(status = OutboxStatus.Sent, committed = true)
+    assertTrue(store.update(done, OutboxStatus.Queued))
+    assertTrue(
+      store.update(discardedRow.copy(status = OutboxStatus.Discarded), OutboxStatus.Queued)
+    )
+
+    // No write since the rows expired, so the update itself is the first to find them expired
+    advanceStoreTime(2.minutes)
+
+    assertFalse(store.update(done.copy(reply = "late"), OutboxStatus.Sent))
+    assertFalse(
+      store.update(discardedRow.copy(status = OutboxStatus.Queued), OutboxStatus.Discarded)
+    )
+    assertNull(store.entry(sent).first())
+    assertNull(store.entry(discarded).first())
+    assertEquals(emptyList(), store.entries().first())
+    assertNull(store.head("k"))
+  }
+
+  @Test
   fun `insert keeps the id it is given and a stored id throws and stores nothing`() = runTest {
     val store = newStore(1.minutes)
     val id = EntryId("given")

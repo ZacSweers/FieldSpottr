@@ -271,8 +271,9 @@ class DataStoreOutboxStore<E>(
       val row = log.rows.getOrNull(index)
       // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
       // since the expectation was built no longer matches, and a status written by a newer app
-      // version still matches the Failed it decodes to. On a mismatch the log is left as it is.
-      if (row == null || OutboxStatus(row.status, row.cause) != expected) {
+      // version still matches the Failed it decodes to. On a mismatch the log is left as it is. An
+      // expired row reads as absent, so it fails like a missing one.
+      if (row == null || row.isExpired() || OutboxStatus(row.status, row.cause) != expected) {
         written = false
         return@updateData log
       }
