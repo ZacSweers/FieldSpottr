@@ -22,12 +22,16 @@ import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.withIndex
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -84,6 +88,7 @@ class OutboxBacklogTest {
     data.online.value = true
     factory.backlog.first { it == Empty }
     data.online.value = false
+    runCurrent()
     // After the backlog emptied, a drain may already be finishing, so a new row is told again
     outbox.enqueue("c")
     factory.backlog.first { it == Ready }
@@ -195,8 +200,9 @@ class OutboxBacklogTest {
       outbox.enqueue("b").awaitSucceeded()
 
       assertThat(send.sent).containsExactly("a", "b")
-      assertThat(heard).containsExactly(Ready, Ready)
-      assertThat(data.actionFailures.all).containsExactly(failing, failing)
+      // Every call threw, so each report while rows waited made the call again
+      assertThat(heard.distinct()).containsExactly(Ready)
+      assertThat(data.actionFailures.all).isEqualTo(heard.map { failing })
     }
 
   @Test
@@ -278,6 +284,94 @@ class OutboxBacklogTest {
     assertThat(drained.isCompleted).isTrue()
     assertThat(drained.await()).isEqualTo(Empty)
     handle.awaitSucceeded()
+  }
+
+  @Test
+  fun `a waiter after a row is stored sees work owed while the watcher lags`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val catchUp = CompletableDeferred<Unit>()
+    // The heads after the first list wait, like a database whose notifications fall behind
+    val lagging =
+      object : OutboxStore<String> by rows {
+        override fun heads(): Flow<List<OutboxEntry<String>>> =
+          rows.heads().withIndex().onEach { if (it.index > 0) catchUp.await() }.map { it.value }
+      }
+    val factory = factory()
+    val outbox =
+      factory
+        .create(backgroundScope, setOf(Flaky.sender(store = lagging, send = send)))
+        .outbox(Flaky)
+    runCurrent()
+    assertThat(factory.backlog.first()).isEqualTo(Empty)
+    send.hold("a")
+
+    val handle = outbox.enqueue("a")
+    handle.stored.awaitSucceeded()
+    val drained = async { factory.awaitDrained() }
+    runCurrent()
+    assertThat(drained.isCompleted).isFalse()
+
+    // Once the row sends and the watcher catches up, the wait ends
+    send.release("a")
+    handle.awaitSucceeded()
+    catchUp.complete(Unit)
+    assertThat(drained.await()).isEqualTo(Empty)
+  }
+
+  @Test
+  fun `a scheduler call that threw is made again on the next equal report`() = runTest {
+    val failing = IllegalStateException("WorkManager not initialized")
+    var throwNext = true
+    val heard = mutableListOf<OutboxBacklog.Waiting>()
+    val throwsOnce =
+      object : OutboxScheduler {
+        override fun rowsWaiting(backlog: OutboxBacklog.Waiting) {
+          heard += backlog
+          if (throwNext) {
+            throwNext = false
+            throw failing
+          }
+        }
+      }
+    val factory =
+      testDataScopeFactory(clock = testClock(START), online = false, scheduler = throwsOnce)
+    val data = factory.create(backgroundScope, setOf(Changes.sender(send = send)))
+    val outbox = data.outbox(Changes)
+
+    outbox.enqueue("a", key = "a").stored.awaitSucceeded()
+    runCurrent()
+    outbox.enqueue("b", key = "b").stored.awaitSucceeded()
+    runCurrent()
+
+    // The first call threw, so the backlog that stayed Ready was told again, and then only once
+    assertThat(heard).containsExactly(Ready, Ready)
+    assertThat(data.actionFailures.all).containsExactly(failing)
+  }
+
+  @Test
+  fun `a waiting collector sees a backoff turn ready at its deadline while offline`() = runTest {
+    send.failTransiently()
+    val factory = factory()
+    val data =
+      factory.create(
+        backgroundScope,
+        setOf(Changes.sender(retry = RetryPolicy(maxAttempts = 3) { 5.minutes }, send = send)),
+      )
+    data.outbox(Changes).enqueue("a")
+    factory.backlog.first { it == BackingOff(START + 5.minutes) }
+    data.online.value = false
+    runCurrent()
+
+    val ready = async { factory.backlog.first { it == Ready } }
+    advanceTimeBy(4.minutes)
+    runCurrent()
+    assertThat(ready.isCompleted).isFalse()
+    // No row changes and the network stays down, so only the clock moves the backlog
+    advanceTimeBy(1.minutes)
+    runCurrent()
+
+    assertThat(ready.isCompleted).isTrue()
+    assertThat(send.attempts("a")).isEqualTo(1)
   }
 }
 

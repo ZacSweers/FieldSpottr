@@ -40,6 +40,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -49,7 +50,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.sync.Semaphore
@@ -94,7 +95,8 @@ internal class RealDataScopeFactory(
   private val reported = AtomicReference(persistentHashMapOf<Any, OutboxBacklog?>())
   // The combined backlog, null while a running outbox has not read its rows yet
   private val combined = MutableStateFlow<OutboxBacklog?>(OutboxBacklog.Empty)
-  // The last combined result, so the scheduler hears each change once
+  // The last combined result the scheduler took, so it hears each change once. A call that threw
+  // took nothing, so the next report makes it again.
   private val told = AtomicReference<OutboxBacklog?>(null)
   // One publisher at a time, so the scheduler hears changes in order. A report made while one
   // publishes marks it dirty, and the publisher goes round again.
@@ -102,9 +104,22 @@ internal class RealDataScopeFactory(
   private val dirty = AtomicBoolean(false)
 
   // A backoff whose deadline the wall clock has passed reads as Ready, since the outbox's timer
-  // follows a clock that can stop while the device sleeps, so a waiter waits for the send instead
+  // follows a clock that can stop while the device sleeps, so a waiter waits for the send instead.
+  // A backoff turns Ready at its deadline on its own too, so a collector that waits sees it even
+  // when no row changes and no report comes, like while offline.
+  @OptIn(ExperimentalCoroutinesApi::class)
   override val backlog: Flow<OutboxBacklog> =
-    combined.filterNotNull().map { it.asOf(clock.now()) }.distinctUntilChanged()
+    combined
+      .filterNotNull()
+      .transformLatest { reported ->
+        val current = reported.asOf(clock.now())
+        emit(current)
+        if (current is OutboxBacklog.BackingOff) {
+          awaitClock(clock, current.until)
+          emit(OutboxBacklog.Ready)
+        }
+      }
+      .distinctUntilChanged()
 
   override fun create(scope: CoroutineScope, senders: Set<OutboxSender<*>>): DataScope =
     RealDataScope(scope, this, senders)
@@ -147,7 +162,8 @@ internal class RealDataScopeFactory(
    * Combines the reports into [combined] and tells the scheduler when the result changed to rows
    * that wait. An empty result is kept but not told, as [OutboxScheduler] explains. A scheduler
    * that throws is reported to [onFactoryFailure], whichever data scope's report published, and
-   * neither holds up the drain that reported nor the next report.
+   * neither holds up the drain that reported nor the next report. Its call counts as made only once
+   * it returns, so the next report makes it again, even one with the same result.
    */
   private fun publish() {
     dirty.store(true)
@@ -157,12 +173,12 @@ internal class RealDataScopeFactory(
         val next = combinedOf(reported.load().values)
         combined.value = next
         if (next != null && next != told.load()) {
-          told.store(next)
           runCatching {
               when (next) {
                 OutboxBacklog.Empty -> Unit
                 is OutboxBacklog.Waiting -> scheduler.rowsWaiting(next)
               }
+              told.store(next)
             }
             .onFailure(onFactoryFailure)
         }

@@ -418,6 +418,9 @@ internal class RealOutbox<E>(
           owner.revert(payload, id)
         }
         rollbackOnFailure(undo) { store.insert(id, rowKey, payload) }
+        // The watcher's list can lag the insert, so a waiter that subscribes once the row is
+        // stored still sees work owed
+        onBacklog(OutboxBacklog.Ready)
         attempt.started(id)
       }
       // Without waiting for the watcher, which may be pausing after a store failure
@@ -982,8 +985,8 @@ internal class RealOutbox<E>(
    */
   private fun backOff(key: String, id: EntryId, retryAt: Instant) {
     val wakeAt = wakeAt(retryAt, clock.now())
-    val timer =
-      Timer(id, retryAt, wakeAt, scope.launch(start = CoroutineStart.LAZY) { awaitClock(wakeAt) })
+    val wait = scope.launch(start = CoroutineStart.LAZY) { awaitClock(clock, wakeAt, maxWait) }
+    val timer = Timer(id, retryAt, wakeAt, wait)
     waking.update { it.putting(key, timer) }
     timer.job.invokeOnCompletion { cause ->
       // Cancelled by retry(), by discard() or by a drain that found it stale or past its wake
@@ -1005,26 +1008,6 @@ internal class RealOutbox<E>(
       } else {
         current
       }
-    }
-  }
-
-  /**
-   * Waits until [clock] reaches [deadline], or until [maxWait] has passed, whichever comes first.
-   * `delay` follows a monotonic clock, which stops while an Android device sleeps, so this waits in
-   * steps of at most [TIMER_STEP] and reads the clock after each. A deadline that passed during
-   * sleep then fires within one step of waking. The steps add up to the time waited, so a clock set
-   * back meanwhile cannot stretch the wait past [maxWait].
-   */
-  private suspend fun awaitClock(deadline: Instant) {
-    var waited = Duration.ZERO
-    while (true) {
-      val left = deadline - clock.now()
-      if (left <= Duration.ZERO || waited >= maxWait) {
-        return
-      }
-      val step = minOf(left, TIMER_STEP, maxWait - waited)
-      delay(step)
-      waited += step
     }
   }
 
@@ -1492,6 +1475,30 @@ private const val MAX_REMEMBERED_FAILURES = 64
 
 // How long a row waits when the retry policy throws instead of deciding
 private val POLICY_FAILURE_DELAY = 1.minutes
+
+/**
+ * Waits until [clock] reaches [deadline], or until [maxWait] has passed, whichever comes first.
+ * `delay` follows a monotonic clock, which stops while an Android device sleeps, so this waits in
+ * steps of at most [TIMER_STEP] and reads the clock after each. A deadline that passed during sleep
+ * then fires within one step of waking. The steps add up to the time waited, so a clock set back
+ * meanwhile cannot stretch the wait past [maxWait].
+ */
+internal suspend fun awaitClock(
+  clock: Clock,
+  deadline: Instant,
+  maxWait: Duration = Duration.INFINITE,
+) {
+  var waited = Duration.ZERO
+  while (true) {
+    val left = deadline - clock.now()
+    if (left <= Duration.ZERO || waited >= maxWait) {
+      return
+    }
+    val step = minOf(left, TIMER_STEP, maxWait - waited)
+    delay(step)
+    waited += step
+  }
+}
 
 /** This state if it is terminal, else [next]. A settled handle never changes again. */
 private fun OperationState.settledOr(next: OperationState): OperationState =

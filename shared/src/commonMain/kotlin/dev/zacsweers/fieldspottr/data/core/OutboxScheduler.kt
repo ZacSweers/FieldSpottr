@@ -37,7 +37,8 @@ sealed interface OutboxBacklog {
  * schedule a drain that runs even if the process dies, like a WorkManager request with a network
  * constraint. The factory calls [rowsWaiting] on each change in the combined [OutboxBacklog] of its
  * running outboxes. The call comes on a background dispatcher, so return quickly. After a restart
- * the same state can arrive again.
+ * the same state can arrive again. A call that throws is reported, and the next report makes it
+ * again, also with the same state.
  *
  * The scheduler never hears that the backlog is empty. The factory knows only the outboxes that
  * run, so rows can still wait under a name whose sender no created data scope has yet. Cancelling
@@ -69,7 +70,7 @@ interface OutboxScheduler {
  * the app has not yet. No repository is needed, since senders drain without handles. A row whose
  * backoff deadline has passed counts as ready, so a worker that the deadline started waits for its
  * send. While the network is down, queued rows still count as ready and this keeps waiting, so give
- * the worker a network constraint and a timeout.
+ * the worker a network constraint and a timeout. To wait for one change, await its handle.
  */
 suspend fun DataScope.Factory.awaitDrained(): OutboxBacklog = backlog.first {
   it !is OutboxBacklog.Ready
