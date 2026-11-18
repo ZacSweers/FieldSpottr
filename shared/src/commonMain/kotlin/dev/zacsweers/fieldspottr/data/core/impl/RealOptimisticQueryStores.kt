@@ -662,9 +662,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         return
       }
       val replaced = result is Delivery.Replaced
+      // An invalidate since a commit for this answer failed marked the answer on record stale
+      val stale =
+        state.value.slice(key)?.committed.orEmpty().any {
+          it.change == change && it.truth?.invalidated == true
+        }
       val next =
         when {
-          result is Delivery.Replaced -> Fetched(result.value, sentAt)
+          result is Delivery.Replaced -> Fetched(result.value, sentAt, invalidated = stale)
           alreadyFetched -> current
           else -> {
             val folded =
@@ -1138,9 +1143,17 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
     }
 
-    // On the key's lock, so a commit that read the truth before this cannot write it back fresh
+    /**
+     * Marks the truth stale on the key's lock, so a commit that read the truth before this cannot
+     * write it back fresh. A server answer on record shows in place of a truth fetched before its
+     * send, like while its commit's write is still owed, so it takes the mark too. A commit that
+     * runs again for that answer writes it marked.
+     */
     override suspend fun invalidate() {
-      base.lock.withLock { truth.invalidate() }
+      base.lock.withLock {
+        truth.invalidate()
+        edit { s -> s.updatingRecords(key) { it.invalidated() } }
+      }
     }
 
     override fun mutate(mutation: M): OutboxOperation =
@@ -1748,6 +1761,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       val value = stored?.value
       return (hasValue && truth?.value == value) || (folded != null && folded.value == value)
     }
+
+    /** This record with its server answer marked stale. A record without one stays as it is. */
+    fun invalidated(): Committed<K, T, M> =
+      if (replaced && truth != null && !truth.invalidated) {
+        copy(truth = truth.copy(invalidated = true))
+      } else {
+        this
+      }
 
     /** This record, held by [next], a fetch's value with this change folded in, from now on. */
     fun alsoHeldBy(next: Fetched<T>?): Committed<K, T, M> = copy(folded = Fold(next?.value))
