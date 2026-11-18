@@ -585,6 +585,74 @@ class OutboxTest {
   }
 
   @Test
+  fun `a retried row sends after a later row the drain already read`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val (a, b) = failedThenQueued(rows)
+    val claimReached = CompletableDeferred<Unit>()
+    val finishClaim = CompletableDeferred<Unit>()
+    // Pauses the drain's claim of b, after the drain read b as the head
+    val slowClaim =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          if (
+            entry.id == b && entry.status == OutboxStatus.Sending && claimReached.complete(Unit)
+          ) {
+            finishClaim.await()
+          }
+          return rows.update(entry, expected)
+        }
+      }
+    val data = dataOver(slowClaim)
+    val outbox = data.outbox(Rows, revert = send::revert)
+    claimReached.await()
+
+    val retried = outbox.retry(a)
+    runCurrent()
+
+    // a is the stored head again, but the drain already read b
+    assertThat(rows.head("k")?.id).isEqualTo(a)
+    assertThat(rows.entry(b).first()?.status).isEqualTo(OutboxStatus.Queued)
+    assertThat(send.attempts).isEmpty()
+
+    finishClaim.complete(Unit)
+    retried.awaitSucceeded()
+
+    assertThat(send.sent).containsExactly("b", "a")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a retried row sends before a later row the drain has not read`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val (a, _) = failedThenQueued(rows)
+    // Offline, so the drain reads no head before the requeue
+    val data = dataOver(rows, online = false)
+    val outbox = data.outbox(Rows, revert = send::revert)
+
+    val retried = outbox.retry(a)
+    rows.entry(a).first { it?.status == OutboxStatus.Queued }
+    data.online.value = true
+    retried.awaitSucceeded()
+    rows.entries().first { it.isEmpty() }
+
+    assertThat(send.sent).containsExactly("a", "b")
+    data.assertNoFailures()
+  }
+
+  /**
+   * Stores an older row a that failed and was reverted, then a later Queued row b, both on key k.
+   * Returns their ids.
+   */
+  private suspend fun failedThenQueued(rows: OutboxStore<String>): Pair<EntryId, EntryId> {
+    val a = rows.insertNew("k", "a")
+    val b = rows.insertNew("k", "b")
+    val queued = checkNotNull(rows.entry(a).first())
+    val failed = queued.copy(status = OutboxStatus.Failed("Rejected"), reverted = true)
+    assertThat(rows.update(failed, expected = OutboxStatus.Queued)).isTrue()
+    return a to b
+  }
+
+  @Test
   fun `a send that cannot be retried fails once and the next row sends`() = runTest {
     val rejected = IllegalArgumentException("400 Bad Request")
     send.failure = { payload, _ -> rejected.takeIf { payload == "a" } }
