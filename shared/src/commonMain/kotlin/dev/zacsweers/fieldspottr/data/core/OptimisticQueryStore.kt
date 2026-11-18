@@ -87,14 +87,16 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * this returns, each value [data] computes holds the change while the new attempt runs. If the
    * requeue itself fails, like on a store error, [data] shows the change as it stood without this
    * call. A change the server already has, whose commit waits, sends nothing again: the handle
-   * succeeds, and [data] keeps showing the change until its commit lands.
+   * succeeds, and [data] keeps showing the change until its commit lands. The handle fails, and
+   * nothing changes, for a row this store knows is another key's.
    */
   fun retry(id: EntryId): Operation
 
   /**
-   * Drops a waiting or failed change. From the moment this returns, each value [data] computes
-   * lacks it. If the row cannot be discarded, as when it already sends, the change shows again and
-   * the handle fails.
+   * Drops a waiting or failed change. For a change this store made or a row it has listed, each
+   * value [data] computes from the moment this returns lacks it. If the row cannot be discarded, as
+   * when it already sends, the change shows again and the handle fails. The handle fails, and
+   * nothing changes, for a row this store knows is another key's.
    */
   fun discard(id: EntryId): Operation
 

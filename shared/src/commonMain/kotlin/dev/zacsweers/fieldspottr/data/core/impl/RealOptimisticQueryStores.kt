@@ -1149,9 +1149,28 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     override val pending: Flow<List<PendingMutation<M>>> =
       this@RealOptimisticQueryStores.pending(key)
 
-    override fun retry(id: EntryId): Operation = this@RealOptimisticQueryStores.retry(id)
+    override fun retry(id: EntryId): Operation =
+      otherKey(id) ?: this@RealOptimisticQueryStores.retry(id)
 
-    override fun discard(id: EntryId): Operation = this@RealOptimisticQueryStores.discard(id)
+    override fun discard(id: EntryId): Operation =
+      otherKey(id) ?: this@RealOptimisticQueryStores.discard(id)
+
+    /**
+     * A failed handle when the set knows row [id] belongs to another key, else null. A row the set
+     * does not know passes, like before its first row list.
+     */
+    private fun otherKey(id: EntryId): Operation? {
+      val s = state.value
+      val owner =
+        s.known[id]?.payload?.key
+          ?: s.listed[id]?.payload?.key
+          ?: s.committed.firstOrNull { it.change == id }?.key
+      return if (owner == null || owner == key) {
+        null
+      } else {
+        Operation.failed(IllegalArgumentException("Row ${id.value} belongs to another key"))
+      }
+    }
   }
 
   /** What the set last did or learned of a change, as the table in the class KDoc lists. */
