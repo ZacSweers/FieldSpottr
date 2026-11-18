@@ -147,6 +147,11 @@ class OptimisticQueryStoreTransitionTest {
         h.clock.shift(1.minutes)
         h.tags.write(h.server.toList(), h.clock.now())
         settle()
+        // It stays for a reader of the base that runs late, until it expires
+        assertThat(h.sets.committedRecords, "$lag").isEqualTo(1)
+        h.clock.shift(11.minutes)
+        h.tags.write(h.server.toList(), h.clock.now())
+        settle()
         assertThat(h.sets.committedRecords, "$lag").isEqualTo(0)
         assertThat(h.sets.knownChanges, "$lag").isEqualTo(0)
         h.assertStays("b")

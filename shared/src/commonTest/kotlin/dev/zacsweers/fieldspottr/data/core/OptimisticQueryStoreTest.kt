@@ -359,26 +359,33 @@ class OptimisticQueryStoreTest {
   }
 
   @Test
-  fun `a fetch from after a send drops the change's record`() = runTest {
-    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
-    val stores =
-      data.optimisticStores<String, List<String>, Add>(
-        TagsByItem,
-        base = QueryStore.inMemoryByKey(),
-        apply = ::addOnce,
-      )
-    val queries =
-      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
-    queries.data("x").first { it != null }
+  fun `a fetch from after a send leaves the change's record without a value until it expires`() =
+    runTest {
+      data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
+      val stores =
+        data.optimisticStores<String, List<String>, Add>(
+          TagsByItem,
+          base = QueryStore.inMemoryByKey(),
+          apply = ::addOnce,
+        )
+      val queries =
+        data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
+      queries.data("x").first { it != null }
 
-    stores.mutate("x", Add("b")).awaitSucceeded()
-    // Until a fetch from after the send confirms the change, its record stays
-    assertThat(stores.committedRecords).isEqualTo(1)
+      stores.mutate("x", Add("b")).awaitSucceeded()
+      // Until a fetch from after the send confirms the change, its record stays
+      assertThat(stores.committedRecords).isEqualTo(1)
 
-    data.clock.shift(1.minutes)
-    queries.requestFetch("x", force = true).awaitSucceeded()
-    assertThat(stores.committedRecords).isEqualTo(0)
-  }
+      data.clock.shift(1.minutes)
+      queries.requestFetch("x", force = true).awaitSucceeded()
+      // A reader of the base that runs late may still need the change, but no longer its value
+      assertThat(stores.committedRecords).isEqualTo(1)
+      assertThat(stores.committedValues).isEqualTo(0)
+
+      data.clock.shift(10.minutes)
+      queries.requestFetch("x", force = true).awaitSucceeded()
+      assertThat(stores.committedRecords).isEqualTo(0)
+    }
 
   @Test
   fun `a key keeps one value on record however many changes it sends`() = runTest {

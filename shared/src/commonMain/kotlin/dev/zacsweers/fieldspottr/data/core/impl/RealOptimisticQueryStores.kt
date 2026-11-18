@@ -85,7 +85,7 @@ import kotlinx.coroutines.sync.withLock
  * | Pending   | [mutate]                           | the change   | never, it only moves on   |
  * | HandedOff | an attempt that ended Cancelled    | the change   | list shows row, or passed |
  * | Sent      | an attempt that sent, no record    | the change   | passed                    |
- * | Committed | the commit after a send (a record) | the record   | confirmed and passed      |
+ * | Committed | the commit after a send (a record) | the record   | expired                   |
  * | Failed    | an attempt that failed for good    | nothing      | list shows Failed, passed |
  * | Dropped   | [discard], [clear], or a send that | nothing      | passed                    |
  * |           | left no record                     |              |                           |
@@ -133,10 +133,11 @@ import kotlinx.coroutines.sync.withLock
  * change on one key costs the views of other keys one identity check. A view whose truth or slice
  * changed plans its overlay first, and runs [apply] only when the plan differs from the last one.
  *
- * A record is forgotten once a fetch from after its send landed and the list has moved past its
- * row: the list showed the row and a later list lacks it, or no shared subscription runs and a
- * store read finds the row settled. In the last case, a subscription that starts later reads the
- * store after that read. A record without that proof stays until [RECORD_LIFETIME] after its send.
+ * A record drops its copies of the value once a fetch from after its send landed and the list has
+ * moved past its row: the list showed the row and a later list lacks it, or no shared subscription
+ * runs and a store read finds the row settled. In the last case, a subscription that starts later
+ * reads the store after that read. Every record stays until [RECORD_LIFETIME] after its send, so a
+ * view whose reader of the base store runs late still applies the change on an older value.
  *
  * A sent change reaches the truth in two writes, the base store's and the row's status, and no
  * store makes them atomic. Meanwhile a fetch that started before the send can land with a value
@@ -1648,7 +1649,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             val passed = record.passed || (record.shown && !inList)
             record.marked(shown = record.shown || inList, passed = passed)
           }
-          .filter { !(it.passed && it.confirmed) }
           .toPersistentList()
       var reported = reported
       for ((change, shown) in this.reported) {
@@ -1699,9 +1699,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
     /**
      * This state after a truth for [key] fetched at [fetchedAt]: [key]'s records it confirms are
-     * marked, and records that are confirmed and passed, or expired at [now], go. So do known
-     * changes that expired. [settledRows] holds the changes whose rows a store read found settled
-     * while no subscription ran, which counts as passed.
+     * marked, and records expired at [now] go. So do known changes that expired. [settledRows]
+     * holds the changes whose rows a store read found settled while no subscription ran, which
+     * counts as passed.
      */
     fun confirming(
       key: K,
@@ -1715,7 +1715,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             val passed = it.passed || (settledRows != null && it.change in settledRows)
             it.marked(confirmed = it.confirmed || it.confirmedBy(key, fetchedAt), passed = passed)
           }
-          .filter { !(it.passed && it.confirmed) && !it.isExpired(now) }
+          .filter { !it.isExpired(now) }
           .toPersistentList()
       val gone =
         committed.map { it.change }.filter { change -> records.none { it.change == change } }
@@ -1745,7 +1745,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * idempotent apply leaves as it is.
    *
    * [shown] says the list showed the row, [passed] that the list has moved past it, and [confirmed]
-   * that a fetch from after the send landed. A record goes once both of the last two hold.
+   * that a fetch from after the send landed. Once both of the last two hold, a record of a send
+   * drops its value copies, and it goes when it expires.
    */
   private class Committed<K, T, M>(
     val change: EntryId,
@@ -1782,7 +1783,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         confirmed,
       )
 
-    /** This record with its list and fetch marks set. */
+    /**
+     * This record with its list and fetch marks set. Once it is passed and confirmed, it keeps no
+     * copy of a value of its own send, since only a late reader still needs it, to apply again.
+     */
     fun marked(
       shown: Boolean = this.shown,
       passed: Boolean = this.passed,
@@ -1790,6 +1794,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     ): Committed<K, T, M> =
       if (shown == this.shown && passed == this.passed && confirmed == this.confirmed) {
         this
+      } else if (passed && confirmed) {
+        copy(shown = shown, passed = true, confirmed = true).withoutValue(newerAnswer = false)
       } else {
         copy(shown = shown, passed = passed, confirmed = confirmed)
       }
