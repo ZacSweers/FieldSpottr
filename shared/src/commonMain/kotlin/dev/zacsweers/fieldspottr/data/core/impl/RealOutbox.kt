@@ -668,7 +668,7 @@ internal class RealOutbox<E>(
       }
       retry = true
     }
-    val encoded = runCatching { encodeReply(delivery) }
+    val encoded = runCatching { encodeReply(head.id, delivery) }
     encoded.exceptionOrNull()?.let(onFailure)
     val sent =
       writeSent(
@@ -747,12 +747,12 @@ internal class RealOutbox<E>(
       written
     }
 
-  /** [delivery]'s answer as the text a row keeps, or null for an answer of nothing. */
-  private fun encodeReply(delivery: Delivery<*>): String? =
+  /** Row [id]'s answer [delivery] as the text the row keeps, or null for an answer of nothing. */
+  private fun encodeReply(id: EntryId, delivery: Delivery<*>): String? =
     when (delivery) {
       Delivery.Acknowledged -> null
       is Delivery.Replaced ->
-        checkNotNull(replyCodec) { "Outbox $name has no reply codec for ${delivery.value}" }
+        checkNotNull(replyCodec) { "Outbox $name has no reply codec for the answer to ${id.value}" }
           .encode(delivery.value)
     }
 

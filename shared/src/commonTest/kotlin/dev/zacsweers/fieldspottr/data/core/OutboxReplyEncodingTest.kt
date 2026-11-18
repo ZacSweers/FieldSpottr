@@ -3,7 +3,9 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.containsExactly
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
@@ -70,6 +72,23 @@ class OutboxReplyEncodingTest {
     assertThat(store.data.first()?.value).isEqualTo(listOf("a", "b"))
     own.assertNone()
     factory.assertNoFailures()
+  }
+
+  @Test
+  fun `an answer with no codec is reported without its value`() = runTest {
+    val factory = testDataScopeFactory(clock = testClock(START))
+    val rows = factory.outboxStore<String>(Plain.name)
+    val id = rows.insertNew("", "b")
+    // A plain key has no reply codec, which the public builders never pair with an answer
+    val sender =
+      OutboxSender(Plain, { _, _ -> Delivery.Replaced("secret") }, null, null, onFailure = null)
+
+    factory.create(backgroundScope, setOf(sender))
+    runCurrent()
+
+    val failure = factory.actionFailures.take().single()
+    assertThat(failure.message.orEmpty()).doesNotContain("secret")
+    assertThat(failure.message.orEmpty()).contains(id.value)
   }
 
   @Test
@@ -188,6 +207,7 @@ class OutboxReplyEncodingTest {
 
   private companion object {
     val START: Instant = Instant.parse("2026-06-10T12:00:00Z")
+    val Plain = OutboxKey<String>("plain")
     val Unencodable = OutboxKey.replying("unencodable", String.serializer(), UnencodableTags)
     val Nullable = OutboxKey.replying("nullable", String.serializer(), String.serializer().nullable)
 
