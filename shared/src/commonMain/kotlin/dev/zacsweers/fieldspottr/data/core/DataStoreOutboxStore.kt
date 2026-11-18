@@ -182,18 +182,17 @@ class DataStoreOutboxStores(
    * process, which no store here has opened, is deleted directly. The deletes run on the caller's
    * dispatcher.
    *
-   * A [directory] that does not exist holds no files, so only the opened stores are cleared. Any
-   * other failure to list it, like a directory that cannot be read or a path that is a file, throws
-   * the [IOException] before anything is deleted or cleared, so every row stays.
+   * A [directory] that does not exist holds no files, so only the opened stores are cleared. It
+   * counts as missing only when the nearest ancestor that can be listed does not list it. Any other
+   * failure to list it throws the listing's [IOException] before anything is deleted or cleared, so
+   * every row stays.
    */
   override suspend fun clearAll() {
     val files =
       try {
         fileSystem.list(directory)
       } catch (e: IOException) {
-        // Okio reports a missing directory and an unreadable one alike on some file systems, so
-        // the path's metadata tells them apart. A metadata read that fails throws its own error.
-        if (fileSystem.metadataOrNull(directory) != null) {
+        if (!isMissing(directory)) {
           throw e
         }
         emptyList()
@@ -208,6 +207,28 @@ class DataStoreOutboxStores(
     // Read again after the deletes, so a store opened meanwhile is cleared too
     for (entry in opened.load().values) {
       entry.store.value.clear()
+    }
+  }
+
+  /**
+   * Whether the nearest ancestor that can be listed shows that [path] does not exist. Okio reports
+   * a missing directory and one it cannot read alike, and on JVM and Android its metadata is null
+   * for both, so only a listing tells them apart.
+   */
+  private fun isMissing(path: Path): Boolean {
+    var child = path
+    while (true) {
+      val parent = child.parent ?: return false
+      val entries =
+        try {
+          fileSystem.list(parent)
+        } catch (e: IOException) {
+          null
+        }
+      if (entries != null) {
+        return entries.none { it.name.equals(child.name, ignoreCase = true) }
+      }
+      child = parent
     }
   }
 }

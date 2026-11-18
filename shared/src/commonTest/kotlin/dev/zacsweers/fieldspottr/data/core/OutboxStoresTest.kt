@@ -35,6 +35,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
+import okio.FileMetadata
 import okio.FileSystem
 import okio.ForwardingFileSystem
 import okio.IOException
@@ -173,6 +174,8 @@ class OutboxStoresTest {
   @Test
   fun `DataStore stores clear when their directory does not exist`() = runTest {
     val fileSystem = FakeFileSystem()
+    // A real file system always has its root, which lists no outbox directory
+    fileSystem.createDirectories("/".toPath())
     val directory = "/outbox".toPath()
     val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
     val notes = stores.open("notes", String.serializer())
@@ -217,6 +220,26 @@ class OutboxStoresTest {
   }
 
   @Test
+  fun `DataStore stores fail to clear a directory whose parent cannot be read and clear nothing`() =
+    runTest {
+      val fake = FakeFileSystem()
+      val directory = "/data/outbox".toPath()
+      fake.createDirectories(directory)
+      fake.write(directory / "old.outbox") { writeUtf8("{}") }
+      val fileSystem = InaccessibleParentFileSystem(fake, directory)
+      val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+      val notes = stores.open("notes", String.serializer())
+      notes.insertNew("k", "a")
+      fileSystem.failing = true
+
+      val failure = assertFailsWith<IOException> { stores.clearAll() }
+
+      assertThat(failure).isSameInstanceAs(fileSystem.listingError)
+      assertThat(fake.exists(directory / "old.outbox")).isTrue()
+      assertThat(notes.entries().first().map { it.payload }).containsExactly("a")
+    }
+
+  @Test
   fun `DataStore stores reject a second name that differs only in case`() = runTest {
     val fileSystem = FakeFileSystem()
     val directory = "/outbox".toPath()
@@ -229,6 +252,33 @@ class OutboxStoresTest {
 
     assertThat(failure.message.orEmpty()).contains("Upload")
     assertThat(failure.message.orEmpty()).contains("upload")
+  }
+
+  /**
+   * [delegate] where the parent of [directory] cannot be read once [failing] is set. Okio on JVM
+   * and Android then reports [directory] as missing, and its metadata is null.
+   */
+  private class InaccessibleParentFileSystem(delegate: FileSystem, private val directory: Path) :
+    ForwardingFileSystem(delegate) {
+    var failing = false
+    val listingError = IOException("$directory: No such file or directory")
+
+    override fun list(dir: Path): List<Path> {
+      if (failing && dir == directory) {
+        throw listingError
+      }
+      if (failing && dir == directory.parent) {
+        throw IOException("$dir: Permission denied")
+      }
+      return super.list(dir)
+    }
+
+    override fun metadataOrNull(path: Path): FileMetadata? {
+      if (failing && (path == directory || path == directory.parent)) {
+        return null
+      }
+      return super.metadataOrNull(path)
+    }
   }
 
   /**
