@@ -60,6 +60,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -76,7 +77,10 @@ import kotlinx.serialization.descriptors.SerialDescriptor
  * send order, so a commit never overtakes an older row's commit on its key.
  */
 internal interface RowOwner<E> {
-  /** Makes the optimistic change of a row about to be inserted. A throw inserts nothing. */
+  /**
+   * Makes the optimistic change of a row about to be inserted. A throw inserts nothing. The owner's
+   * stop does not cut it off, so a change is never left half applied with no row to send or undo.
+   */
   suspend fun apply(payload: E, id: EntryId)
 
   /** Undoes the optimistic change of a row that failed for good or was discarded. */
@@ -206,8 +210,11 @@ internal class RealOutbox<E>(
   // The handle, once one attached. Set once by compare-and-set.
   private val attached = AtomicReference<Attached<E>?>(null)
   // Keys that may hold rows owed to the handle, as OutboxEntry.isOwed describes. A drain of such a
-  // key settles them once a handle is attached. Updated by compare-and-set only.
+  // key settles them once a handle is attached. Only a key's own drain lane writes owed rows on it,
+  // and that lane clears the mark once they have all settled. Updated by compare-and-set only.
   private val owedKeys = AtomicReference(persistentHashSetOf<String>())
+  // Keys whose drain stopped because the network was down, until drainWhenBackOnline drains them
+  private val offlineKeys = MutableStateFlow(persistentHashSetOf<String>())
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt. A timer that
   // fired stays until a drain takes its row, so the drain knows the wait is over.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
@@ -273,6 +280,7 @@ internal class RealOutbox<E>(
 
   init {
     scope.launch { watch() }
+    scope.launch { drainWhenBackOnline() }
     scope.launch { watchChanges() }
     // The watcher and drains read only heads, which are Queued or Sending. One read of every row
     // lets the store meet each stored row once, so it hands on a Failed row that does not decode
@@ -312,6 +320,22 @@ internal class RealOutbox<E>(
       // Rows can send again from a reconnect on, so it ends the pause early
       withTimeoutOrNull(pause) { online.dropWhile { it }.first { it } }
       pause = minOf(pause * 2, STORE_RETRY_MAX)
+    }
+  }
+
+  /**
+   * Drains each key in [offlineKeys] once the network is back. [watch] drains on a reconnect too,
+   * but [online] is a state flow, and its collector never sees a drop that ends before it runs. A
+   * drain that read [online] during such a drop has stopped, and nothing else would start another.
+   *
+   * Each wait reads the flow's value anew. One collection of [offlineKeys] would skip a set that
+   * was emptied here and filled again with the same keys before the collector looked.
+   */
+  private suspend fun drainWhenBackOnline() {
+    while (true) {
+      offlineKeys.first { it.isNotEmpty() }
+      online.first { it }
+      offlineKeys.getAndUpdate { persistentHashSetOf() }.forEach(::drain)
     }
   }
 
@@ -410,10 +434,11 @@ internal class RealOutbox<E>(
     val owner = checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner
     val rowKey = key ?: WHOLE_QUEUE
     return tracked(id, Ordering.Keyed(Enqueue(this, rowKey))) { attempt ->
-      owner.apply(payload, id)
-      // Once the change is applied, the row goes in or the change is undone, even if the owner
-      // stops meanwhile. A store that throws stored nothing, so no send or revert would reach it.
+      // The owner's stop cuts off neither the apply nor what follows it. Once the change is
+      // applied, the row goes in or the change is undone. A store that throws stored nothing, so no
+      // send or revert would reach it.
       withContext(NonCancellable) {
+        owner.apply(payload, id)
         attempt.inserting(id)
         val undo: suspend () -> Unit = {
           attempt.notInserted(id)
@@ -476,10 +501,11 @@ internal class RealOutbox<E>(
         check(discarded) { "$id is no longer pending" }
         forget(id)
         settleFollowers(id, OperationState.Cancelled)
-        // A head that was backing off takes its timer along, so the next row sends now
-        if (cancelTimer(row.key, id)) {
-          drain(row.key)
-        }
+        // A head that was backing off takes its timer along, so the next row sends now. The key
+        // drains without a timer too, since a drain that read this row as the head may be about to
+        // start one for it.
+        cancelTimer(row.key, id)
+        drain(row.key)
         // A throw fails this handle and reaches the handle's handler. The row stays Discarded.
         if (!row.reverted) {
           checkNotNull(attached.load()) { "Outbox $name has no handle" }
@@ -544,7 +570,7 @@ internal class RealOutbox<E>(
    */
   private suspend fun sendQueued(key: String) {
     sendHeads(key)
-    settledOwed(key)
+    settleKey(key)
   }
 
   /**
@@ -553,19 +579,29 @@ internal class RealOutbox<E>(
    * [inSendOrder] commits owed rows by send time, so a row that will be owed records a time later
    * than every owed Sent row on [key]. Two sends can read the same time, and the clock can be set
    * back between them. A call reads the latest of those times at most once, before a send, and only
-   * when [mayHoldOwed] says the key may hold such a row. Only this lane writes owed Sent rows on
-   * [key], so after the read the call keeps the time current itself.
+   * while no [liveHandle] rules such a row out. Only this lane writes owed Sent rows on [key], so
+   * after the read the call keeps the time current itself.
    *
    * The read comes before the timer check and the claim. If it throws, or the owner stops while it
    * runs, the key's timer stays and the row is not sent, so no row is sent and then stored without
    * that time.
+   *
+   * Once a send has ended, [endAttempt] writes the row's new status before the drain reads
+   * anything, and the owner's stop does not cut that write off. So the owner's stop leaves a row
+   * Sending only when it comes after the row's claim and before its send has ended. A crash or a
+   * store that cannot write leaves one too, and the next drain sends it again with the same id.
    */
   private suspend fun sendHeads(key: String) {
     var latestOwed: Instant? = null
     var readOwed = false
-    while (online.value) {
+    while (true) {
       // A store may not check for cancellation, and a stopped owner claims no further row
       currentCoroutineContext().ensureActive()
+      // The one place a drain stops for the network. The checks below come back here.
+      if (!online.value) {
+        offlineKeys.update { it.adding(key) }
+        break
+      }
       val head = store.head(key)
       if (head == null) {
         // Nothing waits on the key, so a timer left for a row that was discarded or sent
@@ -577,13 +613,13 @@ internal class RealOutbox<E>(
         break
       }
       // Before the timer check and the claim, so a read that throws leaves both as they were
-      if (!readOwed && mayHoldOwed(key)) {
+      if (!readOwed && liveHandle(key) == null) {
         latestOwed = latestOwedSend(key)
         readOwed = true
       }
       // The reads suspend, so the network may have dropped meanwhile
       if (!online.value) {
-        break
+        continue
       }
       // A timer holds the key only while its row is still the head with the same deadline. One
       // left over from a row that was discarded or retried meanwhile is dropped. The timer only
@@ -622,7 +658,7 @@ internal class RealOutbox<E>(
       if (!online.value) {
         store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
         showFollowers(head.id, OperationState.Queued)
-        break
+        continue
       }
       val result = runCatchingCancellable { deliver(head.payload, head.id) }
       val failure = result.exceptionOrNull()
@@ -649,15 +685,14 @@ internal class RealOutbox<E>(
         fail(head, failure, attempts)
       } else {
         val nextAt = clock.now() + delay
-        store.update(
+        val waiting =
           head.copy(
             status = OutboxStatus.Queued,
             attempts = attempts,
             lastError = failure.toString(),
             retryAt = nextAt,
-          ),
-          expected = OutboxStatus.Sending,
-        )
+          )
+        endAttempt(head.id) { store.update(waiting, expected = OutboxStatus.Sending) }
         showFollowers(head.id, OperationState.Queued)
         // The next pass checks that the row is still the head before the timer holds the key
         backOff(key, head.id, nextAt)
@@ -669,24 +704,16 @@ internal class RealOutbox<E>(
    * Records that [head] sent at [sentAt] with the server's answer [delivery]. It runs once per
    * send.
    *
-   * With a handle that is ready and a key with no row known to be owed, the handle commits the row
-   * first, and then one write marks it Sent and committed, with no answer kept.
+   * A [liveHandle] commits the row first, and then one write marks it Sent and committed, with no
+   * answer kept. The commit is not cut off when the owner stops.
    *
    * Otherwise the row is written Sent and not committed, with the answer encoded on it and [owedAt]
    * as its send time, as [sendHeads] describes, and it is owed to the handle. A key with an older
-   * owed row takes this path, so the older row commits first, in the order [settledOwed] keeps. A
-   * row whose live commit threw is written owed too, and then the commit runs again after a pause,
-   * as [settleLater] describes. An answer that fails to encode is reported to the sender's handler
+   * owed row takes this path, so the older row commits first, in the order [settleKey] keeps. A row
+   * whose live commit threw is written owed too, and then the commit runs again after a pause, as
+   * [settleLater] describes. An answer that fails to encode is reported to the sender's handler
    * once, and the row keeps [UNKNOWN_REPLY] in place of the answer. It is owed like any other row,
    * and its commit runs with the answer unknown.
-   *
-   * The server already has the change, so nothing that the owner's stop can cut off comes before
-   * the write that records the row. The commit and that write both finish when the owner stops, as
-   * [writeSent] describes, and no read of the key's owed rows comes before them, since a read can
-   * wait and a stop would then leave the row Sending. The read after the write stops with the
-   * owner, and a row stored owed settles once a handle next reads the owed rows. A crash or a store
-   * that cannot write still leaves the row Sending, so it sends again, which the idempotency key
-   * makes safe.
    */
   private suspend fun delivered(
     head: OutboxEntry<E>,
@@ -694,10 +721,8 @@ internal class RealOutbox<E>(
     sentAt: Instant,
     owedAt: Instant,
   ) {
-    val handle = attached.load()
-    var retry = false
-    // The key's mark answers this without a read, which waits until the row's own write is done
-    if (handle != null && handle.ready && head.key !in owedKeys.load()) {
+    val handle = liveHandle(head.key)
+    if (handle != null) {
       val committed =
         withContext(NonCancellable) {
           val committed = commit(handle, head, delivery, sentAt, expected = OutboxStatus.Sending)
@@ -721,7 +746,6 @@ internal class RealOutbox<E>(
       if (committed) {
         return
       }
-      retry = true
     }
     val encoded = runCatching { encodeReply(head.id, delivery) }
     encoded.exceptionOrNull()?.let(onFailure)
@@ -732,15 +756,12 @@ internal class RealOutbox<E>(
         sentAt = owedAt,
         reply = encoded.getOrElse { UNKNOWN_REPLY },
       )
-    val sent = writeSent(head, owed)
-    if (sent) {
-      if (retry) {
-        // Not at once, since the commit just failed
-        owedKeys.update { it.adding(head.key) }
+    if (writeSent(head, owed)) {
+      if (handle != null) {
+        // The live commit just failed, so the key settles after a pause and not in the call below
         settleLater(head.key)
-      } else {
-        owe(head.key)
       }
+      owe(head.key)
     }
   }
 
@@ -751,10 +772,10 @@ internal class RealOutbox<E>(
    * stops.
    *
    * A key has at most one retry due at a time. A call while one is due does nothing, and until it
-   * fires, [settledOwed] leaves the key's owed rows alone, whatever drains the key meanwhile, like
-   * an enqueue, a later row's send or a reconnect. None of those can fix the store error that
-   * failed the commit, so only the retry's own drain commits again. A key whose commits keep
-   * failing makes one attempt per pause, however many rows wait on it.
+   * fires, [settleKey] leaves the key's owed rows alone, whatever drains the key meanwhile, like an
+   * enqueue, a later row's send or a reconnect. None of those can fix the store error that failed
+   * the commit, so only the retry's own drain commits again. A key whose commits keep failing makes
+   * one attempt per pause, however many rows wait on it.
    */
   private fun settleLater(key: String) {
     while (true) {
@@ -788,43 +809,28 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Whether [key] may hold a row owed to the handle. It cannot once a ready handle has read the
-   * owed rows and [key] is not marked, which is also when [settledOwed] reads nothing.
+   * The handle when it can take the outcome of a send on [key] at once: it has read the owed rows,
+   * and no row on [key] is known to be owed, so nothing older has to settle first. Null means [key]
+   * may hold an owed row. The mark in [owedKeys] answers that without a read.
    */
-  private fun mayHoldOwed(key: String): Boolean =
-    attached.load()?.ready != true || key in owedKeys.load()
+  private fun liveHandle(key: String): Attached<E>? =
+    attached.load()?.takeIf { it.ready && key !in owedKeys.load() }
 
   /** The latest send time among [key]'s owed Sent rows, or null when it holds none. */
   private suspend fun latestOwedSend(key: String): Instant? =
     store.owed(key).filter { it.status == OutboxStatus.Sent }.mapNotNull { it.sentAt }.maxOrNull()
 
   /**
-   * Writes [sent] over the Sending [head] and settles the handles that follow it. Returns whether
-   * it wrote. It does not when something else moved the row, like a clear.
-   *
-   * The server already has the change, so the write is not cut off when the owner stops. It runs as
-   * a step on the row's key, as [onRow] describes. The owner's stop cancels a step that has not
-   * started, also for a caller that waits in NonCancellable, and the row would stay Sending. So
-   * when the step ends in a cancellation, the drain makes the write itself. That is safe off the
-   * row's key and after a step that did write: [retry] and [discard] leave a Sending row as it is,
-   * the store checks the status in the write, and a handle keeps the first outcome it settled with.
+   * Writes [sent] over the Sending [head] and settles the handles that follow it, as [endAttempt]
+   * runs it. Returns whether it wrote. It does not when something else moved the row, like a clear.
    */
   private suspend fun writeSent(head: OutboxEntry<E>, sent: OutboxEntry<E>): Boolean =
-    withContext(NonCancellable) {
-      val write: suspend () -> Boolean = {
-        val written = store.update(sent, expected = OutboxStatus.Sending)
-        if (written) {
-          settleFollowers(head.id, OperationState.Succeeded)
-        }
-        written
+    endAttempt(head.id) {
+      val written = store.update(sent, expected = OutboxStatus.Sending)
+      if (written) {
+        settleFollowers(head.id, OperationState.Succeeded)
       }
-      try {
-        // The step runs in the owner's scope, so once it starts it must not be cut off either
-        onRow(head.id) { withContext(NonCancellable) { write() } }
-      } catch (e: CancellationException) {
-        // The step did not finish, like when the owner stopped before it started
-        write()
-      }
+      written
     }
 
   /** Row [id]'s answer [delivery] as the text the row keeps, or null for an answer of nothing. */
@@ -846,9 +852,7 @@ internal class RealOutbox<E>(
    */
   private suspend fun owe(key: String) {
     owedKeys.update { it.adding(key) }
-    if (attached.load() != null) {
-      settledOwed(key)
-    }
+    settleKey(key)
   }
 
   /**
@@ -874,55 +878,46 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Settles [key]'s rows owed to the handle in the order [inSendOrder] gives, and returns whether
-   * none is left. It does nothing without a handle, or when no row on [key] is known to be owed. A
-   * sent row is committed with its stored answer and then marked committed. A failed row is marked
-   * reverted and then reverted, at most once, on its row key. It reads only [key]'s owed rows.
+   * Settles [key]'s rows owed to the handle in the order [inSendOrder] gives. It does nothing
+   * without a handle, when no row on [key] is known to be owed, or while a commit retry is due, as
+   * [settleLater] describes. A sent row is committed with its stored answer and then marked
+   * committed. A failed row is marked reverted and then reverted, at most once, on its row key. It
+   * reads only [key]'s owed rows.
    *
-   * It runs on [key]'s drain lane, so no two settles of a key overlap. A store read that throws is
-   * reported to the sender's handler, and so is a row write that throws, like the one that marks a
-   * row committed. A commit that throws was reported to the handle's handler. Each of these stops
-   * the key there and keeps it marked, so later rows wait, and the key settles again after a pause,
-   * as [settleLater] describes.
+   * It runs on [key]'s drain lane, so no two settles of a key overlap, and no row on [key] becomes
+   * owed while it runs. The key's mark goes once every row has settled. A store call that throws is
+   * reported to the sender's handler, and a commit that throws was reported to the handle's
+   * handler. Each stops the key there and leaves it marked, so later rows wait, and the key settles
+   * again after a pause, as [settleLater] describes.
    */
-  private suspend fun settledOwed(key: String): Boolean {
-    val handle = attached.load() ?: return true
-    if (key !in owedKeys.load()) {
-      return true
+  private suspend fun settleKey(key: String) {
+    val handle = attached.load() ?: return
+    if (key !in owedKeys.load() || key in retryDue.load()) {
+      return
     }
-    // A retry is due, and only its own drain commits again, as settleLater describes
-    if (key in retryDue.load()) {
-      return false
-    }
-    // A store may not check for cancellation, and a stopped owner settles no further row
-    currentCoroutineContext().ensureActive()
-    // Before the read, so a row marked owed while this reads is settled by the next drain
-    owedKeys.update { it.removing(key) }
-    try {
-      for (row in inSendOrder(store.owed(key))) {
-        if (!settleOwed(handle, row)) {
-          owedKeys.update { it.adding(key) }
-          settleLater(key)
-          return false
-        }
+    val settled = runCatchingCancellable {
+      // A store may not check for cancellation, and a stopped owner reads and settles no
+      // further row
+      currentCoroutineContext().ensureActive()
+      inSendOrder(store.owed(key)).all { row ->
+        currentCoroutineContext().ensureActive()
+        settleOwed(handle, row)
       }
+    }
+      .onFailure(onFailure)
+      .getOrDefault(false)
+    if (settled) {
+      owedKeys.update { it.removing(key) }
       owedPauses.update { it.removing(key) }
-      return true
-    } catch (e: CancellationException) {
-      owedKeys.update { it.adding(key) }
-      throw e
-    } catch (e: Exception) {
-      owedKeys.update { it.adding(key) }
-      onFailure(e)
+    } else {
       settleLater(key)
-      return false
     }
   }
 
   /**
-   * Settles one [row] owed to [handle], as [settledOwed] describes, and returns false when its
-   * commit threw, so the row stays owed. A sent row drops its stored answer in the write that marks
-   * it committed. If that write fails, the row keeps the answer for the next commit.
+   * Settles one [row] owed to [handle], as [settleKey] describes, and returns false when its commit
+   * threw, so the row stays owed. A sent row drops its stored answer in the write that marks it
+   * committed. If that write fails, the row keeps the answer for the next commit.
    */
   private suspend fun settleOwed(handle: Attached<E>, row: OutboxEntry<E>): Boolean =
     withContext(NonCancellable) {
@@ -938,9 +933,9 @@ internal class RealOutbox<E>(
         handle.owner.committed(row.id)
       } else if (row.status is OutboxStatus.Failed && !row.reverted) {
         onRow(row.id) {
-          // The step runs in the owner's scope, which the NonCancellable above does not cover. The
-          // row marked reverted promises an undo attempt, so the write and that attempt finish
-          // together even if the owner stops meanwhile.
+          // The row marked reverted promises an undo attempt, so both finish even if the owner
+          // stops. The NonCancellable above does not cover this step, which runs in the owner's
+          // scope.
           withContext(NonCancellable) {
             // The row may have been retried or discarded since the read, and then this writes
             // nothing
@@ -1001,52 +996,43 @@ internal class RealOutbox<E>(
    * [PermanentFailure] whose cause is [failure], so a caller can branch on its type. The sender's
    * handler hears [failure] once.
    *
-   * With a handle that is ready and no older row on the key still owed, the optimistic change is
-   * then undone, at most once per row, and a throw from the revert goes to the handle's handler.
-   * Otherwise the row is written not reverted and owed, so the handle reverts it once it attaches.
-   *
-   * The owner's stop can come before the row's step starts, like while the key's owed rows are
-   * read. The row then stays Sending and the next owner sends it again, as after any send that
-   * ended without an answer.
+   * A [liveHandle] then undoes the optimistic change, at most once per row, and a throw from the
+   * revert goes to the handle's handler. Otherwise the row is written not reverted and owed, and
+   * the handle reverts it in its place among the key's owed rows, as [settleKey] orders them.
    */
   private suspend fun fail(head: OutboxEntry<E>, failure: Throwable, attempts: Int) {
     val status = OutboxStatus.Failed(failure.toString())
     val outcome = OperationState.Failed(failure as? PermanentFailure ?: PermanentFailure(failure))
-    val handle = attached.load()
-    val reverting = handle != null && handle.ready && settledOwed(head.key)
-    // The row marked reverted promises an undo attempt, so the write and that attempt finish
-    // together even if the owner stops meanwhile. A retry of the row waits for both.
+    val handle = liveHandle(head.key)
+    // One step, so the row marked reverted gets its undo attempt, and a retry of the row waits for
+    // both
     val failed =
-      withContext(NonCancellable) {
-        onRow(head.id) {
-          withContext(NonCancellable) {
-            // Before the write, so a handle that reads the Failed row before it settles gets this
-            remember(head.id, FailedRow(status, outcome))
-            val reverted = head.reverted || reverting
-            val failed =
-              store.update(
-                head.copy(status = status, attempts = attempts, reverted = reverted),
-                expected = OutboxStatus.Sending,
-              )
-            if (failed) {
-              settleFollowers(head.id, outcome)
-              try {
-                if (reverting && !head.reverted) {
-                  runCatchingCancellable { handle.owner.revert(head.payload, head.id) }
-                    .onFailure(handle.onFailure)
-                }
-              } finally {
-                onFailure(failure)
-              }
-            } else {
-              forget(head.id)
-            }
-            failed
+      endAttempt(head.id) {
+        // Before the write, so a handle that reads the Failed row before it settles gets this
+        remember(head.id, FailedRow(status, outcome))
+        val failed =
+          store.update(
+            head.copy(
+              status = status,
+              attempts = attempts,
+              reverted = head.reverted || handle != null,
+            ),
+            expected = OutboxStatus.Sending,
+          )
+        if (failed) {
+          settleFollowers(head.id, outcome)
+          if (handle != null && !head.reverted) {
+            runCatchingCancellable { handle.owner.revert(head.payload, head.id) }
+              .onFailure(handle.onFailure)
           }
+          onFailure(failure)
+        } else {
+          forget(head.id)
         }
+        failed
       }
     // After the write, so the read of the key's owed rows stops when the owner stops
-    if (failed && !reverting && !head.reverted) {
+    if (failed && handle == null && !head.reverted) {
       owe(head.key)
     }
   }
@@ -1100,6 +1086,34 @@ internal class RealOutbox<E>(
     }
     return result.await().getOrThrow()
   }
+
+  /**
+   * Runs [block], the write that ends the attempt of the Sending row [id], and returns what it
+   * returned. The owner's stop does not cut it off.
+   *
+   * While the owner lives, [block] runs as a step on the row's key, as [onRow] describes. So a
+   * [retry] never starts between the write and the settle of the row's handles, and one that read
+   * the row earlier never writes its old copy over this write. The owner's stop cancels a step that
+   * has not started, and the drain then runs [block] itself. That is safe because the drain owns a
+   * Sending row: [retry] and [discard] leave it as it is, no command starts after the stop, and a
+   * clear that discards the row fails the status check in the write.
+   */
+  private suspend fun <R> endAttempt(id: EntryId, block: suspend () -> R): R =
+    withContext(NonCancellable) {
+      var started = false
+      try {
+        onRow(id) {
+          started = true
+          // The step runs in the owner's scope, which the NonCancellable above does not cover
+          withContext(NonCancellable) { block() }
+        }
+      } catch (e: CancellationException) {
+        if (started) {
+          throw e
+        }
+        block()
+      }
+    }
 
   /**
    * Wakes [key]'s drain once the backoff of its head row [id] ends: at [retryAt], or after the
@@ -1335,7 +1349,12 @@ internal class RealOutbox<E>(
    * handle Cancelled. The handle reads the row once the insert returns.
    */
   private suspend fun recheckOnce(id: EntryId) {
-    if (id !in follows.load().byRow || id in insertingRows.load()) {
+    if (id !in follows.load().byRow) {
+      // No handle waits for the row any more, so its pause goes too
+      recheckedAll(id)
+      return
+    }
+    if (id in insertingRows.load()) {
       return
     }
     val state = readState(id)

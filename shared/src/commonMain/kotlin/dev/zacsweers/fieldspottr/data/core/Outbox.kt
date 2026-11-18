@@ -200,9 +200,9 @@ interface Outbox<E> {
    * will have. Without a [key], every row shares one order.
    *
    * If apply throws, nothing is inserted and the handle fails. If the insert throws, the handle's
-   * `revert` undoes the change and the handle fails. Once apply returns, the insert finishes even
-   * if the outbox's scope stops. [OutboxOperation.stored] settles once the row is in, before any
-   * send.
+   * `revert` undoes the change and the handle fails. Once apply starts, it and the insert finish
+   * even if the outbox's scope stops. [OutboxOperation.stored] settles once the row is in, before
+   * any send.
    */
   fun enqueue(payload: E, key: String? = null): OutboxOperation
 

@@ -17,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
 import dev.zacsweers.fieldspottr.data.core.impl.timersHeld
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
@@ -30,6 +31,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
+import kotlin.concurrent.Volatile
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.time.Duration
@@ -39,11 +41,15 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -1587,8 +1593,132 @@ class OutboxTest {
       assertThat(outbox.timersHeld).isEqualTo(0)
     }
 
+  @Test
+  fun `a network drop that ends before the watcher sees it still sends the row`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val online = DropOnce(MutableStateFlow(true))
+    val failures = TestFailures()
+    DataScope.Factory(onFailure = failures, online = online, clock = testClock())
+      .create(backgroundScope, setOf(Rows.sender(store = rows, send = send)))
+    runCurrent()
+
+    // The drain this row starts reads the network as down, and no collector ever sees the drop
+    online.drop = true
+    rows.insertNew("k", "a")
+    runCurrent()
+
+    assertThat(send.sent).containsExactly("a")
+    failures.assertNone()
+  }
+
+  @Test
+  fun `a retry that read the row before a failed send keeps the newer attempt count`() = runTest {
+    send.failure = { _, _ -> IllegalStateException("Busy") }
+    val rows = inMemoryOutboxStore<String>()
+    val a = rows.insertNew("k", "a")
+    val requeueReached = CompletableDeferred<Unit>()
+    val finishRequeue = CompletableDeferred<Unit>()
+    // Pauses the retry's write, after the retry read the row as backing off
+    val slowRequeue =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          val requeue =
+            entry.status == OutboxStatus.Queued &&
+              entry.retryAt == null &&
+              expected == OutboxStatus.Queued
+          if (requeue && requeueReached.complete(Unit)) {
+            finishRequeue.await()
+          }
+          return rows.update(entry, expected)
+        }
+      }
+    val data = dataOver(slowRequeue, retry = RetryPolicy(maxAttempts = 5) { 5.seconds })
+    val outbox = data.outbox(Rows, revert = send::revert)
+    runCurrent()
+    // The first attempt failed, so the row backs off
+    assertThat(send.attempts("a")).isEqualTo(1)
+
+    outbox.retry(a)
+    requeueReached.await()
+    // The backoff ends, and the drain sends the row again while the retry's write waits
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    assertThat(send.attempts("a")).isEqualTo(2)
+    finishRequeue.complete(Unit)
+    runCurrent()
+
+    // The retry's copy of the row, read before the second attempt, did not replace its count
+    assertThat(rows.entry(a).first()?.attempts).isEqualTo(send.attempts("a"))
+  }
+
+  @Test
+  fun `discarding a head the drain is about to wait on sends the next row now`() = runTest {
+    val clock = testClock(START)
+    val rows = inMemoryOutboxStore<String>()
+    val head = rows.insertNew("k", "a")
+    rows.insertNew("k", "b")
+    // The head backs off for an hour and has no timer yet, as after a restart
+    val waiting = checkNotNull(rows.entry(head).first()).copy(retryAt = START + 1.hours)
+    rows.update(waiting, expected = OutboxStatus.Queued)
+    val attaching = CompletableDeferred<Unit>()
+    val lookupReached = CompletableDeferred<Unit>()
+    val finishLookup = CompletableDeferred<Unit>()
+    val slow =
+      object : OutboxStore<String> by rows {
+        // The watcher hears of the first heads only, as while the store fails to list them
+        override fun heads(): Flow<List<OutboxEntry<String>>> = flow {
+          emit(rows.heads().first())
+          awaitCancellation()
+        }
+
+        // The handle stays not ready, so the drain reads the key's owed rows after the head
+        override suspend fun owed(): List<OutboxEntry<String>> {
+          attaching.await()
+          return rows.owed()
+        }
+
+        override suspend fun owed(key: String): List<OutboxEntry<String>> {
+          lookupReached.complete(Unit)
+          finishLookup.await()
+          return rows.owed(key)
+        }
+      }
+    val outbox = dataOver(slow, clock = clock).outbox(Rows, revert = send::revert)
+    // The drain read the backing-off row as the head and has not started its timer
+    lookupReached.await()
+
+    val discarded = outbox.discard(head)
+    runCurrent()
+    finishLookup.complete(Unit)
+    // No time passes and the watcher is silent, so only the discard can wake the key
+    runCurrent()
+
+    discarded.assertSucceeded()
+    assertThat(send.reverted).containsExactly("a")
+    assertThat(send.sent).containsExactly("b")
+    attaching.complete(Unit)
+  }
+
   /** A rejection that says when to try again, like a 429 with a `Retry-After` header. */
   private class RateLimited(val retryAfter: Duration) : Exception("429 Too Many Requests")
+
+  /**
+   * [state] with one read of [value] that reports the network down, as a drain reads it during a
+   * drop that ends before any collector runs. Collectors follow [state] alone.
+   */
+  @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+  private class DropOnce(private val state: StateFlow<Boolean>) : StateFlow<Boolean> by state {
+    @Volatile var drop = false
+
+    override val value: Boolean
+      get() =
+        if (drop) {
+          drop = false
+          false
+        } else {
+          state.value
+        }
+  }
 
   private companion object {
     val START = Instant.parse("2026-06-10T12:00:00Z")

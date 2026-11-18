@@ -17,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import kotlin.concurrent.Volatile
 import kotlin.test.Test
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -25,6 +26,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -39,7 +42,7 @@ import kotlinx.serialization.Serializable
  * Reads of the rows a key owes its handle that throw or never return, and an owner that stops
  * around them. A read that throws must not leave a row sent without a send time after the key's
  * owed rows, and a read that waits must not keep the owner from stopping. An owner's stop must not
- * leave a row Sending once its send returned, or skip a revert once its row is marked reverted.
+ * leave a row Sending once its send has ended, or skip a revert once its row is marked reverted.
  */
 class OutboxOwedReadTest {
   @Serializable data class Flag(val on: Boolean)
@@ -56,6 +59,8 @@ class OutboxOwedReadTest {
   private val accepted = mutableListOf<EntryId>()
   private var server: Boolean? = null
   private val truth = QueryStore.inMemory(Fetched(false, START - 1.hours))
+  // Runs after each write the flag store's truth takes
+  private var afterTruthWrite: (() -> Unit)? = null
 
   /** A data scope over [ownerJob] whose clock stands still at [START], so sends tie. */
   private fun TestScope.dataScope(sender: OutboxSender<*>): DataScope =
@@ -87,6 +92,7 @@ class OutboxOwedReadTest {
             error("Disk full")
           }
           truth.writeFetched(fetched, keepsStored)
+          afterTruthWrite?.invoke()
         },
         clear = truth::clearFetched,
       )
@@ -432,6 +438,150 @@ class OutboxOwedReadTest {
       failures.assertNone()
     } finally {
       gate.complete(Unit)
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a row that failed for good is recorded when the owner stops before its write`() = runTest {
+    val attempts = mutableListOf<EntryId>()
+    val reverted = mutableListOf<String>()
+    val revert: suspend (String, EntryId) -> Unit = { payload, _ -> reverted += payload }
+    // The engine asks the policy between the send's end and the row's write, so the stop lands
+    // there
+    val stopThenFail =
+      object : RetryPolicy {
+        override fun delayAfter(attempt: Int, failure: Throwable): Duration? {
+          ownerJob.cancel()
+          return null
+        }
+      }
+    val sender =
+      Rows.sender(store = textRows, retry = stopThenFail) { payload, id ->
+        attempts += id
+        error("Refused $payload")
+      }
+    try {
+      val outbox = dataScope(sender).outbox(Rows, revert = revert)
+      // The handle reads the owed rows, so it is ready
+      runCurrent()
+      val handle = outbox.enqueue("a", key = "k")
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      val saved = textRows.row(handle.id)
+      assertThat(saved.status).isInstanceOf<OutboxStatus.Failed>()
+      assertThat(saved.reverted).isTrue()
+      assertThat(reverted).containsExactly("a")
+      assertThat(failures.take().map { it.message }).containsExactly("Refused a")
+
+      // The next owner neither sends the row again nor reverts it again
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+        .outbox(Rows, revert = revert)
+      runCurrent()
+
+      assertThat(attempts).containsExactly(handle.id)
+      assertThat(reverted).containsExactly("a")
+      failures.assertNone()
+    } finally {
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a row that will retry is recorded when the owner stops before its write`() = runTest {
+    // The engine asks the policy between the send's end and the row's write, so the stop lands
+    // there
+    val stopThenWait =
+      object : RetryPolicy {
+        override fun delayAfter(attempt: Int, failure: Throwable): Duration? {
+          // The write checks for cancellation first, as a store on another dispatcher does
+          textRows.nextUpdate = { currentCoroutineContext().ensureActive() }
+          ownerJob.cancel()
+          return 5.seconds
+        }
+      }
+    val sender =
+      Rows.sender(store = textRows, retry = stopThenWait) { payload, _ -> error("Busy $payload") }
+    try {
+      val id = textRows.insertNew("k", "a")
+      dataScope(sender)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      val saved = textRows.row(id)
+      assertThat(saved.status).isEqualTo(OutboxStatus.Queued)
+      assertThat(saved.attempts).isEqualTo(1)
+      assertThat(saved.retryAt).isEqualTo(START + 5.seconds)
+      failures.assertNone()
+    } finally {
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stopped owner commits no further owed row`() = runTest {
+    try {
+      // One failed write leaves the first change owed, and the second waits behind it
+      val store = flags(failingWrites = 1)
+      // The handle reads the owed rows, so it is ready
+      runCurrent()
+      val first = store.mutate(Flag(false))
+      runCurrent()
+      val second = store.mutate(Flag(false))
+      runCurrent()
+      assertThat(flagRows.owed().map { it.id }).containsExactly(first.id, second.id)
+      assertThat(own.take().map { it.message }).containsExactly("Disk full")
+
+      // The commit retry comes due, and the owner stops during the first row's commit
+      afterTruthWrite = { ownerJob.cancel() }
+      advanceTimeBy(1.seconds)
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      assertThat(flagRows.owed().map { it.id }).containsExactly(second.id)
+      failures.assertNone()
+    } finally {
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stop during an apply still stores the row`() = runTest {
+    val send = TestSend<String>()
+    val sender = Rows.sender(store = textRows, send = send)
+    val applied = mutableListOf<String>()
+    try {
+      val outbox =
+        dataScope(sender)
+          .outbox(
+            Rows,
+            apply = { payload, _ ->
+              applied += payload
+              // The owner stops once the change is made. The apply then checks for cancellation,
+              // as a write on another dispatcher does when it returns.
+              ownerJob.cancel()
+              currentCoroutineContext().ensureActive()
+            },
+          )
+      runCurrent()
+      val handle = outbox.enqueue("a", key = "k")
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      assertThat(applied).containsExactly("a")
+      // The change is made, so its row is stored for the next owner to send
+      assertThat(textRows.row(handle.id).status).isEqualTo(OutboxStatus.Queued)
+      assertThat(send.attempts).isEmpty()
+
+      DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = FROZEN)
+        .create(backgroundScope, setOf(sender))
+      runCurrent()
+
+      assertThat(send.sent).containsExactly("a")
+      failures.assertNone()
+    } finally {
       ownerJob.cancel()
     }
   }
