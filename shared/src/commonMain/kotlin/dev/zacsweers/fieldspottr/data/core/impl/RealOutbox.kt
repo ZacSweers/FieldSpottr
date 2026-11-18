@@ -32,6 +32,7 @@ import kotlin.concurrent.atomics.updateAndFetch
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -676,7 +677,7 @@ internal class RealOutbox<E>(
         head.copy(
           status = OutboxStatus.Sent,
           committed = false,
-          sentAt = sentAt,
+          sentAt = afterOwed(head.key, sentAt),
           reply = encoded.getOrElse { UNKNOWN_REPLY },
         ),
       )
@@ -735,6 +736,27 @@ internal class RealOutbox<E>(
   }
 
   /**
+   * The send time to record on a row that will be owed on [key]: [sentAt], or one millisecond after
+   * the latest send time among [key]'s owed Sent rows when [sentAt] is not later than that.
+   *
+   * [inSendOrder] commits owed rows by send time, and this row sent after every one of them. Two
+   * sends can read the same time, and the clock can be set back between them. One millisecond is
+   * the precision the stores keep.
+   *
+   * A read that throws is reported to the sender's handler, and the row keeps [sentAt].
+   */
+  private suspend fun afterOwed(key: String, sentAt: Instant): Instant {
+    val latest =
+      runCatchingCancellable { store.owed(key) }
+        .onFailure(onFailure)
+        .getOrDefault(emptyList())
+        .filter { it.status == OutboxStatus.Sent }
+        .mapNotNull { it.sentAt }
+        .maxOrNull() ?: return sentAt
+    return maxOf(sentAt, latest + 1.milliseconds)
+  }
+
+  /**
    * Writes [sent] over the Sending [head] on the row's key and settles the handles that follow it.
    * Returns whether it wrote. It does not when something else moved the row, like a clear.
    */
@@ -773,9 +795,9 @@ internal class RealOutbox<E>(
 
   /**
    * [owed], one key's owed rows oldest first, with the Sent rows in the order they sent: by
-   * [OutboxEntry.sentAt], and in queue order when two sent at the same time. Failed rows keep their
-   * places. A retried older row can send after a newer one, and the server then holds the older
-   * row's change, so its commit comes last too.
+   * [OutboxEntry.sentAt], and in queue order when two share a time, like rows stored by an older
+   * app version. Failed rows keep their places. A retried older row can send after a newer one, and
+   * the server then holds the older row's change, so its commit comes last too.
    */
   private fun inSendOrder(owed: List<OutboxEntry<E>>): List<OutboxEntry<E>> {
     val sent = owed.filter { it.status == OutboxStatus.Sent }

@@ -69,7 +69,11 @@ data class OutboxEntry<E>(
    * the outbox stays uncommitted until a handle attaches, so the store keeps it until then.
    */
   val committed: Boolean = false,
-  /** When the send finished. Set on Sent rows only. A commit reads it to tell older fetches. */
+  /**
+   * When the send finished. Set on Sent rows only. A commit reads it to tell older fetches. A row
+   * whose commit is owed gets a time later than every owed Sent row on its key, so owed rows commit
+   * in the order they sent.
+   */
   val sentAt: Instant? = null,
   /**
    * The server's answer to a Sent row that is not committed yet, encoded by the outbox's reply

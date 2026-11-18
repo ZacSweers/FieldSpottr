@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.DataScope
@@ -15,17 +16,23 @@ import dev.zacsweers.fieldspottr.data.core.InMemoryQueryStore
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
+import dev.zacsweers.fieldspottr.data.core.PermanentFailure
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.exchangingSender
 import dev.zacsweers.fieldspottr.data.core.replying
 import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +57,8 @@ class OptimisticQueryStoreRestartTest {
 
   @Serializable data class Add(val tag: String)
 
+  @Serializable data class Flag(val on: Boolean)
+
   private val send = TestSend<Add>()
   // Sends run on the owner's dispatcher, so the record is safe to write from any thread
   private val sentIds = CopyOnWriteArrayList<EntryId>()
@@ -69,14 +78,17 @@ class OptimisticQueryStoreRestartTest {
     send(add, id)
   }
 
-  /** A new factory, like a new process: its own name claims, the same rows and network state. */
-  private fun TestScope.process(): DataScope.Factory =
+  /**
+   * A new factory, like a new process: its own name claims, the same rows and network state. It
+   * reads [clock], which follows virtual time by default.
+   */
+  private fun TestScope.process(clock: Clock = testClock(START)): DataScope.Factory =
     DataScope.Factory(
       onFailure = TestFailures(),
       onFetchFailure = TestFailures(),
       online = online,
       stores = stores(),
-      clock = testClock(START),
+      clock = clock,
     )
 
   /** A scope that ends with the test, or earlier when the test cancels it. */
@@ -165,7 +177,8 @@ class OptimisticQueryStoreRestartTest {
     )
     rows.entries().first { it.isEmpty() }
 
-    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START))
+    // c sent while b was owed at the same instant, so c's send time is one millisecond later
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START + 1.milliseconds))
     for (id in ids) {
       val committed = checkNotNull(rows.entry(id).first())
       assertThat(committed.committed).isTrue()
@@ -200,8 +213,9 @@ class OptimisticQueryStoreRestartTest {
     )
     reopened.entries().first { it.isEmpty() }
 
-    // The newest answer replaces the truth, and nothing was sent again
-    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START))
+    // The newest answer replaces the truth, and nothing was sent again. c sent while b was owed at
+    // the same instant, so c's send time is one millisecond later.
+    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START + 1.milliseconds))
     assertThat(replies.value).isEqualTo(2)
     for (id in ids) {
       val committed = checkNotNull(reopened.entry(id).first())
@@ -264,6 +278,67 @@ class OptimisticQueryStoreRestartTest {
     assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "b"), START))
   }
 
+  @Test
+  fun `owed rows commit in the order they sent after a reopen`() = runTest {
+    online.value = true
+    val server = MutableStateFlow<Boolean?>(null)
+    val rejected = AtomicBoolean(false)
+    // Rejects the first change that turns the flag on, so a retry sends it after a newer change
+    val flagSender = Flags.sender { flag, _ ->
+      if (flag.on && rejected.compareAndSet(false, true)) {
+        throw PermanentFailure("Rejected")
+      }
+      server.value = flag.on
+    }
+    val flagTruth = QueryStore.inMemory(Fetched(false, START - 1.hours))
+    // Every commit fails before the reopen, so each sent row stays owed
+    val diskFull =
+      QueryStore.of(
+        flagTruth.data,
+        write = { _, _ -> error("Disk full") },
+        clear = flagTruth::clearFetched,
+      )
+    // The clock stands still while failed commits wait out their pauses, so both rows send at START
+    val frozen =
+      object : Clock {
+        override fun now(): Instant = START
+      }
+    val first = owner()
+    val before =
+      process(frozen)
+        .create(first, setOf(flagSender))
+        .optimisticStore(Flags, base = diskFull, apply = { _, flag -> flag.on })
+    val older = before.mutate(Flag(true))
+    older.awaitFailed<PermanentFailure>()
+    val newer = before.mutate(Flag(false))
+    newer.awaitSucceeded()
+    before.retry(older.id).awaitSucceeded()
+    val owed = stores().open(Flags.name, Flag.serializer()).owed().associateBy { it.id }
+    val olderRow = owed.getValue(older.id)
+    val newerRow = owed.getValue(newer.id)
+    for (row in listOf(olderRow, newerRow)) {
+      assertThat(row.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(row.committed).isFalse()
+    }
+    assertThat(newerRow.sentAt).isEqualTo(START)
+    // Recorded after the owed newer row, so it commits last
+    assertThat(olderRow.sentAt).isEqualTo(START + 1.milliseconds)
+    stop(first)
+
+    temporaryDatabase.reopen()
+
+    val reopened = stores().open(Flags.name, Flag.serializer())
+    val after =
+      process()
+        .create(owner(), setOf(flagSender))
+        .optimisticStore(Flags, base = flagTruth, apply = { _, flag -> flag.on })
+    reopened.entries().first { it.isEmpty() }
+
+    assertThat(server.value).isEqualTo(true)
+    assertThat(flagTruth.data.value?.value).isEqualTo(true)
+    assertThat(after.data.first()?.value).isEqualTo(true)
+  }
+
   /** Stores over whatever database [temporaryDatabase] has open when each call runs. */
   private fun stores(): SqlDelightOutboxStores =
     SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
@@ -287,6 +362,8 @@ class OptimisticQueryStoreRestartTest {
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 private val Tags = OutboxKey<OptimisticQueryStoreRestartTest.Add>("tags")
+
+private val Flags = OutboxKey<OptimisticQueryStoreRestartTest.Flag>("flags")
 
 /** An outbox whose server answers each change with the tag list it holds. */
 private val ReplyingTags =

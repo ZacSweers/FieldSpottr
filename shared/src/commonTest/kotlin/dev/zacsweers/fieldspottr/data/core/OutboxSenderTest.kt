@@ -116,7 +116,9 @@ class OutboxSenderTest {
       )
     val sent = rows.entries().first { list -> list.all { it.status == OutboxStatus.Sent } }
     assertThat(sent.map { it.reply }).containsExactly(null, """["a","b","C"]""", null)
-    assertThat(sent.map { it.sentAt }).containsExactly(START, START, START)
+    // The clock stands still, so each row records 1 ms after the owed rows that sent before it
+    assertThat(sent.map { it.sentAt })
+      .containsExactly(START, START + 1.milliseconds, START + 2.milliseconds)
 
     val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
     val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)

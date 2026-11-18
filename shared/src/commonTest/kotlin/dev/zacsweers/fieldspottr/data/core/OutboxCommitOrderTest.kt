@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
@@ -17,6 +18,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -31,11 +33,60 @@ class OutboxCommitOrderTest {
 
   @Test
   fun `owed rows commit in the order they sent`() = runTest {
+    val flags = FlagStore(this)
+    runCurrent()
+
+    val older = flags.store.mutate(Flag(true))
+    older.awaitFailed<PermanentFailure>()
+    flags.store.mutate(Flag(false)).awaitSucceeded()
+    // The older change sends after the newer one, while the newer one's commit waits
+    advanceTimeBy(500.milliseconds)
+    flags.store.retry(older.id).awaitSucceeded()
+    advanceTimeBy(2.seconds)
+    runCurrent()
+
+    flags.assertEndsOn()
+  }
+
+  @Test
+  fun `owed rows that sent at the same clock time commit in the order they sent`() = runTest {
+    val flags = FlagStore(this)
+    runCurrent()
+
+    val older = flags.store.mutate(Flag(true))
+    older.awaitFailed<PermanentFailure>()
+    val newer = flags.store.mutate(Flag(false))
+    newer.awaitSucceeded()
+    // The older change sends after the newer one at the same clock time
+    flags.store.retry(older.id).awaitSucceeded()
+
+    val rows = flags.data.outboxStore<Flag>(Flags.name).entries().first().associateBy { it.id }
+    val olderRow = rows.getValue(older.id)
+    val newerRow = rows.getValue(newer.id)
+    for (row in listOf(olderRow, newerRow)) {
+      assertThat(row.status).isEqualTo(OutboxStatus.Sent)
+      assertThat(row.committed).isFalse()
+    }
+    assertThat(newerRow.sentAt).isEqualTo(START)
+    // Recorded after the owed newer row, so it commits last
+    assertThat(olderRow.sentAt).isEqualTo(START + 1.milliseconds)
+
+    advanceTimeBy(2.seconds)
+    runCurrent()
+
+    flags.assertEndsOn()
+  }
+
+  /**
+   * An optimistic flag store whose server rejects the first change that turns the flag on, and
+   * whose truth fails its first write, so the commit of the first change that sends is owed.
+   */
+  private class FlagStore(scope: TestScope) {
     var server: Boolean? = null
-    var rejectFirst = true
+    private var rejectFirst = true
     val data =
-      testDataScope(
-        clock = testClock(START),
+      scope.testDataScope(
+        clock = scope.testClock(START),
         senders =
           setOf(
             Flags.sender { flag, _ ->
@@ -48,9 +99,8 @@ class OutboxCommitOrderTest {
           ),
       )
     val truth = QueryStore.inMemory(Fetched(false, START - 1.hours))
-    var writes = 0
-    // The first truth write fails, so the newer change's commit is owed
-    val diskFull =
+    private var writes = 0
+    private val diskFull =
       QueryStore.of(
         truth.data,
         write = { fetched, keepsStored ->
@@ -63,21 +113,17 @@ class OutboxCommitOrderTest {
       )
     val own = TestFailures()
     val store = data.optimisticStore(Flags, base = diskFull, apply = set, onFailure = own)
-    runCurrent()
 
-    val older = store.mutate(Flag(true))
-    older.awaitFailed<PermanentFailure>()
-    store.mutate(Flag(false)).awaitSucceeded()
-    // The older change sends after the newer one, while the newer one's commit waits
-    advanceTimeBy(500.milliseconds)
-    store.retry(older.id).awaitSucceeded()
-    advanceTimeBy(2.seconds)
-    runCurrent()
-
-    assertThat(server).isEqualTo(true)
-    assertThat(truth.data.first()?.value).isEqualTo(true)
-    assertThat(data.outboxStore<Flag>(Flags.name).entries().first()).isEmpty()
-    assertThat(own.take().map { it.message }).containsExactly("Disk full")
+    /**
+     * Checks that the server and the truth both end on, every row settled, and only the one failed
+     * write was reported.
+     */
+    suspend fun assertEndsOn() {
+      assertThat(server).isEqualTo(true)
+      assertThat(truth.data.first()?.value).isEqualTo(true)
+      assertThat(data.outboxStore<Flag>(Flags.name).entries().first()).isEmpty()
+      assertThat(own.take().map { it.message }).containsExactly("Disk full")
+    }
   }
 
   private companion object {
