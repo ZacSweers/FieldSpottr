@@ -469,13 +469,18 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
   /**
    * [state].update that also cancels the expiry timer of each change the update forgot or moved out
-   * of HandedOff. The transform may run more than once, so it must have no side effects.
+   * of HandedOff. The transform may run more than once, so it must have no side effects. An update
+   * that keeps the known map instance, like most new lists, keeps every timer, so it skips the
+   * scan.
    */
   private inline fun edit(transform: (SetState<K, T, M>) -> SetState<K, T, M>): SetState<K, T, M> {
     while (true) {
       val old = state.value
       val new = transform(old)
       if (state.compareAndSet(old, new)) {
+        if (old.known === new.known) {
+          return new
+        }
         for ((change, known) in old.known) {
           val timer = known.expiry ?: continue
           if (new.known[change]?.expiry !== timer) {
