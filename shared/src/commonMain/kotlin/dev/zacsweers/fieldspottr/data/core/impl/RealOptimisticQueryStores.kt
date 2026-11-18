@@ -682,12 +682,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
                 val now = clock.now()
                 edit { it.dropping(change, payload, now) }
                 reportApply(change, e) {
-                  "apply threw for ${payload.mutation} while the store committed it, so the " +
-                    "truth keeps its value and is marked stale"
+                  "apply threw for change ${change.value} while the store committed it, so " +
+                    "the truth keeps its value and is marked stale"
                 }
                 return
               }
-            checkIdempotent(folded, payload.mutation)
+            checkIdempotent(folded, payload.mutation, change)
             folded
           }
         }
@@ -727,14 +727,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Reports [mutation] once if applying it again to [folded], which already holds it, changes the
-   * value. A fetch that overlapped the send, or a resend after a restart, can pass [apply] such a
-   * value, and the store cannot tell. So a change that fails this would show twice. The check costs
-   * one more [apply] per commit, so only the first [IDEMPOTENCE_CHECKS] commits of the set that
-   * fold a change run it. An [apply] that throws here is reported once as a failed check, since the
-   * change is already in the truth.
+   * Reports [mutation], row [change]'s, once if applying it again to [folded], which already holds
+   * it, changes the value. The report names the row id, since a payload can hold private data. A
+   * fetch that overlapped the send, or a resend after a restart, can pass [apply] such a value, and
+   * the store cannot tell. So a change that fails this would show twice. The check costs one more
+   * [apply] per commit, so only the first [IDEMPOTENCE_CHECKS] commits of the set that fold a
+   * change run it. An [apply] that throws here is reported once as a failed check, since the change
+   * is already in the truth.
    */
-  private fun checkIdempotent(folded: Fetched<T>?, mutation: M) {
+  private fun checkIdempotent(folded: Fetched<T>?, mutation: M, change: EntryId) {
     if (reportedApply.load() || idempotenceChecks.fetchAndIncrement() >= IDEMPOTENCE_CHECKS) {
       return
     }
@@ -745,8 +746,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         if (reportedApply.compareAndSet(expectedValue = false, newValue = true)) {
           onFailure(
             IllegalStateException(
-              "apply threw when the store applied $mutation again to check that apply is " +
-                "idempotent. The change is in the truth. Make apply return a value that already " +
+              "apply threw when the store applied change ${change.value} again to check that " +
+                "apply is idempotent. The change is in the truth. Make apply return a value that already " +
                 "holds the change unchanged.",
               e,
             )
@@ -760,11 +761,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     if (reportedApply.compareAndSet(expectedValue = false, newValue = true)) {
       onFailure(
         IllegalStateException(
-          "apply is not idempotent for $mutation: applied to a value that already holds the " +
-            "change, it changed the value again. A store built with send needs a change that is " +
-            "safe to apply again, so make apply return such a value unchanged, like an append " +
-            "that skips an item already there. Or build the store with exchange, where the " +
-            "value is an estimate until the server's answer corrects it."
+          "apply is not idempotent for change ${change.value}: applied to a value that " +
+            "already holds the change, it changed the value again. A store built with send " +
+            "needs a change that is safe to apply again, so make apply return such a value " +
+            "unchanged, like an append that skips an item already there. Or build the store " +
+            "with exchange, where the value is an estimate until the server's answer corrects it."
         )
       )
     }
@@ -961,7 +962,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     try {
       applied(stored, mutation)
     } catch (e: Exception) {
-      reportApply(change, e) { "apply threw for $mutation, so the store leaves the change out" }
+      reportApply(change, e) {
+        "apply threw for change ${change.value}, so the store leaves the change out"
+      }
       stored
     }
 

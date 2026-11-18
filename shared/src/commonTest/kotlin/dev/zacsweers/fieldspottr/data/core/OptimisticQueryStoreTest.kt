@@ -626,13 +626,14 @@ class OptimisticQueryStoreTest {
   @Test
   fun `an apply that is not idempotent is reported once and its changes still land`() = runTest {
     val (store, query) = tags(idempotent = false)
-    store.mutate(Add("b")).awaitSucceeded()
+    val first = store.mutate(Add("b"))
+    first.awaitSucceeded()
     store.mutate(Add("c")).awaitSucceeded()
 
     assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "b", "c"))
     assertOnlyIdempotencyReport()
-    // The first commit told the owner which change to look at
-    assertThat(data.actionFailures.all.single()).messageContains("Add(tag=b)")
+    // The first commit told the owner which change to look at, by its row id
+    assertThat(data.actionFailures.all.single()).messageContains(first.id.value)
   }
 
   @Test
