@@ -17,6 +17,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -57,6 +58,23 @@ class OptimisticQueryStoreReplyTest {
         server
       }
     return store to query
+  }
+
+  /**
+   * Base 0 and a pending +1, which the server answers with 1. Only the +1 applied again on top of
+   * the answer, once it is on record, could show 2.
+   */
+  @Test
+  fun `a server answer on record never shows the change again on top`() = runTest {
+    val (store, _) = counter()
+    val seen = mutableListOf<Int?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value } }
+    runCurrent()
+    store.mutate(1).awaitSucceeded()
+    runCurrent()
+
+    assertThat(sets.committedRecords).isEqualTo(1)
+    assertThat(seen).isEqualTo(listOf(0, 1))
   }
 
   @Test
