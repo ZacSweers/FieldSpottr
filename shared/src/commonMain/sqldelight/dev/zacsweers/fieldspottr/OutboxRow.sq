@@ -43,19 +43,24 @@ INSERT INTO outboxRow(id, outbox, orderingKey, payload, status) VALUES (?, ?, ?,
 pending:
 SELECT * FROM outboxRow WHERE outbox = ? AND settledAt IS NULL ORDER BY seq;
 
--- Rows that wait for the outbox's handle: sent and not committed, or failed and not reverted
+-- Rows that wait for the outbox's handle: sent and not committed, or failed and not reverted. A
+-- status this version does not know, like one a newer version wrote, reads as failed, so every
+-- status but queued, sending, sent and discarded counts as failed here.
 owed:
 SELECT * FROM outboxRow
 WHERE outbox = ? AND settledAt IS NULL
-  AND ((status = 'sent' AND committed = 0) OR (status = 'failed' AND reverted = 0))
+  AND status NOT IN ('queued', 'sending', 'discarded')
+  AND ((status = 'sent' AND committed = 0) OR (status <> 'sent' AND reverted = 0))
 ORDER BY seq;
 
--- One key's owed rows, through outboxRow_key: one index search for each of the two statuses
+-- One key's owed rows. The hint reads only the key's entries in outboxRow_key. Without it, SQLite
+-- picks outboxRow_pending and reads every pending row of the outbox.
 owedOnKey:
-SELECT * FROM outboxRow
-WHERE outbox = :outbox AND orderingKey = :key AND status IN ('sent', 'failed')
+SELECT * FROM outboxRow INDEXED BY outboxRow_key
+WHERE outbox = :outbox AND orderingKey = :key
+  AND status NOT IN ('queued', 'sending', 'discarded')
   AND settledAt IS NULL
-  AND ((status = 'sent' AND committed = 0) OR (status = 'failed' AND reverted = 0))
+  AND ((status = 'sent' AND committed = 0) OR (status <> 'sent' AND reverted = 0))
 ORDER BY seq;
 
 byId:

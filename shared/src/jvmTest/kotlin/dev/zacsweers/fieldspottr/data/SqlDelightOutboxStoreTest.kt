@@ -49,9 +49,11 @@ import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.metro.suspendLazy
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.test.Test
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +61,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -173,6 +176,69 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
     assertThat(row.status).isInstanceOf<OutboxStatus.Failed>()
     assertThat(store.update(row.copy(status = OutboxStatus.Queued), expected = row.status)).isTrue()
     assertThat(store.entry(id).first()?.status).isEqualTo(OutboxStatus.Queued)
+  }
+
+  @Test
+  fun `a status a newer version wrote is owed on its key like a failed row`() = runTest {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    val store = newStore(1.minutes)
+    val id = store.insertNew("k", "a")
+    store.insertNew("j", "b")
+    // As a newer version would write it, with a readable payload and no revert run yet
+    queries.compareAndSet(
+      status = "archived",
+      cause = null,
+      attempts = 0,
+      lastError = null,
+      reverted = 0,
+      retryAt = null,
+      settledAt = null,
+      committed = 0,
+      sentAt = null,
+      reply = null,
+      outbox = "test",
+      id = id.value,
+      expectedStatus = "queued",
+      expectedCause = null,
+    )
+
+    assertThat(store.entry(id).first()?.status).isNotNull().isInstanceOf<OutboxStatus.Failed>()
+    assertThat(store.owed().map { it.id }).isEqualTo(listOf(id))
+    assertThat(store.owed("k").map { it.id }).isEqualTo(listOf(id))
+    assertThat(store.owed("j")).isEmpty()
+    // It reads as Failed, so it never sends
+    assertThat(store.head("k")).isNull()
+    assertThat(store.heads().first().map { it.payload }).isEqualTo(listOf("b"))
+  }
+
+  @Test
+  fun `every read opens the queries on the io dispatcher`() = runTest {
+    // A dispatcher object of its own, so the queries can tell whether they run on it
+    val io = Dispatchers.IO.limitedParallelism(4)
+    val outside = AtomicLong()
+    val store =
+      SqlDelightOutboxStore(
+        queries = {
+          if (currentCoroutineContext()[ContinuationInterceptor] !== io) {
+            outside.incrementAndGet()
+          }
+          temporaryDatabase.db().outboxRowQueries
+        },
+        outbox = "test",
+        codec = String.serializer().asCodec(Json),
+        io = io,
+      )
+    val id = store.insertNew("k", "a")
+    val row = checkNotNull(store.entry(id).first())
+
+    store.update(row.copy(status = OutboxStatus.Sending), OutboxStatus.Queued)
+    store.entries().first()
+    store.heads().first()
+    store.head("k")
+    store.owed()
+    store.owed("k")
+
+    assertThat(outside.get()).isEqualTo(0L)
   }
 
   @Test
@@ -333,6 +399,15 @@ class SqlDelightOutboxScaleTest {
     val plan = driver.planOf { queries.heads("a") }
 
     assertThat(plan).contains("USING COVERING INDEX outboxRow_key")
+    assertThat(plan).doesNotContain("SCAN outboxRow")
+  }
+
+  @Test
+  fun `a key's owed rows are read through the key's index entries`() = runBlocking {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    val plan = driver.planOf { queries.owedOnKey("a", "k") }
+
+    assertThat(plan).contains("USING INDEX outboxRow_key (outbox=? AND orderingKey=?)")
     assertThat(plan).doesNotContain("SCAN outboxRow")
   }
 

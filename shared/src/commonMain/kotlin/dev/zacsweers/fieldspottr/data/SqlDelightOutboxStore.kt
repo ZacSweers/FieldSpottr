@@ -204,7 +204,7 @@ class SqlDelightOutboxStore<E>(
   }
 
   override fun entries(): Flow<List<OutboxEntry<E>>> = flow {
-    emitAll(queries().pending(outbox).asFlow().map { withContext(io) { it.executeAsList() } })
+    emitAll(queriesOnIo().pending(outbox).asFlow().map { withContext(io) { it.executeAsList() } })
   }
     .map { rows -> rows.mapNotNull { it.toEntryOrNull() } }
     .distinctUntilChanged()
@@ -220,7 +220,9 @@ class SqlDelightOutboxStore<E>(
   // An id that is not one of ours finds no row, so its handle settles Cancelled
   override fun entry(id: EntryId): Flow<OutboxEntry<E>?> = flow {
     emitAll(
-      queries().byId(outbox, id.value).asFlow().map { withContext(io) { it.executeAsOneOrNull() } }
+      queriesOnIo().byId(outbox, id.value).asFlow().map {
+        withContext(io) { it.executeAsOneOrNull() }
+      }
     )
   }
     .map { row -> row?.takeUnless { it.isExpired() }?.toEntryOrNull() }
@@ -233,7 +235,7 @@ class SqlDelightOutboxStore<E>(
    * is stepped past without decoding.
    */
   override fun heads(): Flow<List<OutboxEntry<E>>> = flow {
-    val queries = queries()
+    val queries = queriesOnIo()
     emitAll(
       queries.heads(outbox).asFlow().map { query ->
         withContext(io) { query.executeAsList().mapNotNull { row -> readableFrom(queries, row) } }
@@ -264,6 +266,12 @@ class SqlDelightOutboxStore<E>(
   internal fun recordCleared() {
     ended.recordAll()
   }
+
+  /**
+   * The queries, opened on [io]. The first call may open the database, which blocks, so a flow that
+   * needs the queries before it reads calls this instead of [queries].
+   */
+  private suspend fun queriesOnIo(): OutboxRowQueries = withContext(io) { queries() }
 
   /**
    * [row] as an entry, or else the first later sendable row on its key that decodes. The extra
