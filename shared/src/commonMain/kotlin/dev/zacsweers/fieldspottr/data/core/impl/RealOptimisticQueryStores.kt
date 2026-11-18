@@ -40,6 +40,7 @@ import kotlinx.collections.immutable.persistentHashMapOf
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toPersistentList
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -368,14 +369,28 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     }
   }
 
-  /** Gives the change its row id, records it as Pending, then enqueues its row and follows it. */
+  /**
+   * Gives the change its row id, records it as Pending, then enqueues its row and follows it. The
+   * row's write is registered in [storing] before the change is recorded, so a clear that finds the
+   * change also waits for its row, even while this call has not enqueued it yet.
+   */
   override fun mutate(key: K, mutation: M): OutboxOperation {
     val id = EntryId(Uuid.random().toString())
     val payload = KeyedMutation(key, mutation)
-    edit { it.knowing(id, Known(Kind.Pending, payload)) }
-    val handle = outbox.enqueue(id, payload, key = orderKey(key))
-    val write = Storing(key, handle.stored)
+    val write = Storing(key)
     storing.update { it.adding(write) }
+    edit { it.knowing(id, Known(Kind.Pending, payload)) }
+    val handle =
+      try {
+        outbox.enqueue(id, payload, key = orderKey(key))
+      } catch (e: Throwable) {
+        // No row will exist, so nothing waits for it and nothing shows the change
+        write.started.complete(Operation.failed(e))
+        storing.update { it.remove(write) }
+        edit { it.forgetting(id) }
+        throw e
+      }
+    write.started.complete(handle.stored)
     sharing.launch {
       val stored = handle.stored.await()
       storing.update { it.remove(write) }
@@ -475,7 +490,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   private suspend fun awaitStored(key: K) {
     for (entry in storing.load()) {
       if (entry.key == key) {
-        entry.stored.await()
+        entry.started.await().await()
       }
     }
   }
@@ -1090,8 +1105,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * whose row it discarded and each change whose record it dropped, so no view shows one after
      * this returns however late the list is. A change stored after the rows were read keeps its row
      * and its state.
+     *
+     * Each change the set knew of when this began goes too, also when the store no longer holds its
+     * row, like after a logout deleted every row. Its row write settled before the rows were read,
+     * so a row missing from that read is gone. A change made after this began keeps its state.
      */
     override suspend fun clear() {
+      // Before the wait, so the row write of each of these changes is in storing already
+      val before = state.value.slice(key)?.known?.keys.orEmpty().toList()
       // A change still being stored would land after the rows below were read and then send
       awaitStored(key)
       base.lock.withLock {
@@ -1101,6 +1122,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           var next = s.updatingRecords(key) { null }
           for ((change, row) in discarded) {
             next = next.dropping(change, row.payload, now)
+          }
+          for (change in before) {
+            val entry = s.known[change]
+            if (entry != null && change !in discarded) {
+              next = next.dropping(change, entry.payload, now)
+            }
           }
           for (record in s.slice(key)?.committed.orEmpty()) {
             next = next.dropping(record.change, KeyedMutation(record.key, record.mutation), now)
@@ -1732,8 +1759,13 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     val lock = Mutex()
   }
 
-  /** A change requested for [key], and whether its row is in the store yet. */
-  private class Storing<K>(val key: K, val stored: Operation)
+  /**
+   * A change requested for [key]. [started] gets the handle of its row write once the outbox took
+   * the row, and that handle settles once the row is in the store or failed to be.
+   */
+  private class Storing<K>(val key: K) {
+    val started = CompletableDeferred<Operation>()
+  }
 
   /** A value a fetch was written as, which may be null when the folded changes removed it. */
   private class Fold<T>(val value: T?)
