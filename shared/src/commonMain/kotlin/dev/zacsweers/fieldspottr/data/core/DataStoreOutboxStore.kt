@@ -168,18 +168,17 @@ class DataStoreOutboxStores(
   }
 
   /**
-   * Clears every outbox file under [directory]. A store this set has built in this process owns its
-   * file through a DataStore, and only that DataStore may write the file, so such a store is
-   * cleared through it. A file left behind by an earlier process, which no store here has opened,
-   * has no DataStore and is deleted directly. The deletes run on the caller's dispatcher.
+   * Clears every outbox file under [directory]. A store this set has opened in this process owns
+   * its file through a DataStore, and only that DataStore may write the file, so such a store is
+   * cleared through it, also when it opens while the clear runs. A file left behind by an earlier
+   * process, which no store here has opened, is deleted directly. The deletes run on the caller's
+   * dispatcher.
    *
-   * A [directory] that does not exist holds no files, so only the built stores are cleared. Any
+   * A [directory] that does not exist holds no files, so only the opened stores are cleared. Any
    * other failure to list it, like a directory that cannot be read or a path that is a file, throws
    * the [IOException] before anything is deleted or cleared, so every row stays.
    */
   override suspend fun clearAll() {
-    val built = opened.load().mapValues { it.value.store }.filterValues { it.isInitialized() }
-    val ownedFiles = built.keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
     val files =
       try {
         fileSystem.list(directory)
@@ -191,13 +190,16 @@ class DataStoreOutboxStores(
         }
         emptyList()
       }
+    // Every registered name owns its file, built or not
+    val ownedFiles = opened.load().keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
     for (path in files) {
       if (path.name.endsWith(".outbox") && path.name !in ownedFiles) {
         fileSystem.delete(path, mustExist = false)
       }
     }
-    for (entry in built.values) {
-      entry.value.clear()
+    // Read again after the deletes, so a store opened meanwhile is cleared too
+    for (entry in opened.load().values) {
+      entry.store.value.clear()
     }
   }
 }
