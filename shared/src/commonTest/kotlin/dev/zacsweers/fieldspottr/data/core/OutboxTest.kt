@@ -791,6 +791,21 @@ class OutboxTest {
   }
 
   @Test
+  fun `a row left sending resends at once despite a later deadline`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insertNew("k", "a")
+    val row = checkNotNull(rows.entry(id).first())
+    // A process claimed the row with a deadline ahead and died during the send
+    val sending = row.copy(status = OutboxStatus.Sending, retryAt = START + 5.minutes)
+    assertThat(rows.update(sending, expected = OutboxStatus.Queued)).isTrue()
+
+    dataOver(rows, clock = testClock(START)).outbox(Rows)
+    runCurrent()
+
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
   fun `a clock moved back keeps a backing-off row waiting for its deadline`() = runTest {
     send.failTransiently()
     val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })

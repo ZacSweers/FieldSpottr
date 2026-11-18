@@ -581,8 +581,10 @@ internal class RealOutbox<E>(
         dropTimer(key, timer)
       }
       val retryAt = head.retryAt
-      // Still backing off, perhaps since before a restart
-      if (retryAt != null && retryAt > now && !waited) {
+      // Still backing off, perhaps since before a restart. A row left Sending by a dead process
+      // already ended its wait, so it sends at once.
+      val sending = head.status == OutboxStatus.Sending
+      if (retryAt != null && retryAt > now && !waited && !sending) {
         backOff(key, head.id, retryAt)
         break
       }
