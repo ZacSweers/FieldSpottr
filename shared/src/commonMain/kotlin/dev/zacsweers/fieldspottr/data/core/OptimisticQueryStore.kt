@@ -29,7 +29,7 @@ import kotlinx.serialization.Serializable
  * fetch lands or a sent change is committed, so it always holds something the server said. After a
  * restart, the store shows the truth plus the rows that still wait. A row that the sender sent
  * before this store existed, like in a background drain, keeps showing until the store commits it,
- * which happens once the store is built.
+ * which happens once the store is built and a send in flight on the same key has finished.
  *
  * `apply` runs on the data scope's dispatcher each time the truth or the rows change. Keep it cheap
  * and pure, and idempotent where [DataScope.optimisticStore] asks. The first commits check
