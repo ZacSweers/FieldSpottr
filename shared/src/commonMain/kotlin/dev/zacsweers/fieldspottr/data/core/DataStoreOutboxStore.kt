@@ -197,18 +197,28 @@ class DataStoreOutboxStores(
         }
         emptyList()
       }
-    // Every registered name owns its file, built or not
-    val ownedFiles = opened.load().keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
+    // First, since a direct delete beside a live DataStore leaves its rows in memory
+    clearOpened()
     for (path in files) {
-      if (path.name.endsWith(".outbox") && path.name !in ownedFiles) {
+      // Read for each file, so a store opened meanwhile keeps its file
+      if (path.name.endsWith(".outbox") && path.name !in ownedFiles()) {
         fileSystem.delete(path, mustExist = false)
       }
     }
-    // Read again after the deletes, so a store opened meanwhile is cleared too
+    // A store opened during the deletes kept its file, so it is cleared here
+    clearOpened()
+  }
+
+  /** Clears every store this set has opened, built or not, through its DataStore. */
+  private suspend fun clearOpened() {
     for (entry in opened.load().values) {
       entry.store.value.clear()
     }
   }
+
+  /** The file names of every registered name, built or not. */
+  private fun ownedFiles(): Set<String> =
+    opened.load().keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
 
   /**
    * Whether the nearest ancestor that can be listed shows that [path] does not exist. Okio reports

@@ -254,6 +254,35 @@ class OutboxStoresTest {
     assertThat(failure.message.orEmpty()).contains("upload")
   }
 
+  @Test
+  fun `DataStore stores clear a store listed in another case on a file system that ignores case`() =
+    runTest {
+      val fileSystem = CaseFoldingFileSystem(FakeFileSystem())
+      val directory = "/outbox".toPath()
+      fileSystem.createDirectories(directory)
+      val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+      val upload = stores.open("Upload", String.serializer())
+      upload.insertNew("k", "a")
+
+      stores.clearAll()
+
+      assertThat(upload.entries().first()).isEmpty()
+      // A later write keeps only its own row
+      upload.insertNew("k", "b")
+      assertThat(upload.entries().first().map { it.payload }).containsExactly("b")
+    }
+
+  /**
+   * [delegate] as a file system that ignores case, like the default one on iOS and macOS. It keeps
+   * each file under its name in lower case, so every spelling of a name finds the same file.
+   */
+  private class CaseFoldingFileSystem(delegate: FileSystem) : ForwardingFileSystem(delegate) {
+    override fun onPathParameter(path: Path, functionName: String, parameterName: String): Path {
+      val parent = path.parent ?: return path
+      return parent / path.name.lowercase()
+    }
+  }
+
   /**
    * [delegate] where the parent of [directory] cannot be read once [failing] is set. Okio on JVM
    * and Android then reports [directory] as missing, and its metadata is null.
