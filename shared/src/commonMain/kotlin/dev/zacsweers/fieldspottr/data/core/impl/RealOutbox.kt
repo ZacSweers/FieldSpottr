@@ -644,8 +644,8 @@ internal class RealOutbox<E>(
    * Otherwise the row is written Sent and not committed, with the answer encoded on it, and it is
    * owed to the handle. So is a row whose live commit threw, and then the commit runs again after a
    * pause, as [settleLater] describes. An answer that fails to encode is reported to the sender's
-   * handler, and the row is written committed without a commit, since nothing could read the answer
-   * back.
+   * handler once, and the row keeps [UNKNOWN_REPLY] in place of the answer. It is owed like any
+   * other row, and its commit runs with the answer unknown.
    */
   private suspend fun delivered(head: OutboxEntry<E>, delivery: Delivery<*>, sentAt: Instant) {
     val handle = attached.load()
@@ -663,19 +663,19 @@ internal class RealOutbox<E>(
       }
       retry = true
     }
-    val reply = runCatching { encodeReply(delivery) }
-    reply.exceptionOrNull()?.let(onFailure)
+    val encoded = runCatching { encodeReply(delivery) }
+    encoded.exceptionOrNull()?.let(onFailure)
     val sent =
       writeSent(
         head,
         head.copy(
           status = OutboxStatus.Sent,
-          committed = reply.isFailure,
+          committed = false,
           sentAt = sentAt,
-          reply = reply.getOrNull(),
+          reply = encoded.getOrElse { UNKNOWN_REPLY },
         ),
       )
-    if (sent && reply.isSuccess) {
+    if (sent) {
       if (retry) {
         // Not at once, since the commit just failed
         owedKeys.update { it.adding(head.key) }
@@ -840,11 +840,16 @@ internal class RealOutbox<E>(
     }
 
   /**
-   * The answer stored on [row], or null after reporting to [handle]'s handler when it does not
-   * decode, which the handle treats as an unknown answer.
+   * The answer stored on [row], or null when it is unknown, which the handle treats as an unknown
+   * answer. An answer is unknown when [UNKNOWN_REPLY] stands in for one that failed to encode,
+   * which the send already reported, or when it does not decode, which is reported to [handle]'s
+   * handler here.
    */
   private fun decodeReply(handle: Attached<E>, row: OutboxEntry<E>): Delivery<*>? {
     val text = row.reply ?: return Delivery.Acknowledged
+    if (text == UNKNOWN_REPLY) {
+      return null
+    }
     return try {
       Delivery.Replaced(checkNotNull(replyCodec) { "Outbox $name has no reply codec" }.decode(text))
     } catch (e: Exception) {
@@ -1462,6 +1467,14 @@ internal class RealOutbox<E>(
 }
 
 private const val WHOLE_QUEUE = ""
+
+/**
+ * What [OutboxEntry.reply] holds when the server's answer failed to encode, so the commit runs with
+ * the answer unknown. The JSON and Base64 codecs never write it, since JSON never starts with `}`
+ * and Base64 has no `}` and no space. An app version from before it existed fails to decode it, and
+ * so it takes the same unknown-answer path.
+ */
+internal const val UNKNOWN_REPLY = "} unknown reply"
 
 // How long the watcher, or a key whose drain failed, waits before reading a failing store again,
 // doubling up to the cap

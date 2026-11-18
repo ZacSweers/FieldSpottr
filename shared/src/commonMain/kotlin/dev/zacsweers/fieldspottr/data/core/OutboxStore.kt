@@ -73,9 +73,11 @@ data class OutboxEntry<E>(
   val sentAt: Instant? = null,
   /**
    * The server's answer to a Sent row that is not committed yet, encoded by the outbox's reply
-   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does. The write
-   * that marks the row committed also clears it, so a committed row keeps no answer, and a row
-   * whose commit write failed keeps it for the next commit.
+   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does. An answer
+   * that failed to encode leaves a marker that the JSON and Base64 codecs never write, and the
+   * commit then runs with the answer unknown. The write that marks the row committed also clears
+   * it, so a committed row keeps no answer, and a row whose commit write failed keeps it for the
+   * next commit.
    */
   val reply: String? = null,
 )
