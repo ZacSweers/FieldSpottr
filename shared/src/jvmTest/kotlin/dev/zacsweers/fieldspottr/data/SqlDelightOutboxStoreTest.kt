@@ -535,6 +535,21 @@ class SqlDelightOutboxStoreReopenTest {
     assertThat(ids.map { after.entry(it).first() }).isEqualTo(rows)
   }
 
+  @Test
+  fun `a retry deadline between seconds reads back to the millisecond after a reopen`() = runTest {
+    val clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
+    val before = store(clock)
+    val id = before.insertNew("k", "a")
+    val retryAt = Instant.parse("2026-06-10T12:00:30.123456789Z")
+    before.write(id) { it.copy(attempts = 1, retryAt = retryAt) }
+
+    temporaryDatabase.reopen()
+
+    val after = store(clock).entry(id).first()
+    // The store keeps epoch milliseconds, so the nanoseconds below them are dropped
+    assertThat(after?.retryAt).isEqualTo(Instant.parse("2026-06-10T12:00:30.123Z"))
+  }
+
   /** Writes what [change] makes of row [id] over the status it has. */
   private suspend fun OutboxStore<String>.write(
     id: EntryId,
