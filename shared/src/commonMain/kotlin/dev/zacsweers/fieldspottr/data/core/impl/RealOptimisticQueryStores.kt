@@ -20,6 +20,7 @@ import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.PermanentFailure
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.isDone
+import dev.zacsweers.fieldspottr.data.core.runCatchingCancellable
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
@@ -191,7 +192,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   private val clock: Clock,
   /**
    * Hears an [apply] that is not idempotent, once, an [apply] that throws, once per change, a
-   * failed commit, and a failure to read the row list.
+   * failed commit, a failure to read the row list, and a cleanup that failed after a fetch write.
    */
   private val onFailure: (Throwable) -> Unit,
   /**
@@ -1044,10 +1045,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * The value may lack a send that finished after the fetch started, which only its in-memory
      * record shows. So the truth takes those changes too, as [withSent] puts them back, and a
      * restart still shows them.
+     *
+     * The prune after the write only cleans up, so a prune that fails, like on a row read error, is
+     * reported to [onFailure] and the write still succeeds. What it would have dropped waits for a
+     * later prune or its expiry.
      */
     override suspend fun writeFetched(fetched: Fetched<T>, keepsStored: KeepsStored) {
       land(fetched, keepsStored)
-      prune(key, fetched.fetchedAt)
+      runCatchingCancellable { prune(key, fetched.fetchedAt) }.onFailure(onFailure)
     }
 
     /**
