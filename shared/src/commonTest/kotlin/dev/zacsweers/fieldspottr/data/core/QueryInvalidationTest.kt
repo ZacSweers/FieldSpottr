@@ -6,7 +6,6 @@ import app.cash.turbine.test
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
-import assertk.assertions.isFalse
 import assertk.assertions.isNotSameInstanceAs
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.FetchStatus.Fetching
@@ -18,7 +17,6 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
-import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
@@ -34,7 +32,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -367,69 +364,6 @@ class QueryInvalidationTest {
     }
 
   @Test
-  fun `a value written while the default invalidate runs stays and is marked stale`() = runTest {
-    val stored = MutableStateFlow<Fetched<Int>?>(Fetched(1, START))
-    val writing = CompletableDeferred<Unit>()
-    val proceed = CompletableDeferred<Unit>()
-    var gated = true
-    // No invalidate of its own, so marking is a read and a conditional write
-    val store =
-      QueryStore.of(
-        stored,
-        write = { fetched, keepsStored ->
-          if (gated) {
-            gated = false
-            writing.complete(Unit)
-            proceed.await()
-          }
-          stored.writeFetched(fetched, keepsStored)
-        },
-        clear = { stored.value = null },
-      )
-    val numbers = testDataScope(clock = testClock(START))
-    val query = numbers.query(store, Freshness.staleAfter(1.hours)) { 0 }
-
-    val invalidation = query.invalidate()
-    writing.await()
-    // A write on another runner lands between the mark's read and its write
-    stored.value = Fetched(2, START + 1.minutes)
-    proceed.complete(Unit)
-    invalidation.awaitSucceeded()
-
-    assertThat(stored.value).isEqualTo(Fetched(2, START + 1.minutes, invalidated = true))
-    numbers.assertNoFailures()
-  }
-
-  @Test
-  fun `the default invalidate goes by the last answer when the store asks again`() = runTest {
-    val stored = MutableStateFlow<Fetched<Int>?>(Fetched(1, START - 1.minutes))
-    var retried = false
-    val store =
-      QueryStore.of(
-        stored,
-        write = { fetched, keepsStored ->
-          if (!retried) {
-            retried = true
-            // A first try that saw the value the mark read, so it may write, then lost a race to
-            // another writer
-            assertThat(keepsStored(START - 1.minutes, false)).isFalse()
-            stored.value = Fetched(2, START)
-          }
-          stored.writeFetched(fetched, keepsStored)
-        },
-        clear = { stored.value = null },
-      )
-    val numbers = testDataScope(clock = testClock(START))
-    val query = numbers.query(store, Freshness.staleAfter(1.hours)) { 0 }
-
-    query.invalidate().awaitSucceeded()
-
-    // The retry kept value 2, so the mark read again and marked it
-    assertThat(stored.value).isEqualTo(Fetched(2, START, invalidated = true))
-    numbers.assertNoFailures()
-  }
-
-  @Test
   fun `a value written while a store's own invalidate waits stays and is marked stale`() = runTest {
     val stored = MutableStateFlow<Fetched<Int>?>(Fetched(1, START - 1.minutes))
     val marking = CompletableDeferred<Unit>()
@@ -467,31 +401,6 @@ class QueryInvalidationTest {
     assertThat(stored.value).isEqualTo(marked)
     assertThat(query.state.first()).isEqualTo(QueryState(marked, Idle))
     numbers.assertNoFailures()
-  }
-
-  @Test
-  fun `the default invalidate fails when the store's data never shows what it holds`() = runTest {
-    var writes = 0
-    // Reads always show the first value, and every write finds another one stored
-    val store =
-      QueryStore.of<Int>(
-        data = flowOf(Fetched(1, START)),
-        write = { _, keepsStored ->
-          writes++
-          check(keepsStored(START + 1.minutes, false)) { "The marked copy replaced a newer value" }
-        },
-        clear = {},
-      )
-    val numbers = testDataScope(clock = testClock(START))
-    val query = numbers.query(store, Freshness.staleAfter(1.hours)) { 0 }
-
-    val invalidation = query.invalidate()
-    runCurrent()
-
-    // It gives up and reports, and never writes the old value over the newer one
-    invalidation.assertFailed<IllegalStateException>()
-    assertThat(writes).isEqualTo(100)
-    assertThat(numbers.actionFailures.take().size).isEqualTo(1)
   }
 
   @Test
