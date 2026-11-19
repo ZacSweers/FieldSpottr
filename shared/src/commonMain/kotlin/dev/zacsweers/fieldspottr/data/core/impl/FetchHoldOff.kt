@@ -79,13 +79,7 @@ internal abstract class FetchHoldOff {
    * holds once the device is [online] again, so a screen that returns after a reconnect it missed
    * fetches at once. That includes a failure the policy declined.
    */
-  fun holdsOff(now: Instant, online: Boolean): Boolean {
-    val current = load(now) ?: return false
-    if (current.offline && online) {
-      return false
-    }
-    return current.declined || now < current.until
-  }
+  fun holdsOff(now: Instant, online: Boolean): Boolean = load(now)?.holds(now, online) == true
 
   /**
    * Whether the policy declined the last failure, so even the check after a reconnect must wait.
@@ -102,14 +96,21 @@ internal abstract class FetchHoldOff {
   /**
    * What the last failed fetch threw, while the record still makes a fetch the query starts on its
    * own wait at [now], as [holdsOff] decides. Null once nothing holds off, since the next check
-   * fetches then and shows its own outcome.
+   * fetches then and shows its own outcome. It loads the record once, so the decision and the cause
+   * come from one record, also when another key's eviction drops it in a keyed set.
    */
   fun heldFailure(now: Instant, online: Boolean): Throwable? =
-    if (holdsOff(now, online)) {
-      load(now)?.cause
-    } else {
-      null
+    load(now)?.takeIf { it.holds(now, online) }?.cause
+
+  /**
+   * Whether this record makes a fetch the query starts on its own wait, as [holdsOff] describes.
+   */
+  private fun HoldOff.holds(now: Instant, online: Boolean): Boolean {
+    if (offline && online) {
+      return false
     }
+    return declined || now < until
+  }
 
   /**
    * Records a failure at [now] that threw [cause], made while [offline] or not. [window] gives the
