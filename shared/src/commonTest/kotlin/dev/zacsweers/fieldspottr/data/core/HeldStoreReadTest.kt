@@ -28,7 +28,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
-/** [DataQuery.state] and [DataQuery.stateEager] over a store whose reads the test holds. */
+/** [DataQuery.state] and [DataQuery.stateAutoFetch] over a store whose reads the test holds. */
 class HeldStoreReadTest {
   // Returns how many calls have started, so each fetch returns a value of its own
   private val fetch: TestFetch<Int> = TestFetch { fetch.callCount }
@@ -43,9 +43,9 @@ class HeldStoreReadTest {
   }
 
   @Test
-  fun `stateEager's first value shows a refresh that settled while the first read waited`() =
+  fun `stateAutoFetch's first value shows a refresh that settled while the first read waited`() =
     runTest {
-      assertFirstValueShowsRefresh { it.stateEager }
+      assertFirstValueShowsRefresh { it.stateAutoFetch }
     }
 
   /**

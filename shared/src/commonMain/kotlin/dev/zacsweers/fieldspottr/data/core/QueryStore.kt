@@ -38,7 +38,7 @@ data class Fetched<out T>(
 /**
  * Whether [a] and [b] show the same thing: the same fetch time and invalidated flag, and equal
  * values. The times and flags are compared first, so the values are compared with `==` only when
- * those match. [DataQuery.state], [DataQuery.data] and [dataEager] all skip a value that is the
+ * those match. [DataQuery.state], [DataQuery.data] and [dataAutoFetch] all skip a value that is the
  * same as the one before by this rule.
  */
 internal fun sameFetched(a: Fetched<*>?, b: Fetched<*>?): Boolean {
@@ -250,8 +250,8 @@ suspend fun <T> QueryStore<T>.writeFetched(
 /**
  * A value held in memory: the one from [QueryStore.inMemory], or one key's from
  * [QueryStore.inMemoryByKey]. Code that owns the store can read [data] without collecting it and
- * edit it in place. Screens still collect the query's [dataEager] or [DataQuery.stateEager], since
- * only those run the staleness check.
+ * edit it in place. Screens still collect the query's [dataAutoFetch] or
+ * [DataQuery.stateAutoFetch], since only those run the staleness check.
  */
 sealed class InMemoryQueryStore<T> : QueryStore<T> {
   /** The stored value, readable without collecting. Reading it never fetches. */

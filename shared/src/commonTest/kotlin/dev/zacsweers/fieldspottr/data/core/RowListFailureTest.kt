@@ -60,7 +60,7 @@ class RowListFailureTest {
     stores.failRowLists = true
     val query = query()
     val seen = mutableListOf<QueryState<String>>()
-    backgroundScope.launch { query.stateEager.collect { seen += it } }
+    backgroundScope.launch { query.stateAutoFetch.collect { seen += it } }
     runCurrent()
 
     // A forced fetch writes the base and never reads the store
@@ -90,7 +90,7 @@ class RowListFailureTest {
     stores.failRowLists = true
     val query = query()
     val seen = mutableListOf<QueryState<String>>()
-    backgroundScope.launch { query.stateEager.collect { seen += it } }
+    backgroundScope.launch { query.stateAutoFetch.collect { seen += it } }
     runCurrent()
     query.refresh().awaitSucceeded()
     advanceTimeBy(5.seconds)
@@ -110,7 +110,7 @@ class RowListFailureTest {
     base.update { Fetched("v0", START) }
     val query = query()
     val seen = mutableListOf<QueryState<String>>()
-    backgroundScope.launch { query.stateEager.collect { seen += it } }
+    backgroundScope.launch { query.stateAutoFetch.collect { seen += it } }
     runCurrent()
     assertThat(seen).containsExactly(QueryState(Fetched("v0", START), Idle))
 

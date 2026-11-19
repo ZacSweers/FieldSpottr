@@ -32,9 +32,10 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 /**
- * [DataQuery.stateEager], and the one distinctness rule that it shares with `dataEager` and `data`.
+ * [DataQuery.stateAutoFetch], and the one distinctness rule that it shares with `dataAutoFetch` and
+ * `data`.
  */
-class QueryStateEagerTest {
+class QueryStateAutoFetchTest {
   private val offline = IllegalStateException("offline")
   // Returns how many calls have started, so each fetch returns a value of its own
   private val fetch: TestFetch<Int> = TestFetch { fetch.callCount }
@@ -46,13 +47,13 @@ class QueryStateEagerTest {
   }
 
   @Test
-  fun `collecting stateEager fetches stale data and an uncollected query fetches nothing`() =
+  fun `collecting stateAutoFetch fetches stale data and an uncollected query fetches nothing`() =
     runTest {
       val query = query(QueryStore.inMemory(Fetched(0, START - 2.hours)))
       runCurrent()
       assertThat(fetch.callCount).isEqualTo(0)
 
-      assertThat(query.stateEager.first { it.value == 1 })
+      assertThat(query.stateAutoFetch.first { it.value == 1 })
         .isEqualTo(QueryState(Fetched(1, START), Idle))
       assertThat(fetch.callCount).isEqualTo(1)
     }
@@ -61,14 +62,14 @@ class QueryStateEagerTest {
   fun `the first value shows Fetching at once when this collector queued a check`() = runTest {
     fetch.hold()
     val empty = query(QueryStore.inMemory())
-    assertThat(empty.stateEager.first()).isEqualTo(QueryState(null, Fetching(forced = false)))
+    assertThat(empty.stateAutoFetch.first()).isEqualTo(QueryState(null, Fetching(forced = false)))
 
     val stale = query(QueryStore.inMemory(Fetched(0, START - 2.hours)))
-    assertThat(stale.stateEager.first())
+    assertThat(stale.stateAutoFetch.first())
       .isEqualTo(QueryState(Fetched(0, START - 2.hours), Fetching(forced = false)))
 
     val unfetched = query(QueryStore.inMemory(Fetched(0, fetchedAt = null)))
-    assertThat(unfetched.stateEager.first())
+    assertThat(unfetched.stateAutoFetch.first())
       .isEqualTo(QueryState(Fetched(0, fetchedAt = null), Fetching(forced = false)))
     fetch.release()
   }
@@ -80,7 +81,7 @@ class QueryStateEagerTest {
     fetch.respond = { throw offline }
     query.refresh().awaitFailed<IllegalStateException>()
 
-    assertThat(query.stateEager.first()).isEqualTo(QueryState(seed, Failed(offline)))
+    assertThat(query.stateAutoFetch.first()).isEqualTo(QueryState(seed, Failed(offline)))
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -88,11 +89,11 @@ class QueryStateEagerTest {
   fun `a check that holds off shows the query's status again`() = runTest {
     fetch.respond = { throw offline }
     val query = query(QueryStore.inMemory())
-    query.stateEager.first { it.status is Failed }
+    query.stateAutoFetch.first { it.status is Failed }
     assertThat(fetch.callCount).isEqualTo(1)
 
     // Inside the hold-off window, so this collector's check decides not to fetch
-    query.stateEager.test {
+    query.stateAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
       assertThat(awaitItem()).isEqualTo(QueryState(null, Failed(offline)))
       expectNoEvents()
@@ -131,7 +132,7 @@ class QueryStateEagerTest {
     val query = query(store)
     val early = mutableListOf<QueryState<Int>>()
     val late = mutableListOf<QueryState<Int>>()
-    backgroundScope.launch { query.stateEager.collect { early += it } }
+    backgroundScope.launch { query.stateAutoFetch.collect { early += it } }
     runCurrent()
     advanceTimeBy(1.minutes)
 
@@ -140,7 +141,7 @@ class QueryStateEagerTest {
     // The fetch has written and its write call is still running
     val written = Fetched(1, START + 1.minutes)
     assertThat(store.delegate.data.value).isEqualTo(written)
-    backgroundScope.launch { query.stateEager.collect { late += it } }
+    backgroundScope.launch { query.stateAutoFetch.collect { late += it } }
     runCurrent()
     refresh.awaitSucceeded()
     advanceTimeBy(5.seconds)
@@ -161,7 +162,7 @@ class QueryStateEagerTest {
     val query = query(store)
     val seen = List(3) { mutableListOf<QueryState<Int>>() }
     for (list in seen) {
-      backgroundScope.launch { query.stateEager.collect { list += it } }
+      backgroundScope.launch { query.stateAutoFetch.collect { list += it } }
     }
     runCurrent()
     advanceTimeBy(1.minutes)
@@ -186,10 +187,10 @@ class QueryStateEagerTest {
 
   /**
    * Refreshes [query] a minute after [START], over a stored 0 that is fresh, and checks that its
-   * `stateEager` shows exactly the old value idle, then fetching, then the new value idle.
+   * `stateAutoFetch` shows exactly the old value idle, then fetching, then the new value idle.
    */
   private suspend fun TestScope.assertRefreshSequence(query: DataQuery<Int>) {
-    query.stateEager.test {
+    query.stateAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched(0, START), Idle))
       advanceTimeBy(1.minutes)
       fetch.hold()
@@ -207,7 +208,7 @@ class QueryStateEagerTest {
   fun `a failed refresh keeps the value and shows the failure`() = runTest {
     val seed = Fetched(0, START)
     val query = query(QueryStore.inMemory(seed))
-    query.stateEager.test {
+    query.stateAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(QueryState(seed, Idle))
       fetch.hold()
       fetch.respond = { throw offline }
@@ -223,7 +224,7 @@ class QueryStateEagerTest {
   @Test
   fun `a check that decides not to fetch emits nothing`() = runTest {
     val query = query(QueryStore.inMemory(Fetched(0, START)))
-    query.stateEager.test {
+    query.stateAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched(0, START), Idle))
       query.fetchIfStale().awaitSucceeded()
       runCurrent()
@@ -237,7 +238,7 @@ class QueryStateEagerTest {
     val stale = Fetched(0, START - 2.hours)
     val query = query(QueryStore.inMemory(stale))
     fetch.hold()
-    query.stateEager.test {
+    query.stateAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(QueryState(stale, Fetching(forced = false)))
       // The collector's check starts its unforced fetch
       runCurrent()
@@ -260,14 +261,14 @@ class QueryStateEagerTest {
         listOf("fetched")
       }
 
-    query.stateEager.test {
+    query.stateAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched(listOf("a"), START), Idle))
       // A new list with the same contents and stamp, like a database reading the row again
       emitted.emit(Fetched(listOf("a"), START))
       runCurrent()
       expectNoEvents()
     }
-    query.dataEager.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
       emitted.emit(Fetched(listOf("a"), START))
       runCurrent()
@@ -293,7 +294,7 @@ class QueryStateEagerTest {
         listOf("a")
       }
 
-    query.dataEager.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
       // Like an optimistic change over a truth that did not change
       emitted.emit(Fetched(listOf("a", "b"), START))
@@ -316,7 +317,7 @@ class QueryStateEagerTest {
   }
 
   @Test
-  fun `a keyed stateEager shows a key's value with its status`() = runTest {
+  fun `a keyed stateAutoFetch shows a key's value with its status`() = runTest {
     val keyedFetch = TestKeyedFetch<String, String> { key -> "$key!" }
     val values =
       testDataScope(clock = testClock(START))
@@ -327,12 +328,12 @@ class QueryStateEagerTest {
         )
     keyedFetch.hold()
 
-    values.stateEager("a").test {
+    values.stateAutoFetch("a").test {
       assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
       keyedFetch.release()
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched("a!", START), Idle))
     }
-    assertThat(values.dataEager("a").first()).isEqualTo(Fetched("a!", START))
+    assertThat(values.dataAutoFetch("a").first()).isEqualTo(Fetched("a!", START))
   }
 
   @Test

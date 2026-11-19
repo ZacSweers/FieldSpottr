@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.map
 /**
  * Queries addressed by key, from [DataScope.keyed]. Nothing here hands out the [DataQuery] itself,
  * so a dropped query is never kept alive by a stale reference while a new one serves the same key.
+ *
+ * A read by key returns a new flow on each call, so hold it in a value, or `remember` it by key in
+ * a composable, where the instance matters.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface KeyedDataQueries<K : Any, T> {
@@ -23,9 +26,9 @@ interface KeyedDataQueries<K : Any, T> {
 
   /**
    * [key]'s stored value with the fetch status that applies to it. Collecting this may fetch, as
-   * [DataQuery.stateEager] describes. Use [state] to watch without starting any work.
+   * [DataQuery.stateAutoFetch] describes. Use [state] to watch without starting any work.
    */
-  fun stateEager(key: K): Flow<QueryState<T>>
+  fun stateAutoFetch(key: K): Flow<QueryState<T>>
 
   /**
    * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
@@ -37,17 +40,25 @@ interface KeyedDataQueries<K : Any, T> {
   /**
    * Every key's [data] in one map, without checking freshness or fetching. Collecting it keeps each
    * key's query but starts no work. Duplicate keys count once, and an empty collection of keys
-   * emits one empty map. Use [dataEager] to also fetch the stale keys.
+   * emits one empty map. Use [dataAutoFetch] to also fetch the stale keys.
    */
   fun data(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> = combinedByKey(keys) { data(it) }
+
+  /**
+   * [key]'s values from [stateAutoFetch] without the status. Collecting this may fetch, as
+   * [DataQuery.stateAutoFetch] describes, and it emits when the stored value, its fetch time or its
+   * flag changes. Use [data] to read the same values without starting any work.
+   */
+  fun dataAutoFetch(key: K): Flow<Fetched<T>?> =
+    stateAutoFetch(key).map { it.fetched }.distinctUntilChanged(::sameFetched)
 
   /**
    * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
    * Duplicate keys count once, and an empty collection of keys emits one empty map. Use [data] to
    * read the same map without starting any work.
    */
-  fun dataEager(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> =
-    combinedByKey(keys) { dataEager(it) }
+  fun dataAutoFetch(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> =
+    combinedByKey(keys) { dataAutoFetch(it) }
 
   /**
    * [key]'s fetch status, as [DataQuery.status] describes. Collecting it keeps the key's query but
@@ -131,14 +142,6 @@ private fun <K : Any, T> combinedByKey(
     distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
   }
 }
-
-/**
- * [key]'s values from [KeyedDataQueries.stateEager] without the status. Collecting this may fetch,
- * as [DataQuery.stateEager] describes, and it emits when the stored value, its fetch time or its
- * flag changes. Use [KeyedDataQueries.data] to read the same values without starting any work.
- */
-fun <K : Any, T> KeyedDataQueries<K, T>.dataEager(key: K): Flow<Fetched<T>?> =
-  stateEager(key).map { it.fetched }.distinctUntilChanged(::sameFetched)
 
 /** [KeyedDataQueries.requestFetch] for [key] with `force = true`: fetches now. */
 fun <K : Any, T> KeyedDataQueries<K, T>.refresh(key: K): Operation = requestFetch(key, force = true)

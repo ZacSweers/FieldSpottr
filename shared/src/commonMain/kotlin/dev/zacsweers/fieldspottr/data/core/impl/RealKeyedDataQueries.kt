@@ -101,10 +101,10 @@ internal class RealKeyedDataQueries<K : Any, T>(
     }
   }
 
-  override fun stateEager(key: K): Flow<QueryState<T>> = flow {
+  override fun stateAutoFetch(key: K): Flow<QueryState<T>> = flow {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.stateEager)
+      emitAll(entry.query.stateAutoFetch)
     } finally {
       entry.release()
     }

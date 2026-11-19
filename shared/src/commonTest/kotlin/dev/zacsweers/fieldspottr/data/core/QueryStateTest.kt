@@ -35,7 +35,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 /**
- * [DataQuery.state] and [KeyedDataQueries.state]: the values and statuses of `stateEager` for a
+ * [DataQuery.state] and [KeyedDataQueries.state]: the values and statuses of `stateAutoFetch` for a
  * collector that starts no work.
  */
 class QueryStateTest {
@@ -195,13 +195,13 @@ class QueryStateTest {
   }
 
   @Test
-  fun `state shows the fetch that a collector of stateEager starts`() = runTest {
+  fun `state shows the fetch that a collector of stateAutoFetch starts`() = runTest {
     val query = query(QueryStore.inMemory())
     fetch.hold()
 
     query.state.test {
       assertThat(awaitItem()).isEqualTo(QueryState(null, Idle))
-      val screen = backgroundScope.launch { query.stateEager.collect {} }
+      val screen = backgroundScope.launch { query.stateAutoFetch.collect {} }
       assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
       fetch.release()
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched(1, START), Idle))
@@ -218,7 +218,7 @@ class QueryStateTest {
 
     query.state.test {
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched(0, START), Idle))
-      // A collector of stateEager would fetch again here
+      // A collector of stateAutoFetch would fetch again here
       store.update { null }
       assertThat(awaitItem()).isEqualTo(QueryState(null, Idle))
       store.update { Fetched(5, fetchedAt = null) }
@@ -250,7 +250,7 @@ class QueryStateTest {
     runCurrent()
     advanceTimeBy(1.hours)
 
-    // A collector of stateEager would fetch again after the reconnect, since the last fetch
+    // A collector of stateAutoFetch would fetch again after the reconnect, since the last fetch
     // failed
     assertThat(fetch.callCount).isEqualTo(1)
     assertThat(query.status.value).isEqualTo(Failed(offline))
@@ -270,7 +270,8 @@ class QueryStateTest {
       runCurrent()
 
       // Each collector read the store once more after the fetch wrote. The fetch made no read to
-      // share, which it makes only for collectors of stateEager, so no copy of the value was kept.
+      // share, which it makes only for collectors of stateAutoFetch, so no copy of the value was
+      // kept.
       assertThat(store.dataCollections).isEqualTo(6)
       collectors.forEach { it.cancelAndJoin() }
 
@@ -280,12 +281,12 @@ class QueryStateTest {
     }
 
   @Test
-  fun `a collector of state beside a collector of stateEager shows the same order`() = runTest {
+  fun `a collector of state beside a collector of stateAutoFetch shows the same order`() = runTest {
     val store = RecordingQueryStore(QueryStore.inMemory(Fetched(0, START)))
     val query = query(store)
     val active = mutableListOf<QueryState<Int>>()
     val passive = mutableListOf<QueryState<Int>>()
-    backgroundScope.launch { query.stateEager.collect { active += it } }
+    backgroundScope.launch { query.stateAutoFetch.collect { active += it } }
     backgroundScope.launch { query.state.collect { passive += it } }
     runCurrent()
     advanceTimeBy(1.minutes)
@@ -308,11 +309,11 @@ class QueryStateTest {
   }
 
   @Test
-  fun `a collector of state that leaves keeps the watcher of a collector of stateEager`() =
+  fun `a collector of state that leaves keeps the watcher of a collector of stateAutoFetch`() =
     runTest {
       val store = QueryStore.inMemory(Fetched(0, START))
       val query = query(store)
-      val screen = backgroundScope.launch { query.stateEager.collect {} }
+      val screen = backgroundScope.launch { query.stateAutoFetch.collect {} }
       runCurrent()
       val passive = backgroundScope.launch { query.state.collect {} }
       runCurrent()

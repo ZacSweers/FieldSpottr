@@ -349,7 +349,7 @@ class QueryInvalidationTest {
       val query = query(QueryStore.inMemory())
       fetch.hold()
 
-      query.stateEager.test {
+      query.stateAutoFetch.test {
         assertThat(awaitItem()).isEqualTo(QueryState(null, Fetching(forced = false)))
         // The collector's fetch runs before the call, so it may have read the server before it
         runCurrent()
@@ -500,7 +500,7 @@ class QueryInvalidationTest {
       val store = QueryStore.inMemory(Fetched("cached", START))
       val query = query(store)
 
-      query.stateEager.test {
+      query.stateAutoFetch.test {
         assertThat(awaitItem()).isEqualTo(QueryState(Fetched("cached", START), Idle))
         advanceTimeBy(1.minutes)
         fetch.hold()

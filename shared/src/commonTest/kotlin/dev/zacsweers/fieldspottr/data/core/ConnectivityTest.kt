@@ -56,9 +56,9 @@ class ConnectivityTest {
     1
   }
 
-  /** Collects [query]'s `stateEager` for one value, then runs the work that started. */
+  /** Collects [query]'s `stateAutoFetch` for one value, then runs the work that started. */
   private suspend fun TestScope.collectOnce(query: DataQuery<Int>) {
-    query.stateEager.first()
+    query.stateAutoFetch.first()
     runCurrent()
   }
 
@@ -71,7 +71,7 @@ class ConnectivityTest {
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
     val states = mutableListOf<QueryState<Int>>()
 
-    backgroundScope.launch { query.stateEager.toList(states) }
+    backgroundScope.launch { query.stateAutoFetch.toList(states) }
     runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(1)
@@ -108,7 +108,7 @@ class ConnectivityTest {
     runCurrent()
     assertThat(send.sent).containsExactly("stored")
 
-    backgroundScope.launch { query.stateEager.collect {} }
+    backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(1)
@@ -124,8 +124,8 @@ class ConnectivityTest {
     val fetch = serverFetch(data.online)
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
     // Two collectors share one watcher, so one check per reconnect
-    backgroundScope.launch { query.stateEager.collect {} }
-    backgroundScope.launch { query.stateEager.collect {} }
+    backgroundScope.launch { query.stateAutoFetch.collect {} }
+    backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
@@ -148,7 +148,7 @@ class ConnectivityTest {
     val data = testDataScope(clock = testClock(START))
     val fetch = serverFetch(data.online)
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
-    backgroundScope.launch { query.stateEager.collect {} }
+    backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
 
     repeat(3) {
@@ -166,7 +166,7 @@ class ConnectivityTest {
     val data = testDataScope(clock = testClock(START))
     val fetch = serverFetch(data.online)
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
-    backgroundScope.launch { query.stateEager.collect {} }
+    backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
     advanceTimeBy(2.hours)
     fetch.hold()
@@ -257,7 +257,7 @@ class ConnectivityTest {
       val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
       val respond = fetch.respond
       fetch.respond = { error("Server down") }
-      backgroundScope.launch { query.stateEager.collect {} }
+      backgroundScope.launch { query.stateAutoFetch.collect {} }
       runCurrent()
       fetch.respond = respond
 
@@ -335,7 +335,7 @@ class ConnectivityTest {
   // Collector lifecycle
 
   @Test
-  fun `a query collects the network only while its stateEager has a collector`() = runTest {
+  fun `a query collects the network only while its stateAutoFetch has a collector`() = runTest {
     val data = testDataScope(clock = testClock(START))
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = serverFetch(data.online))
     val subscriptions = data.online.subscriptionCount
@@ -348,10 +348,10 @@ class ConnectivityTest {
     runCurrent()
     assertThat(subscriptions.value).isEqualTo(0)
 
-    val first = backgroundScope.launch { query.stateEager.collect {} }
+    val first = backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
     assertThat(subscriptions.value).isEqualTo(1)
-    val second = backgroundScope.launch { query.stateEager.collect {} }
+    val second = backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
     assertThat(subscriptions.value).isEqualTo(1)
 
@@ -380,7 +380,7 @@ class ConnectivityTest {
     assertThat(subscriptions.value).isEqualTo(1)
 
     // A collector outside the data scope adds the query's watcher
-    backgroundScope.launch { query.stateEager.collect {} }
+    backgroundScope.launch { query.stateAutoFetch.collect {} }
     runCurrent()
     assertThat(subscriptions.value).isEqualTo(2)
     repeat(2) {
