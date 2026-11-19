@@ -47,10 +47,8 @@ import kotlinx.serialization.SerialFormat
  * [queries] opens the generated queries on first use, for a database that opens lazily. A database
  * already open passes its queries to the other constructor.
  *
- * Rows outlive app updates, so change a payload class with care. A new field needs a default value.
- * A renamed field needs `@JsonNames` with the old name, or a default. The default format ignores
- * fields the class no longer has. A row that still fails to decode is left out of every read and
- * reported once, and it stays stored until [clearAll].
+ * Rows outlive app updates, so change a payload class with care, as
+ * [DataStoreOutboxStores][dev.zacsweers.fieldspottr.data.core.DataStoreOutboxStores] describes.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class SqlDelightOutboxStores(
@@ -73,8 +71,7 @@ class SqlDelightOutboxStores(
     serializer.asCodec(payloadFormat)
 
   // One store per name, so every outbox over a name shares what its store knows about rows that do
-  // not decode, and each such row is reported once. Updated by compare-and-set only. Nothing
-  // observes it, so it needs no StateFlow.
+  // not decode, and each such row is reported once. Nothing observes it, so it needs no StateFlow.
   private val opened =
     AtomicReference(persistentHashMapOf<String, OpenedStore<SqlDelightOutboxStore<*>>>())
 
@@ -113,13 +110,11 @@ class SqlDelightOutboxStores(
  * table from OutboxRow.sq, and [outbox] identifies this outbox's rows, so a new outbox needs no
  * schema change. Concurrent writes from different keys rely on the driver to serialize them.
  *
- * Each row's payload decodes on its own. A row that does not decode, like one stored before its
- * payload class changed, is left out of [entries], [entry] and [heads], and handed on through
- * [onUndecodable]. It stays in the table.
+ * Each row's payload decodes on its own, so a row that does not decode is handled as
+ * [OutboxStore.onUndecodable] describes.
  *
- * [changes] names the rows that writes through this store ended, from a record in memory. A write
- * that reaches the table another way, like through a second store set over the same database, is
- * not named, so build one [SqlDelightOutboxStores] per database.
+ * [changes] names only the writes made through this store, as [OutboxChangeLog] describes, so build
+ * one [SqlDelightOutboxStores] per database.
  */
 class SqlDelightOutboxStore<E>(
   private val queries: suspend () -> OutboxRowQueries,
@@ -137,9 +132,8 @@ class SqlDelightOutboxStore<E>(
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
     currentCoroutineContext().ensureActive()
-    // seq orders the rows, and the id identifies the row everywhere. A stored id fails the UNIQUE
-    // constraint, which rolls the transaction back. The insert runs to the end once started, so a
-    // throw always means nothing was stored.
+    // seq orders the rows. A stored id fails the UNIQUE constraint, which rolls the transaction
+    // back. The insert runs to the end once started, as OutboxStore.insert requires.
     withContext(NonCancellable) {
       withContext(io) {
         val queries = queries()
@@ -155,11 +149,9 @@ class SqlDelightOutboxStore<E>(
     val settledAt = clock.now().toEpochMilliseconds().takeIf { entry.isDone }
     return withContext(io) {
       val queries = queries()
-      // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
-      // since the expectation was built no longer matches, and a status written by a newer app
-      // version still matches the Failed it decodes to. The row is read outside the transaction, so
-      // the transaction below starts with its write, like every other write in this store.
-      // An expired row reads as absent, so it fails like a missing one.
+      // Compares the decoded OutboxStatus, as DataStoreOutboxStore.update does. The row is read
+      // outside the transaction, so the transaction below starts with its write, like every other
+      // write in this store.
       val row = queries.byId(outbox, entry.id.value).executeAsOneOrNull()
       if (row == null || row.isExpired() || OutboxStatus(row.status, row.cause) != expected) {
         return@withContext false
@@ -197,8 +189,8 @@ class SqlDelightOutboxStore<E>(
         )
         queries.changes().executeAsOne() > 0
       }
-      // Right after the commit, with no suspension between, so a cancelled caller cannot skip it.
-      // Only a write that ends the row's attempt is named, so one to Queued or Sending is not.
+      // Right after the commit, as OutboxChangeLog requires. Only a write that ends the row's
+      // attempt is named, so one to Queued or Sending is not.
       if (written && !entry.status.isSendable && entry.status != expected) {
         ended.record(setOf(entry.id))
       }
@@ -234,8 +226,7 @@ class SqlDelightOutboxStore<E>(
   /**
    * One query per change. SQLite walks the outbox's entries in the `outboxRow_key` index, which
    * holds no payloads, and returns one row per key, so a change decodes about one payload per key.
-   * A head that does not decode is stepped past with one more query, and a row known not to decode
-   * is stepped past without decoding.
+   * A head that does not decode is stepped past with one more query.
    */
   override fun heads(): Flow<List<OutboxEntry<E>>> = flow {
     val queries = queriesOnIo()
