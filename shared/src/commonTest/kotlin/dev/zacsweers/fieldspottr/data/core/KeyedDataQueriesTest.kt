@@ -9,7 +9,6 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
-import assertk.assertions.isNotSameInstanceAs
 import assertk.assertions.isSameInstanceAs
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_DECLINED_HOLD_OFFS
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_REMEMBERED_KEYS
@@ -18,7 +17,6 @@ import dev.zacsweers.fieldspottr.data.core.impl.keysHeld
 import dev.zacsweers.fieldspottr.data.core.impl.keysRemembered
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
-import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
@@ -623,25 +621,6 @@ class KeyedDataQueriesTest {
     }
 
   @Test
-  fun `a requested fetch that fails under a declined record is the failure a rebuild shows`() =
-    runTest {
-      failing += "a"
-      val values = decliningValues()
-      val declined = failureOf(values, "a")
-
-      val retried = values.refresh("a").awaitFailed<IllegalStateException>()
-      testScheduler.runCurrent()
-      assertThat(retried).isNotSameInstanceAs(declined)
-      assertThat(values.keysHeld).isEqualTo(0)
-
-      assertThat(values.failureShownBy("a")).isSameInstanceAs(retried)
-      // The request left the decline in place
-      values.dataAutoFetch("a").first()
-      testScheduler.runCurrent()
-      assertThat(fetch.callCount("a")).isEqualTo(2)
-    }
-
-  @Test
   fun `a key's failure made offline shows after a rebuild only while still offline`() = runTest {
     failing += "a"
     val values = decliningValues()
@@ -655,75 +634,6 @@ class KeyedDataQueriesTest {
     failing -= "a"
     assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
     assertThat(values.dataAutoFetch("a").first { it != null }?.value).isEqualTo("a#2")
-  }
-
-  @Test
-  fun `a failure whose policy throws an Error is the failure a rebuilt key shows`() = runTest {
-    failing += "a"
-    data = testDataScope(clock = testClock(START))
-    // A 1 minute window after the first failure, and a policy left as TODO() after that
-    val values =
-      data.keyed(
-        store = QueryStore.inMemoryByKey(),
-        freshness = Freshness.staleAfter(1.hours),
-        retry =
-          RetryPolicy { attempt ->
-            if (attempt == 1) {
-              1.minutes
-            } else {
-              TODO()
-            }
-          },
-        fetch = fetch,
-      )
-    val collector = backgroundScope.launch { values.stateAutoFetch("a").collect {} }
-    testScheduler.runCurrent()
-    val first = (values.status("a").first() as FetchStatus.Failed).cause
-
-    // A reconnect fetches inside the window, and the policy throws for that failure
-    data.online.value = false
-    testScheduler.runCurrent()
-    data.online.value = true
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("a")).isEqualTo(2)
-    val second = (values.status("a").first() as FetchStatus.Failed).cause
-    assertThat(second).isNotSameInstanceAs(first)
-    assertThat(data.actionFailures.take().single()).isInstanceOf<NotImplementedError>()
-    collector.cancel()
-    testScheduler.runCurrent()
-    assertThat(values.keysHeld).isEqualTo(0)
-
-    // The first failure's window still holds, and a new query shows the newest failure
-    assertThat(values.failureShownBy("a")).isSameInstanceAs(second)
-    values.dataAutoFetch("a").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("a")).isEqualTo(2)
-  }
-
-  @Test
-  fun `a requested fetch that fails keeps a key's place among the declined records`() = runTest {
-    val keys = List(MAX_DECLINED_HOLD_OFFS) { "k$it" }
-    failing += keys
-    failing += "extra"
-    val values = decliningValues()
-    for (key in keys) {
-      values.dataAutoFetch(key).first()
-      testScheduler.runCurrent()
-    }
-
-    // A retry that fails again is no new decline, so k0 still declined longest ago
-    values.refresh("k0").awaitFailed<IllegalStateException>()
-    values.dataAutoFetch("extra").first()
-    testScheduler.runCurrent()
-    assertThat(values.holdOffsHeld).isEqualTo(MAX_DECLINED_HOLD_OFFS)
-
-    // k1 still holds off, and k0's record went, so it fetches on its own once more
-    values.dataAutoFetch("k1").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("k1")).isEqualTo(1)
-    values.dataAutoFetch("k0").first()
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount("k0")).isEqualTo(3)
   }
 
   /**

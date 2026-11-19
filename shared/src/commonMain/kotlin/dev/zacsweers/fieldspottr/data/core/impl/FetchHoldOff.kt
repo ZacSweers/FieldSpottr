@@ -14,8 +14,8 @@ import kotlin.time.Instant
  * when the next fetch may start, and whether the last failure happened while offline. [keep] is the
  * policy's longest wait, as [HoldOffWindow.keep] describes. A [declined] record is one whose policy
  * declined the last failure. It holds off until a success clears it, so its [window], [keep] and
- * [until] mean nothing. [cause] is what the last failed fetch threw, for a query built while the
- * record still holds off, which has no status of its own to show yet.
+ * [until] mean nothing. [cause] is what the last failure it counted threw, for a query built while
+ * the record still holds off, which has no status of its own to show yet.
  */
 internal class HoldOff(
   val failures: Int,
@@ -26,10 +26,6 @@ internal class HoldOff(
   val cause: Throwable,
   val declined: Boolean = false,
 ) {
-  /** This record with [cause] as the last failure, and everything else as it is. */
-  fun withCause(cause: Throwable): HoldOff =
-    HoldOff(failures, window, keep, until, offline, cause, declined)
-
   /**
    * Whether this record no longer matters at [now]. That is so once its window ended more than
    * [keep] ago, so a failure after that starts the count again at 1. It is also so when [until]
@@ -66,15 +62,6 @@ internal abstract class FetchHoldOff {
   protected abstract fun store(next: HoldOff?, now: Instant)
 
   /**
-   * Replaces the record with [next], which differs from it only in its cause, so no new failure was
-   * counted or declined. By default the same as [store]. A keyed set overrides it to keep the key's
-   * place among the declined records.
-   */
-  protected open fun replaceCause(next: HoldOff, now: Instant) {
-    store(next, now)
-  }
-
-  /**
    * Whether a fetch the query starts on its own at [now] must wait. A failure made offline never
    * holds once the device is [online] again, so a screen that returns after a reconnect it missed
    * fetches at once. That includes a failure the policy declined.
@@ -94,10 +81,10 @@ internal abstract class FetchHoldOff {
   }
 
   /**
-   * What the last failed fetch threw, while the record still makes a fetch the query starts on its
-   * own wait at [now], as [holdsOff] decides. Null once nothing holds off, since the next check
-   * fetches then and shows its own outcome. It loads the record once, so the decision and the cause
-   * come from one record, also when another key's eviction drops it in a keyed set.
+   * What the last failure the record counted threw, while the record still makes a fetch the query
+   * starts on its own wait at [now], as [holdsOff] decides. Null once nothing holds off, since the
+   * next check fetches then and shows its own outcome. It loads the record once, so the decision
+   * and the cause come from one record, also when another key's eviction drops it in a keyed set.
    */
   fun heldFailure(now: Instant, online: Boolean): Throwable? =
     load(now)?.takeIf { it.holds(now, online) }?.cause
@@ -134,16 +121,6 @@ internal abstract class FetchHoldOff {
         HoldOff(failures, next.length, next.keep, now + next.length, offline, cause)
       }
     store(record, now)
-  }
-
-  /**
-   * Makes [cause] the failure that the record at [now] shows, if there is one, and changes nothing
-   * else. For a failure that must never open or widen a hold-off, like a requested fetch that
-   * failed again under a declined record, or a fetch whose policy threw an Error.
-   */
-  fun recordCause(now: Instant, cause: Throwable) {
-    val current = load(now) ?: return
-    replaceCause(current.withCause(cause), now)
   }
 
   /** Records a fetch that succeeded at [now], which clears the window or the decline. */

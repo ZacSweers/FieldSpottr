@@ -272,10 +272,6 @@ internal class RealKeyedDataQueries<K : Any, T>(
     override fun store(next: HoldOff?, now: Instant) {
       holdOffs.update { it.withoutSpent(now).storing(key, next) }
     }
-
-    override fun replaceCause(next: HoldOff, now: Instant) {
-      holdOffs.update { it.withoutSpent(now).replacing(key, next) }
-    }
   }
 
   private fun pruneSpent(now: Instant) {
@@ -316,17 +312,6 @@ private class HoldOffs<K>(
       else -> HoldOffs(windows.putting(key, next), declined)
     }
   }
-
-  /**
-   * These records with [key]'s replaced by [next] in its place, so a declined key keeps its age.
-   * Nothing changes when [key] has no record, like one pruned since it was read.
-   */
-  fun replacing(key: K, next: HoldOff): HoldOffs<K> =
-    when (key) {
-      in declined -> HoldOffs(windows, declined.putting(key, next))
-      in windows -> HoldOffs(windows.putting(key, next), declined)
-      else -> this
-    }
 
   /** These records without the spent windows. */
   fun withoutSpent(now: Instant): HoldOffs<K> {
