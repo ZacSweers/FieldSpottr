@@ -228,10 +228,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   // goes once the row is done: when the list showed the row and then lacks it, or when a commit
   // finds the row done or gone. Updated by compare-and-set only.
   private val landed = AtomicReference(persistentHashMapOf<EntryId, Boolean>())
-  // By key, the newest send time of a record that expired before a fetch confirmed it. The truth
-  // holds that change, so a fetch that started at or before it keeps the truth and marks it stale.
-  // A key's entry goes once a fetch from after it lands, or the key clears.
-  private val unconfirmed = AtomicReference(persistentHashMapOf<K, Instant>())
 
   // Runs the shared row subscription and the watchers that follow handles. It has no job of the
   // data scope's, so views keep reading the rows after that scope stops. The subscription stops
@@ -803,19 +799,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   ) {
     val now = clock.now()
     val before = state.value
-    // Before the update drops them, so a fetch write never finds neither the record nor its time
-    for (record in before.committed) {
-      if (record.isExpired(now) && !record.confirmed && !record.confirmedBy(key, fetchedAt)) {
-        unconfirmed.update { times ->
-          val time = times[record.key]
-          if (time != null && time >= record.sentAt) {
-            times
-          } else {
-            times.putting(record.key, record.sentAt)
-          }
-        }
-      }
-    }
     val unproven =
       if (before.watching) {
         emptyList()
@@ -1107,25 +1090,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     private suspend fun land(fetched: Fetched<T>?, keepsStored: KeepsStored) {
       awaitStored(key)
       base.lock.withLock {
-        val dropped = unconfirmed.load()[key]
-        val fetchedAt = fetched?.fetchedAt
-        // Only a fetch time tells what the server held. A write without one and a clear replace the
-        // truth as QueryStore.write promises, and the entry stays for a later fetch from before it.
-        if (dropped != null && fetchedAt != null) {
-          if (!fetchedAt.isAfterSend(dropped)) {
-            // May lack a change whose record is gone, so the truth stays and a new fetch runs
-            truth.invalidate()
-            pruneAfter(fetched)
-            return@withLock
-          }
-          unconfirmed.update {
-            if (it[key] == dropped) {
-              it.removing(key)
-            } else {
-              it
-            }
-          }
-        }
         val stored = truth.data.first()
         if (stored == null || !keepsStored(stored.fetchedAt, stored.invalidated)) {
           // A value never fetched counts as older than every send, like a value that is gone
@@ -1207,7 +1171,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           }
           next
         }
-        unconfirmed.update { it.removing(key) }
         truth.clear()
       }
     }
@@ -1926,8 +1889,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
  * How long a record or a known change that left Pending stays when nothing proves it can go, like a
  * key that is never fetched again or a row the shared list never showed. The record exists for a
  * fetch that started before the send and lands after it, and both exist for a list that lags the
- * store. A fetch or a list running this late is far past any network timeout. A fetch that still
- * lands after a record expired unconfirmed keeps the truth and marks it stale.
+ * store. A fetch or a list running this late is far past any network timeout.
  */
 private val RECORD_LIFETIME = 10.minutes
 
