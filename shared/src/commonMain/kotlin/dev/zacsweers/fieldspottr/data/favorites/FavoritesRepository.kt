@@ -9,7 +9,7 @@ import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import dev.zacsweers.fieldspottr.data.core.data
+import dev.zacsweers.fieldspottr.data.core.dataEager
 import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.fieldspottr.di.IoDispatcher
@@ -82,7 +82,7 @@ internal constructor(
   private val query = data.query(store, Freshness.staleAfter(1.hours), fetch = api::favorites)
 
   /** The favorite groups, local changes included. Collecting it fetches first when stale. */
-  val favorites: Flow<Set<String>> = query.data.values().map { it.orEmpty() }
+  val favorites: Flow<Set<String>> = query.dataEager.values().map { it.orEmpty() }
 
   /** Changes the server has not confirmed, oldest first, for a badge and for retry. */
   val unsynced: Flow<List<PendingMutation<FavoriteChange>>> = store.pending

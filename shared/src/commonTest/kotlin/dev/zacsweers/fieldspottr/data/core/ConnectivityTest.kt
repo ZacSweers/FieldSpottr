@@ -342,7 +342,7 @@ class ConnectivityTest {
 
     val readers =
       listOf(
-        backgroundScope.launch { query.stored.collect {} },
+        backgroundScope.launch { query.data.collect {} },
         backgroundScope.launch { query.status.collect {} },
       )
     runCurrent()

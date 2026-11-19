@@ -80,7 +80,7 @@ class DataQueryTest {
     stored.value = Fetched(1, START - 10.minutes)
     val query = dataQuery()
 
-    assertThat(query.data.values().first()).isEqualTo(1)
+    assertThat(query.dataEager.values().first()).isEqualTo(1)
     // Joins the freshness check the collector already started. The test awaits the handle because
     // advanceUntilIdle() skips backgroundScope work.
     query.requestFetch(force = false).await()
@@ -91,7 +91,7 @@ class DataQueryTest {
   fun `a collector that takes the first value and leaves still starts the check`() = runTest {
     val query = dataQuery()
 
-    assertThat(query.data.first()).isEqualTo(null)
+    assertThat(query.dataEager.first()).isEqualTo(null)
     // The check is a command of its own, so it runs although the collector is gone
     testScheduler.runCurrent()
 
@@ -104,7 +104,7 @@ class DataQueryTest {
     stored.value = Fetched(1, START - 2.hours)
     val query = dataQuery()
 
-    assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
+    assertThat(query.dataEager.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -113,7 +113,7 @@ class DataQueryTest {
     stored.value = Fetched(1, START + 1.hours)
     val query = dataQuery()
 
-    query.data.first { it?.value == 2 }
+    query.dataEager.first { it?.value == 2 }
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -121,8 +121,8 @@ class DataQueryTest {
   fun `an emptied store fetches again while collected`() = runTest {
     val query = dataQuery()
 
-    backgroundScope.launch { query.data.collect {} }
-    query.data.first { it?.value == 1 }
+    backgroundScope.launch { query.dataEager.collect {} }
+    query.dataEager.first { it?.value == 1 }
     // Lets the collector see the value. A value cleared before it does is conflated away.
     testScheduler.runCurrent()
     stored.value = null
@@ -145,13 +145,13 @@ class DataQueryTest {
           }
       )
 
-    query.data.first()
+    query.dataEager.first()
     query.requestFetch(force = false).await()
     assertThat(fetch.callCount).isEqualTo(0)
     assertThat(checkedAt).isEqualTo(START)
 
     window = 5.minutes
-    query.data.first { it?.value == 2 }
+    query.dataEager.first { it?.value == 2 }
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -160,7 +160,7 @@ class DataQueryTest {
     fetch.hold()
     val query = dataQuery()
 
-    val collectors = List(2) { async { query.data.first { it?.value == 1 } } }
+    val collectors = List(2) { async { query.dataEager.first { it?.value == 1 } } }
     testScheduler.runCurrent()
     fetch.release()
     collectors.awaitAll()
@@ -196,7 +196,7 @@ class DataQueryTest {
     assertThat(query.invalidate().await()).isEqualTo(OperationState.Succeeded)
     assertThat(fetch.callCount).isEqualTo(0)
     assertThat(stored.value).isEqualTo(Fetched(1, START - 10.minutes, invalidated = true))
-    assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
+    assertThat(query.dataEager.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -205,7 +205,7 @@ class DataQueryTest {
     stored.value = Fetched(1, START, invalidated = true)
     val query = dataQuery()
 
-    assertThat(query.data.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
+    assertThat(query.dataEager.first { it?.value == 2 }).isEqualTo(Fetched(2, START))
     assertThat(fetch.callCount).isEqualTo(1)
   }
 
@@ -213,7 +213,7 @@ class DataQueryTest {
   fun `data on screen that drops to a value never fetched fetches again at once`() = runTest {
     stored.value = Fetched(1, START)
     val query = dataQuery()
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(0)
 
@@ -229,7 +229,7 @@ class DataQueryTest {
   fun `invalidated data on screen waits for the next collect`() = runTest {
     stored.value = Fetched(1, START)
     val query = dataQuery()
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
 
     query.invalidate().awaitSucceeded()
@@ -237,7 +237,7 @@ class DataQueryTest {
     assertThat(fetch.callCount).isEqualTo(0)
     assertThat(stored.value).isEqualTo(Fetched(1, START, invalidated = true))
 
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
   }
@@ -372,11 +372,11 @@ class DataQueryTest {
   }
 
   @Test
-  fun `stored shows the store without fetching`() = runTest {
+  fun `data shows the store without fetching`() = runTest {
     stored.value = Fetched(1, START - 2.hours)
     val query = dataQuery()
 
-    assertThat(query.stored.first()).isEqualTo(Fetched(1, START - 2.hours))
+    assertThat(query.data.first()).isEqualTo(Fetched(1, START - 2.hours))
     testScheduler.runCurrent()
     // Stale, yet nothing fetched
     assertThat(fetch.callCount).isEqualTo(0)
@@ -487,7 +487,7 @@ class DataQueryTest {
       testDataScope(clock = testClock(START))
         .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     val check = query.requestFetch(force = false)
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
 
     // The check's read finishes at 10 ms and the observer's at 20 ms, so the clear lands between
@@ -534,7 +534,7 @@ class DataQueryTest {
 
     state.value = null
     val seen = mutableListOf<Fetched<Int>?>()
-    backgroundScope.launch { query.data.collect { seen += it } }
+    backgroundScope.launch { query.dataEager.collect { seen += it } }
     testScheduler.runCurrent()
     // The collector joined the check, which finds the value it read fresh and never fetches
     releaseCheck.complete(Unit)
@@ -551,7 +551,7 @@ class DataQueryTest {
     fetch.respond = { error("offline") }
     val query = data.query(QueryStore.inMemory(), Freshness.staleAfter(1.hours), fetch = fetch)
 
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(1)
@@ -584,9 +584,9 @@ class DataQueryTest {
       testDataScope(clock = testClock(START))
         .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
     val resume = CompletableDeferred<Unit>()
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     // Stops on the first value, so the newer value and the clear wait in its buffer
-    backgroundScope.launch { query.data.collect { if (it?.value == 1) resume.await() } }
+    backgroundScope.launch { query.dataEager.collect { if (it?.value == 1) resume.await() } }
     testScheduler.runCurrent()
 
     values.emit(Fetched(2, START))
@@ -604,7 +604,7 @@ class DataQueryTest {
   fun `a forced request joins a forced fetch behind an automatic check`() = runTest {
     stored.value = Fetched(1, START)
     val query = dataQuery()
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     fetch.hold()
     val first = query.requestFetch(force = true)
@@ -630,8 +630,20 @@ class DataQueryTest {
     val query = dataQuery()
     val firstSawClear = CompletableDeferred<Unit>()
     val secondSawClear = CompletableDeferred<Unit>()
-    backgroundScope.launch { query.data.collect { if (it == null) firstSawClear.complete(Unit) } }
-    backgroundScope.launch { query.data.collect { if (it == null) secondSawClear.complete(Unit) } }
+    backgroundScope.launch {
+      query.dataEager.collect {
+        if (it == null) {
+          firstSawClear.complete(Unit)
+        }
+      }
+    }
+    backgroundScope.launch {
+      query.dataEager.collect {
+        if (it == null) {
+          secondSawClear.complete(Unit)
+        }
+      }
+    }
     testScheduler.runCurrent()
 
     fetch.hold()
@@ -650,9 +662,9 @@ class DataQueryTest {
     stored.value = Fetched(1, START)
     val query = dataQuery()
     val resume = CompletableDeferred<Unit>()
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     // Stops after its first value, so it sees the clear only once the recheck has settled
-    backgroundScope.launch { query.data.collect { if (it != null) resume.await() } }
+    backgroundScope.launch { query.dataEager.collect { if (it != null) resume.await() } }
     testScheduler.runCurrent()
 
     fetch.respond = { error("offline") }
@@ -711,7 +723,7 @@ class DataQueryTest {
       testDataScope(eager = true, clock = testClock(START))
         .query(QueryStore.inMemory(), freshness = Freshness.staleAfter(1.hours), fetch = failing)
 
-    query.data.first()
+    query.dataEager.first()
 
     // The check on subscription already covers the store's first empty value
     assertThat(failing.callCount).isEqualTo(1)
@@ -738,7 +750,7 @@ class DataQueryTest {
     val query =
       testDataScope(clock = testClock(START))
         .query(store, freshness = Freshness.staleAfter(1.hours), fetch = counting)
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
 
     published.await()
     store.clear()
@@ -827,7 +839,7 @@ class DataQueryTest {
     val query = factory.create(owner).query(store, Freshness.staleAfter(1.hours), fetch = fetchTwo)
 
     val seen = mutableListOf<Fetched<Int>?>()
-    backgroundScope.launch { query.data.collect { seen += it } }
+    backgroundScope.launch { query.dataEager.collect { seen += it } }
     testScheduler.runCurrent()
     assertThat(factory.actionFailures.take()).containsExactly(broken)
     assertThat(handled).isEmpty()
@@ -890,7 +902,7 @@ class DataQueryTest {
   fun `a forced request replaces a collector's fetch that a background request joined`() = runTest {
     val query = dataQuery()
     fetch.hold()
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(query.status.value).isEqualTo(FetchStatus.Fetching(forced = false))
     // Joins the collector's fetch in flight
@@ -928,7 +940,7 @@ class DataQueryTest {
     // One forced fetch replaced the hung one, and the invalidation left its result fresh
     assertThat(fetch.callCount).isEqualTo(2)
     assertThat(stored.value).isEqualTo(Fetched(1, START))
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(2)
   }
@@ -1000,7 +1012,7 @@ class DataQueryTest {
         testDataScope(clock = testClock(START))
           .query(recording, Freshness.staleAfter(1.hours), fetch = fetch)
 
-      val jobs = List(collectors) { backgroundScope.launch { query.data.collect {} } }
+      val jobs = List(collectors) { backgroundScope.launch { query.dataEager.collect {} } }
       testScheduler.runCurrent()
 
       // One collection per collector, plus the one the watcher shares between them
@@ -1015,25 +1027,25 @@ class DataQueryTest {
     fetch.respond = { error("offline") }
     val query = dataQuery()
 
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
     // Inside the 1 second window
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
     advanceTimeBy(1.seconds)
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(2)
     // The second failure in a row holds off for 2 seconds
     advanceTimeBy(1.seconds)
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(2)
     advanceTimeBy(1.seconds)
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(3)
   }
@@ -1043,7 +1055,7 @@ class DataQueryTest {
     fetch.respond = { error("offline") }
     val query = dataQuery()
 
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     query.fetchIfStale().awaitFailed<IllegalStateException>()
     query.refresh().awaitFailed<IllegalStateException>()
@@ -1055,14 +1067,14 @@ class DataQueryTest {
   fun `a successful fetch clears the hold-off`() = runTest {
     fetch.respond = { error("offline") }
     val query = dataQuery()
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
 
     fetch.respond = { 1 }
     query.refresh().awaitSucceeded()
     query.invalidate().awaitSucceeded()
     // Still inside the window the failure opened, yet the collector fetches
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(3)
@@ -1075,7 +1087,7 @@ class DataQueryTest {
     val respond = fetch.respond
     fetch.respond = { error("offline") }
 
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     // Offline does not skip the fetch, so a first load fails fast
     assertThat(fetch.callCount).isEqualTo(1)
@@ -1097,7 +1109,7 @@ class DataQueryTest {
     data = testDataScope(clock = testClock(START), online = false)
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     data.online.value = true
     testScheduler.runCurrent()
@@ -1135,7 +1147,7 @@ class DataQueryTest {
           data.online.value = true
         }
 
-      backgroundScope.launch { query.data.collect {} }
+      backgroundScope.launch { query.dataEager.collect {} }
       testScheduler.runCurrent()
 
       // The check failed offline before the watcher collected the network state
@@ -1151,7 +1163,7 @@ class DataQueryTest {
       data = testDataScope(clock = testClock(START), online = false)
       val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
-      backgroundScope.launch { query.data.collect {} }
+      backgroundScope.launch { query.dataEager.collect {} }
       // Runs after the collector counted in and before its watcher collects the network state
       backgroundScope.launch { data.online.value = true }
       testScheduler.runCurrent()
@@ -1166,7 +1178,7 @@ class DataQueryTest {
     runTest {
       stored.value = Fetched(1, START)
       val query = queryFailingOnce(online = true) {}
-      backgroundScope.launch { query.data.collect {} }
+      backgroundScope.launch { query.dataEager.collect {} }
       testScheduler.runCurrent()
       assertThat(fetch.callCount).isEqualTo(0)
 
@@ -1174,7 +1186,7 @@ class DataQueryTest {
       testScheduler.runCurrent()
       query.invalidate().awaitSucceeded()
       // Its check fails offline, and the watcher it joins already saw the network drop
-      backgroundScope.launch { query.data.collect {} }
+      backgroundScope.launch { query.dataEager.collect {} }
       testScheduler.runCurrent()
       assertThat(fetch.callCount).isEqualTo(1)
 
@@ -1193,7 +1205,7 @@ class DataQueryTest {
       data.online.value = false
       testScheduler.runCurrent()
 
-      backgroundScope.launch { query.data.collect {} }
+      backgroundScope.launch { query.dataEager.collect {} }
       backgroundScope.launch { data.online.value = true }
       testScheduler.runCurrent()
 
@@ -1261,7 +1273,7 @@ class DataQueryTest {
   fun `a clock set back never holds off past the window`() = runTest {
     val query = dataQuery()
     fetch.respond = { error("offline") }
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
@@ -1269,7 +1281,7 @@ class DataQueryTest {
     data.clock.shift(-10.minutes)
     advanceTimeBy(5.seconds)
     fetch.respond = { 1 }
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(2)
@@ -1281,7 +1293,7 @@ class DataQueryTest {
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
     val respond = fetch.respond
     fetch.respond = { error("offline") }
-    val collector = backgroundScope.launch { query.data.collect {} }
+    val collector = backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
     collector.cancel()
@@ -1293,7 +1305,7 @@ class DataQueryTest {
     assertThat(fetch.callCount).isEqualTo(1)
     fetch.respond = respond
     // Still inside the window the offline failure opened
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(2)
@@ -1311,7 +1323,7 @@ class DataQueryTest {
 
   /** Collects [query] for one value and returns how many fetches have run in all. */
   private suspend fun TestScope.collectOnce(query: DataQuery<Int>): Int {
-    query.data.first()
+    query.dataEager.first()
     testScheduler.runCurrent()
     return fetch.callCount
   }
@@ -1381,7 +1393,7 @@ class DataQueryTest {
   @Test
   fun `a declined failure holds off the watcher's recheck`() = runTest {
     val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
@@ -1398,7 +1410,7 @@ class DataQueryTest {
   @Test
   fun `a declined failure holds off the reconnect check`() = runTest {
     val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
@@ -1414,7 +1426,7 @@ class DataQueryTest {
   @Test
   fun `an unforced request never joins a reconnect check that a decline holds off`() = runTest {
     val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
@@ -1469,7 +1481,7 @@ class DataQueryTest {
     assertThat(collectOnce(query)).isEqualTo(1)
     // Still offline, so the decline holds
     assertThat(collectOnce(query)).isEqualTo(1)
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
     assertThat(fetch.callCount).isEqualTo(1)
 
@@ -1667,7 +1679,7 @@ class DataQueryTest {
     data = testDataScope(clock = testClock(START))
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
 
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataEager.collect {} }
     advanceTimeBy(10.minutes)
     testScheduler.runCurrent()
 

@@ -57,7 +57,7 @@ class HandleRetentionTest {
     val fetch = TestFetch { ByteArray(1) }
     val query =
       testDataScope().query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
-    val collector = backgroundScope.launch { query.data.collect {} }
+    val collector = backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
 
     fetch.hold()
@@ -134,7 +134,7 @@ class HandleRetentionTest {
       DataScope.Factory(onFailure = {}, clock = testClock())
         .create(backgroundScope)
         .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
-    val collector = backgroundScope.launch { query.data.collect {} }
+    val collector = backgroundScope.launch { query.dataEager.collect {} }
     testScheduler.runCurrent()
 
     // Emptied under the collector, whose automatic check then fails
@@ -162,7 +162,7 @@ class HandleRetentionTest {
           .create(backgroundScope)
           .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
       // Stays subscribed throughout, so its watcher outlives the failed check it started with
-      val collector = backgroundScope.launch { query.data.collect {} }
+      val collector = backgroundScope.launch { query.dataEager.collect {} }
       testScheduler.runCurrent()
       assertThat(query.status.value).isEqualTo(FetchStatus.Failed(error))
 

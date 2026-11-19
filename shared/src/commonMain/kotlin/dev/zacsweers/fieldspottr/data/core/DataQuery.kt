@@ -128,7 +128,7 @@ private class DynamicFreshness(private val rule: (fetchedAt: Instant, now: Insta
 interface DataQuery<T> {
   /**
    * The stored value, null before the first fetch, with the fetch status that applies to it. For a
-   * screen that shows the data and a loading or error state together. [stored] is the same values
+   * screen that shows the data and a loading or error state together. [data] is the same values
    * without the status.
    *
    * Collecting this never checks freshness and never fetches, so it suits a reader that must not
@@ -145,7 +145,7 @@ interface DataQuery<T> {
    * moment. After a fetch succeeds, this never shows `Idle` before it shows that fetch's data, even
    * when the store delivers the write after [status] turns `Idle`. A refresh shows `(v1, Idle)`,
    * then `(v1, Fetching)`, then `(v2, Idle)`. A failed fetch shows `(v1, Fetching)`, then `(v1,
-   * Failed)`. Combining [stored] with [status] by hand gives neither promise: over a store that
+   * Failed)`. Combining [data] with [status] by hand gives neither promise: over a store that
    * delivers a write late, it shows the old value as `Idle` first.
    *
    * To line a fetch's data up with its status, the query reads the store once more after each fetch
@@ -164,7 +164,7 @@ interface DataQuery<T> {
 
   /**
    * [state], plus a freshness check for each collector, for a screen that loads what it shows.
-   * [data] is the same values without the status.
+   * [dataEager] is the same values without the status.
    *
    * Collecting this may fetch. Each collector checks freshness on the first value it reads, even
    * one that takes one value and leaves, like `first()`, and fetches when the data is stale.
@@ -211,10 +211,11 @@ interface DataQuery<T> {
 
   /**
    * The stored values, without checking freshness or fetching. For readers that must not start work
-   * and need no status. It skips a value that is the same as the one before, by the rule [state]
-   * describes. [state] is the same values with the status that applies to them.
+   * and need no status. Use [dataEager] to also fetch when the data is stale. It skips a value that
+   * is the same as the one before, by the rule [state] describes. [state] is the same values with
+   * the status that applies to them.
    */
-  val stored: Flow<Fetched<T>?>
+  val data: Flow<Fetched<T>?>
 
   /**
    * What this query's fetches are doing now. Collecting it starts no work and reads no store. It
@@ -266,8 +267,8 @@ interface DataQuery<T> {
    * Three limits come from the store:
    * - A fetch that has already handed its value to the store when this is called cannot take it
    *   back. That write lands unmarked, and the mark follows as the next command on the query's key.
-   *   A collector of [QueryStore.data], [stored], [state] or [stateEager] can see the value
-   *   unmarked in between. No request acts on it, since every request waits for the mark.
+   *   A collector of [QueryStore.data], [data], [state] or [stateEager] can see the value unmarked
+   *   in between. No request acts on it, since every request waits for the mark.
    * - The mark is [QueryStore.invalidate]. A store that sets its flag in one update never loses a
    *   value another writer stores at the same time. [QueryStore.of] says what its default does.
    * - While the store has emitted no value, the mark waits behind an unforced request that waits
@@ -278,10 +279,11 @@ interface DataQuery<T> {
 
 /**
  * The values of [DataQuery.stateEager] without the status, or null before the first fetch.
- * Collecting it runs the freshness check and may fetch, as [DataQuery.stateEager] describes. It
- * emits when the stored value, its fetch time or its invalidated flag changes.
+ * Collecting it runs the freshness check and may fetch, as [DataQuery.stateEager] describes. Use
+ * [DataQuery.data] to read the same values without starting work. It emits when the stored value,
+ * its fetch time or its invalidated flag changes.
  */
-val <T> DataQuery<T>.data: Flow<Fetched<T>?>
+val <T> DataQuery<T>.dataEager: Flow<Fetched<T>?>
   get() = stateEager.map { it.fetched }.distinctUntilChanged(::sameFetched)
 
 /** [DataQuery.requestFetch] with `force = true`: fetches now, as a pull to refresh asks. */

@@ -28,28 +28,28 @@ interface KeyedDataQueries<K : Any, T> {
   fun stateEager(key: K): Flow<QueryState<T>>
 
   /**
+   * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
+   * keeps the key's query but starts no work. It skips a value that is the same as the one before,
+   * as [DataQuery.data] does.
+   */
+  fun data(key: K): Flow<Fetched<T>?>
+
+  /**
    * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
    * Duplicate keys count once, and an empty collection of keys emits one empty map.
    */
-  fun data(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> {
+  fun dataEager(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> {
     val distinct = keys.distinct()
     if (distinct.isEmpty()) {
       return flowOf(emptyMap())
     }
     // combine needs a reified element type, which T is not here
-    val flows: List<Flow<Any?>> = distinct.map { data(it) }
+    val flows: List<Flow<Any?>> = distinct.map { dataEager(it) }
     return combine(flows) { values ->
       @Suppress("UNCHECKED_CAST")
       distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
     }
   }
-
-  /**
-   * [key]'s stored value and fetch time, without checking freshness or fetching. Collecting it
-   * keeps the key's query but starts no work. It skips a value that is the same as the one before,
-   * as [DataQuery.stored] does.
-   */
-  fun stored(key: K): Flow<Fetched<T>?>
 
   /**
    * [key]'s fetch status, as [DataQuery.status] describes. Collecting it keeps the key's query but
@@ -117,9 +117,9 @@ interface KeyedDataQueries<K : Any, T> {
 /**
  * [key]'s values from [KeyedDataQueries.stateEager] without the status. Collecting this may fetch,
  * as [DataQuery.stateEager] describes, and it emits when the stored value, its fetch time or its
- * flag changes.
+ * flag changes. Use [KeyedDataQueries.data] to read the same values without starting any work.
  */
-fun <K : Any, T> KeyedDataQueries<K, T>.data(key: K): Flow<Fetched<T>?> =
+fun <K : Any, T> KeyedDataQueries<K, T>.dataEager(key: K): Flow<Fetched<T>?> =
   stateEager(key).map { it.fetched }.distinctUntilChanged(::sameFetched)
 
 /** [KeyedDataQueries.requestFetch] for [key] with `force = true`: fetches now. */

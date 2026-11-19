@@ -87,9 +87,9 @@ class KeyedDataQueriesTest {
         )
     val keys = listOf("today", "later")
 
-    values.data(keys).first { loaded -> loaded.values.none { it == null } }
+    values.dataEager(keys).first { loaded -> loaded.values.none { it == null } }
     advanceTimeBy(10.minutes)
-    values.data(keys).first { loaded -> loaded["today"]?.value == "today#2" }
+    values.dataEager(keys).first { loaded -> loaded["today"]?.value == "today#2" }
     // Later is still fresh, so only this forced request fetches it again
     values.requestFetch(listOf("later"), force = true).await()
     assertThat(fetch.callCount("today")).isEqualTo(2)
@@ -101,7 +101,7 @@ class KeyedDataQueriesTest {
     fetch.hold()
     val values = values()
 
-    val collectors = List(3) { async { values.data("a").first { it != null } } }
+    val collectors = List(3) { async { values.dataEager("a").first { it != null } } }
     testScheduler.runCurrent()
     fetch.release()
     assertThat(collectors.awaitAll().map { it!!.value }).containsExactly("a#1", "a#1", "a#1")
@@ -109,12 +109,12 @@ class KeyedDataQueriesTest {
   }
 
   @Test
-  fun `data over many keys fetches them together and combines them`() = runTest {
+  fun `dataEager over many keys fetches them together and combines them`() = runTest {
     fetch.hold()
     val values = values()
 
     val combined = async {
-      values.data(listOf("a", "b", "a")).first { loaded -> loaded.values.none { it == null } }
+      values.dataEager(listOf("a", "b", "a")).first { loaded -> loaded.values.none { it == null } }
     }
     testScheduler.runCurrent()
     assertThat(fetch.running).isEqualTo(2)
@@ -128,7 +128,7 @@ class KeyedDataQueriesTest {
   fun `no keys emits an empty map and an idle status`() = runTest {
     val values = values()
 
-    assertThat(values.data(emptyList()).first()).isEmpty()
+    assertThat(values.dataEager(emptyList()).first()).isEmpty()
     assertThat(values.status(emptyList()).first()).isEqualTo(FetchStatus.Idle)
   }
 
@@ -138,7 +138,7 @@ class KeyedDataQueriesTest {
     val values = values(maxFetches = 1)
 
     val combined = async {
-      values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
+      values.dataEager(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     }
     testScheduler.runCurrent()
     assertThat(fetch.running).isEqualTo(1)
@@ -153,7 +153,7 @@ class KeyedDataQueriesTest {
     failing += "b"
     val values = values()
 
-    backgroundScope.launch { values.data(listOf("a", "b")).collect {} }
+    backgroundScope.launch { values.dataEager(listOf("a", "b")).collect {} }
     assertThat(values.status(listOf("a", "b")).first { it is FetchStatus.Failed })
       .isInstanceOf<FetchStatus.Failed>()
     data.fetchFailures.assertSingle<IllegalStateException>()
@@ -163,10 +163,10 @@ class KeyedDataQueriesTest {
   fun `a key's stored value outlives its query`() = runTest {
     val values = values()
 
-    assertThat(values.data("a").first { it != null }!!.value).isEqualTo("a#1")
+    assertThat(values.dataEager("a").first { it != null }!!.value).isEqualTo("a#1")
     testScheduler.runCurrent()
     // The unused query was dropped once its fetch settled, so this builds a new one over the store
-    assertThat(values.data("a").first()!!.value).isEqualTo("a#1")
+    assertThat(values.dataEager("a").first()!!.value).isEqualTo("a#1")
     // The stored value is fresh, so only the forced request fetches here
     values.requestFetch("a", force = true).await()
     assertThat(fetch.calls).containsExactly("a", "a")
@@ -177,13 +177,13 @@ class KeyedDataQueriesTest {
     val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
     val values = values(store = stores)
 
-    backgroundScope.launch { values.data("a").collect {} }
-    backgroundScope.launch { values.data("b").collect {} }
-    values.data("a").first { it != null }
-    values.data("b").first { it != null }
+    backgroundScope.launch { values.dataEager("a").collect {} }
+    backgroundScope.launch { values.dataEager("b").collect {} }
+    values.dataEager("a").first { it != null }
+    values.dataEager("b").first { it != null }
     // Another writer removes a's value, so a's collector fetches it again at once
     stores("a").clear()
-    values.data("a").first { it?.value == "a#2" }
+    values.dataEager("a").first { it?.value == "a#2" }
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(2)
     assertThat(fetch.callCount("b")).isEqualTo(1)
@@ -195,8 +195,8 @@ class KeyedDataQueriesTest {
       val stores = QueryStore.inMemoryByKey<String, String>(maxEntries = 1)
       val values = values(store = stores)
 
-      backgroundScope.launch { values.data("a").collect {} }
-      backgroundScope.launch { values.data("b").collect {} }
+      backgroundScope.launch { values.dataEager("a").collect {} }
+      backgroundScope.launch { values.dataEager("b").collect {} }
       testScheduler.runCurrent()
       advanceTimeBy(1.minutes)
 
@@ -210,11 +210,11 @@ class KeyedDataQueriesTest {
   fun `invalidating an uncollected key makes its next collect fetch`() = runTest {
     val values = values()
 
-    values.data("a").first { it != null }
+    values.dataEager("a").first { it != null }
     testScheduler.runCurrent()
     assertThat(values.invalidate("a").await()).isEqualTo(OperationState.Succeeded)
     assertThat(fetch.calls).containsExactly("a")
-    assertThat(values.data("a").first { it?.value == "a#2" }!!.value).isEqualTo("a#2")
+    assertThat(values.dataEager("a").first { it?.value == "a#2" }!!.value).isEqualTo("a#2")
     assertThat(fetch.calls).containsExactly("a", "a")
   }
 
@@ -223,19 +223,19 @@ class KeyedDataQueriesTest {
     val stores = QueryStore.inMemoryByKey<String, String>()
     val values = values(store = stores)
 
-    values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
+    values.dataEager(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     stores.clear()
-    assertThat(values.data("a").first { it != null }!!.value).isEqualTo("a#2")
+    assertThat(values.dataEager("a").first { it != null }!!.value).isEqualTo("a#2")
     assertThat(fetch.callCount("a")).isEqualTo(2)
   }
 
   @Test
-  fun `stored shows a key's store without fetching`() = runTest {
+  fun `data shows a key's store without fetching`() = runTest {
     val stores = QueryStore.inMemoryByKey<String, String>()
     stores("a").write("cached", START - 2.hours)
     val values = values(store = stores)
 
-    assertThat(values.stored("a").first()?.value).isEqualTo("cached")
+    assertThat(values.data("a").first()?.value).isEqualTo("cached")
     testScheduler.runCurrent()
     // Stale, yet nothing fetched, and the key's query is gone once nothing collects it
     assertThat(fetch.calls).isEmpty()
@@ -246,7 +246,7 @@ class KeyedDataQueriesTest {
   fun `an unforced request fetches only the stale keys`() = runTest {
     val values = values()
 
-    values.data("a").first { it != null }
+    values.dataEager("a").first { it != null }
     testScheduler.runCurrent()
     assertThat(values.requestFetch(listOf("a", "b"), force = false).await())
       .isEqualTo(OperationState.Succeeded)
@@ -264,9 +264,9 @@ class KeyedDataQueriesTest {
   fun `a forced request fetches a fresh key again`() = runTest {
     val values = values()
 
-    values.data("a").first { it != null }
+    values.dataEager("a").first { it != null }
     assertThat(values.requestFetch("a", force = true).await()).isEqualTo(OperationState.Succeeded)
-    assertThat(values.data("a").first()!!.value).isEqualTo("a#2")
+    assertThat(values.dataEager("a").first()!!.value).isEqualTo("a#2")
   }
 
   @Test
@@ -286,7 +286,7 @@ class KeyedDataQueriesTest {
   fun `a forced request over many keys settles once all have`() = runTest {
     val values = values()
 
-    values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
+    values.dataEager(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     assertThat(values.requestFetch(listOf("a", "b"), force = true).await())
       .isEqualTo(OperationState.Succeeded)
     assertThat(fetch.calls).containsExactlyInAnyOrder("a", "b", "a", "b")
@@ -302,9 +302,9 @@ class KeyedDataQueriesTest {
   fun `invalidateAll marks keys in use and keys not in use stale`() = runTest {
     val stores = QueryStore.inMemoryByKey<String, String>()
     val values = values(store = stores)
-    values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
+    values.dataEager(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     testScheduler.runCurrent()
-    backgroundScope.launch { values.data("a").collect {} }
+    backgroundScope.launch { values.dataEager("a").collect {} }
     testScheduler.runCurrent()
 
     assertThat(values.invalidateAll().await()).isEqualTo(OperationState.Succeeded)
@@ -312,12 +312,12 @@ class KeyedDataQueriesTest {
     assertThat(stores("a").data.value).isEqualTo(Fetched("a#1", START, invalidated = true))
     assertThat(stores("b").data.value).isEqualTo(Fetched("b#1", START))
     advanceTimeBy(1.minutes)
-    assertThat(values.data("b").first { it?.value == "b#2" }?.fetchedAt)
+    assertThat(values.dataEager("b").first { it?.value == "b#2" }?.fetchedAt)
       .isEqualTo(START + 1.minutes)
     testScheduler.runCurrent()
 
     // Fetched after the call, so the record leaves it fresh
-    values.data("b").first()
+    values.dataEager("b").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("b")).isEqualTo(2)
     // A's collector leaves invalidated data for the next collect, as invalidate does
@@ -419,9 +419,9 @@ class KeyedDataQueriesTest {
   @Test
   fun `requestFetchAll fetches only the keys in use`() = runTest {
     val values = values()
-    values.data(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
+    values.dataEager(listOf("a", "b")).first { loaded -> loaded.values.none { it == null } }
     testScheduler.runCurrent()
-    backgroundScope.launch { values.data("a").collect {} }
+    backgroundScope.launch { values.dataEager("a").collect {} }
     testScheduler.runCurrent()
 
     assertThat(values.requestFetchAll(force = true).await()).isEqualTo(OperationState.Succeeded)
@@ -433,11 +433,11 @@ class KeyedDataQueriesTest {
   fun `a hold-off record goes once its window ended more than the longest wait ago`() = runTest {
     failing += "a"
     val values = values()
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     advanceTimeBy(1.seconds)
     // The second failure in a row opens a 2 second window, which ends 3 seconds in
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(2)
     assertThat(values.holdOffsHeld).isEqualTo(1)
@@ -445,22 +445,22 @@ class KeyedDataQueriesTest {
     // Exactly the default policy's longest wait after the window ended, another key's check keeps
     // the record
     advanceTimeBy(2.seconds + 1.minutes)
-    values.data("b").first()
+    values.dataEager("b").first()
     testScheduler.runCurrent()
     assertThat(values.holdOffsHeld).isEqualTo(1)
 
     advanceTimeBy(1.milliseconds)
     // A third key's check reads its own record, which drops the spent one
-    values.data("c").first()
+    values.dataEager("c").first()
     testScheduler.runCurrent()
     assertThat(values.holdOffsHeld).isEqualTo(0)
 
     // The next failure starts again at 1 second
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(3)
     advanceTimeBy(1.seconds)
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(4)
   }
@@ -477,14 +477,14 @@ class KeyedDataQueriesTest {
         fetch = fetch,
       )
 
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     advanceTimeBy(5.seconds - 1.milliseconds)
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(1)
     advanceTimeBy(1.milliseconds)
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(2)
   }
@@ -507,24 +507,24 @@ class KeyedDataQueriesTest {
     val values = decliningValues()
 
     for (key in keys) {
-      values.data(key).first()
+      values.dataEager(key).first()
       testScheduler.runCurrent()
     }
     assertThat(values.holdOffsHeld).isEqualTo(MAX_DECLINED_HOLD_OFFS)
 
     // k0 declined longest ago, so its record went, and it fetches on its own once more
-    values.data("k0").first()
+    values.dataEager("k0").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("k0")).isEqualTo(2)
     // Its failure declines again, which drops k1, the oldest now
-    values.data("k0").first()
+    values.dataEager("k0").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("k0")).isEqualTo(2)
     assertThat(values.holdOffsHeld).isEqualTo(MAX_DECLINED_HOLD_OFFS)
-    values.data(keys.last()).first()
+    values.dataEager(keys.last()).first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount(keys.last())).isEqualTo(1)
-    values.data("k1").first()
+    values.dataEager("k1").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("k1")).isEqualTo(2)
   }
@@ -572,7 +572,7 @@ class KeyedDataQueriesTest {
       // Inside the 1 second window the failure opened
       advanceTimeBy(500.milliseconds)
       assertThat(values.failureShownBy("a")).isSameInstanceAs(failure)
-      values.data("a").first()
+      values.dataEager("a").first()
       testScheduler.runCurrent()
       assertThat(fetch.callCount("a")).isEqualTo(1)
 
@@ -580,7 +580,7 @@ class KeyedDataQueriesTest {
       advanceTimeBy(500.milliseconds)
       failing -= "a"
       assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
-      assertThat(values.data("a").first { it != null }?.value).isEqualTo("a#2")
+      assertThat(values.dataEager("a").first { it != null }?.value).isEqualTo("a#2")
       assertThat(fetch.callCount("a")).isEqualTo(2)
     }
 
@@ -598,7 +598,7 @@ class KeyedDataQueriesTest {
 
       assertThat(values.failureShownBy("a")).isSameInstanceAs(retried)
       // The request left the decline in place
-      values.data("a").first()
+      values.dataEager("a").first()
       testScheduler.runCurrent()
       assertThat(fetch.callCount("a")).isEqualTo(2)
     }
@@ -616,7 +616,7 @@ class KeyedDataQueriesTest {
     data.online.value = true
     failing -= "a"
     assertThat(values.status("a").first()).isEqualTo(FetchStatus.Idle)
-    assertThat(values.data("a").first { it != null }?.value).isEqualTo("a#2")
+    assertThat(values.dataEager("a").first { it != null }?.value).isEqualTo("a#2")
   }
 
   @Test
@@ -657,7 +657,7 @@ class KeyedDataQueriesTest {
 
     // The first failure's window still holds, and a new query shows the newest failure
     assertThat(values.failureShownBy("a")).isSameInstanceAs(second)
-    values.data("a").first()
+    values.dataEager("a").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("a")).isEqualTo(2)
   }
@@ -669,21 +669,21 @@ class KeyedDataQueriesTest {
     failing += "extra"
     val values = decliningValues()
     for (key in keys) {
-      values.data(key).first()
+      values.dataEager(key).first()
       testScheduler.runCurrent()
     }
 
     // A retry that fails again is no new decline, so k0 still declined longest ago
     values.refresh("k0").awaitFailed<IllegalStateException>()
-    values.data("extra").first()
+    values.dataEager("extra").first()
     testScheduler.runCurrent()
     assertThat(values.holdOffsHeld).isEqualTo(MAX_DECLINED_HOLD_OFFS)
 
     // k1 still holds off, and k0's record went, so it fetches on its own once more
-    values.data("k1").first()
+    values.dataEager("k1").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("k1")).isEqualTo(1)
-    values.data("k0").first()
+    values.dataEager("k0").first()
     testScheduler.runCurrent()
     assertThat(fetch.callCount("k0")).isEqualTo(3)
   }
@@ -717,7 +717,7 @@ class KeyedDataQueriesTest {
     val stores = QueryStore.inMemoryByKey<String, String>()
     val values = values(store = stores)
 
-    val collector = backgroundScope.launch { values.data("a").collect {} }
+    val collector = backgroundScope.launch { values.dataEager("a").collect {} }
     testScheduler.runCurrent()
     collector.cancel()
     testScheduler.runCurrent()
@@ -735,7 +735,7 @@ class KeyedDataQueriesTest {
     val stores = QueryStore.inMemoryByKey<String, String>()
     val values = values(store = stores)
 
-    val collector = backgroundScope.launch { values.data("a").collect {} }
+    val collector = backgroundScope.launch { values.dataEager("a").collect {} }
     stores("a").data.first { it != null }
     testScheduler.runCurrent()
     fetch.hold()
@@ -813,8 +813,8 @@ class KeyedDataQueriesTest {
                 0 -> values.requestFetch(key, force = true).await()
                 1 -> values.requestFetch(key, force = false).await()
                 2 -> values.invalidate(key).await()
-                3 -> values.stored(key).first()
-                else -> values.data(key).first { it != null }
+                3 -> values.data(key).first()
+                else -> values.dataEager(key).first { it != null }
               }
             }
           }

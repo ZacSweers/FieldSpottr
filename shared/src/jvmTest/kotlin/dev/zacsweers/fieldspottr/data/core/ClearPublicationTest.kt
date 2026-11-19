@@ -101,7 +101,7 @@ class ClearPublicationTest {
       Executors.newFixedThreadPool(2).asCoroutineDispatcher().use { collectors ->
         val fast =
           launch(collectors) {
-            query.data.take(2).collect {
+            query.dataEager.take(2).collect {
               if (it != null) {
                 fastSawInitial.countDown()
               }
@@ -109,7 +109,7 @@ class ClearPublicationTest {
           }
         val slow =
           launch(collectors) {
-            query.data.take(2).collect {
+            query.dataEager.take(2).collect {
               if (it != null) {
                 slowSawInitial.countDown()
                 withTimeout(WAIT_SECONDS * 1000) { releaseSlow.await() }

@@ -32,7 +32,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 /**
- * [DataQuery.stateEager], and the one distinctness rule that it shares with `data` and `stored`.
+ * [DataQuery.stateEager], and the one distinctness rule that it shares with `dataEager` and `data`.
  */
 class QueryStateEagerTest {
   private val offline = IllegalStateException("offline")
@@ -267,13 +267,13 @@ class QueryStateEagerTest {
       runCurrent()
       expectNoEvents()
     }
-    query.data.test {
+    query.dataEager.test {
       assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
       emitted.emit(Fetched(listOf("a"), START))
       runCurrent()
       expectNoEvents()
     }
-    query.stored.test {
+    query.data.test {
       assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
       emitted.emit(Fetched(listOf("a"), START))
       runCurrent()
@@ -293,7 +293,7 @@ class QueryStateEagerTest {
         listOf("a")
       }
 
-    query.data.test {
+    query.dataEager.test {
       assertThat(awaitItem()).isEqualTo(Fetched(listOf("a"), START))
       // Like an optimistic change over a truth that did not change
       emitted.emit(Fetched(listOf("a", "b"), START))
@@ -332,7 +332,7 @@ class QueryStateEagerTest {
       keyedFetch.release()
       assertThat(awaitItem()).isEqualTo(QueryState(Fetched("a!", START), Idle))
     }
-    assertThat(values.data("a").first()).isEqualTo(Fetched("a!", START))
+    assertThat(values.dataEager("a").first()).isEqualTo(Fetched("a!", START))
   }
 
   @Test

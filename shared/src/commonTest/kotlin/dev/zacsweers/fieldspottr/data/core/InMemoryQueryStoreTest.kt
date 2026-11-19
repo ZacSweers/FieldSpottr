@@ -33,7 +33,7 @@ class InMemoryQueryStoreTest {
     fetch.hold()
     val query = query(store)
 
-    query.data.values().test {
+    query.dataEager.values().test {
       // The seed is on screen while the fetch waits
       assertThat(awaitItem()).isEqualTo("cached")
       fetch.release()
@@ -47,10 +47,10 @@ class InMemoryQueryStoreTest {
     val store = QueryStore.inMemory(Fetched("a", START))
     val query = query(store)
 
-    assertThat(query.data.first()?.value).isEqualTo("a")
+    assertThat(query.dataEager.first()?.value).isEqualTo("a")
     store.update { it?.copy(value = "b") }
     assertThat(store.data.value).isEqualTo(Fetched("b", START))
-    assertThat(query.data.first()?.value).isEqualTo("b")
+    assertThat(query.dataEager.first()?.value).isEqualTo("b")
     // Fresh the whole time, so nothing fetched
     assertThat(fetch.callCount).isEqualTo(0)
   }

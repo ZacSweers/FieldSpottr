@@ -71,10 +71,10 @@ class OptimisticQueryStoreScaleTest {
     val keys = List(KEYS) { "k$it" }
     val collectors = Job(backgroundScope.coroutineContext.job)
     for (key in keys) {
-      backgroundScope.launch(collectors) { queries.data(key).collect {} }
+      backgroundScope.launch(collectors) { queries.dataEager(key).collect {} }
     }
     for (key in keys) {
-      queries.data(key).filterNotNull().first()
+      queries.dataEager(key).filterNotNull().first()
     }
     runCurrent()
 

@@ -110,10 +110,10 @@ internal class RealKeyedDataQueries<K : Any, T>(
     }
   }
 
-  override fun stored(key: K): Flow<Fetched<T>?> = flow {
+  override fun data(key: K): Flow<Fetched<T>?> = flow {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.stored)
+      emitAll(entry.query.data)
     } finally {
       entry.release()
     }

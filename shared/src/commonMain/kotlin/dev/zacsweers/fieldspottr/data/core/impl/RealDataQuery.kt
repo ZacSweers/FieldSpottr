@@ -129,7 +129,7 @@ internal class RealDataQuery<T>(
    */
   override val state: Flow<QueryState<T>> = flow { StateObserver(fetches = false).observe(this) }
 
-  override val stored: Flow<Fetched<T>?> = store.data.distinctUntilChanged(::sameFetched)
+  override val data: Flow<Fetched<T>?> = store.data.distinctUntilChanged(::sameFetched)
 
   override val status: StateFlow<FetchStatus> = StatusView(progress)
 

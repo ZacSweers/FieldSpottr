@@ -8,7 +8,7 @@ import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import dev.zacsweers.fieldspottr.data.core.data
+import dev.zacsweers.fieldspottr.data.core.dataEager
 import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.refresh
 import dev.zacsweers.fieldspottr.data.core.values
@@ -205,13 +205,13 @@ internal constructor(
     )
 
   /** Latest known forecast, or null until one loads. Collecting it fetches first when stale. */
-  val forecast: Flow<WeatherForecast?> = query.data.values().map { it?.toWeatherForecast() }
+  val forecast: Flow<WeatherForecast?> = query.dataEager.values().map { it?.toWeatherForecast() }
 
   init {
     // A forecast stored before the app read Open-Meteo's offset has no sunset, and it can stay
     // fresh for an hour after an update. Replace it once, so the sunset shows right away.
     data.scope.launch {
-      val stored = query.stored.first()
+      val stored = query.data.first()
       if (stored != null && stored.value.utcOffsetSeconds == null) {
         query.requestFetch(force = true)
       }
