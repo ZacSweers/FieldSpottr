@@ -901,14 +901,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * A key's view of [stored] with its [slice], as [plan] plans it. It reads nothing but its
-   * arguments and [apply], so the same truth and slice give the same value. A null slice gives
-   * [stored].
-   */
-  private fun overlay(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Fetched<T>? =
-    run(plan(stored, slice))
-
-  /**
    * The plan of a key's view of [stored] with its [slice], by the table in the class KDoc: records
    * first, then the list's rows in queue order, then the changes the set knows that the list does
    * not show yet, in the order the set learned of them. Each change applies at most once.
@@ -1259,6 +1251,22 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     ): Known<K, M> = Known(settled, payload, shown, since, marks, expiry)
 
     fun isExpired(now: Instant): Boolean = since != null && now - since >= RECORD_LIFETIME
+
+    /**
+     * Whether no mark holds this change and the list agrees with its settled state, by the table's
+     * forget rules without expiry. [row] is the change's row in the list, and [passed] says the
+     * list showed the row and lacks it now.
+     */
+    fun listAgrees(row: OutboxEntry<KeyedMutation<K, M>>?, passed: Boolean): Boolean =
+      marks.isEmpty() &&
+        when (settled) {
+          null -> true
+          Kind.Pending -> false
+          Kind.HandedOff -> row != null || passed
+          Kind.Sent -> passed
+          Kind.Failed -> row?.status is OutboxStatus.Failed || passed
+          Kind.Dropped -> passed
+        }
   }
 
   /** A provisional mark of one [retry] or [discard] call. It compares by identity. */
@@ -1549,21 +1557,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      */
     fun normalized(change: EntryId): SetState<K, T, M> {
       val entry = known[change] ?: return this
-      if (entry.marks.isNotEmpty()) {
-        return this
-      }
       val row = listed[change]
       val passed = rows != null && entry.shown && row == null
-      val agrees =
-        when (entry.settled) {
-          null -> true
-          Kind.Pending -> false
-          Kind.HandedOff -> row != null || passed
-          Kind.Sent -> passed
-          Kind.Failed -> row?.status is OutboxStatus.Failed || passed
-          Kind.Dropped -> passed
-        }
-      return if (agrees) {
+      return if (entry.listAgrees(row, passed)) {
         forgetting(change)
       } else {
         this
@@ -1610,18 +1606,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       for ((change, entry) in this.known) {
         val row = listed[change]
         val passed = entry.shown && row == null
-        val forget =
-          entry.marks.isEmpty() &&
-            when (entry.settled) {
-              null -> true
-              Kind.Pending -> false
-              Kind.HandedOff -> row != null || passed || entry.isExpired(now)
-              // Its commit may be retried for longer than any lifetime, so only its row decides
-              Kind.Sent -> passed
-              Kind.Failed -> row?.status is OutboxStatus.Failed || passed || entry.isExpired(now)
-              Kind.Dropped -> passed || entry.isExpired(now)
-            }
-        if (forget) {
+        // A Sent commit may be retried for longer than any lifetime, so only its row decides
+        val expires =
+          entry.settled != Kind.Pending && entry.settled != Kind.Sent && entry.isExpired(now)
+        if (entry.listAgrees(row, passed) || (entry.marks.isEmpty() && expires)) {
           known = known.removing(change)
         } else if (row != null && !entry.shown) {
           known = known.putting(change, entry.copy(shown = true))
