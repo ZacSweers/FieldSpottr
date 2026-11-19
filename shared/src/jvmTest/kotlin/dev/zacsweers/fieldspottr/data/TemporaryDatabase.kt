@@ -8,6 +8,7 @@ import app.cash.sqldelight.db.SqlSchema
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.fileSqliteDriver
+import dev.zacsweers.fieldspottr.sqliteDriverProperties
 import dev.zacsweers.metro.suspendLazy
 import java.nio.file.Files
 import java.nio.file.Path
@@ -19,6 +20,10 @@ import org.junit.rules.ExternalResource
  * A database in a temp file, with the desktop driver. A file database gets a connection per thread,
  * so concurrent writes behave as they do in the app. [reopen] closes the driver and opens the same
  * file again, like a process restart.
+ *
+ * A connection waits up to one minute for a lock, longer than the app's connections. When a write
+ * holds the lock past the timeout, a concurrent read fails as busy. An outbox reports that read and
+ * reads again, which fails a test that expects no reported failure.
  */
 class TemporaryDatabase<T>(
   val databaseConstructor: (SqlDriver) -> T,
@@ -30,7 +35,7 @@ class TemporaryDatabase<T>(
 
   private val lazyDb = suspendLazy {
     val file = Files.createTempFile("fs-test", ".db")
-    val driver = fileSqliteDriver(file.absolutePathString())
+    val driver = openDriver(file)
     schema.create(driver).await()
     val instance = databaseConstructor(driver)
     this.dbBacker = instance
@@ -55,7 +60,7 @@ class TemporaryDatabase<T>(
     lazyDb.await()
     val path = checkNotNull(file)
     checkNotNull(driver).close()
-    val driver = fileSqliteDriver(path.absolutePathString())
+    val driver = openDriver(path)
     val instance = databaseConstructor(driver)
     this.driver = driver
     this.dbBacker = instance
@@ -73,6 +78,15 @@ class TemporaryDatabase<T>(
     file = null
   }
 }
+
+/** The desktop driver over the database file at [path], with the busy timeout for tests. */
+private fun openDriver(path: Path): SqlDriver =
+  fileSqliteDriver(
+    path.absolutePathString(),
+    sqliteDriverProperties().apply { setProperty("busy_timeout", BUSY_TIMEOUT_MILLIS) },
+  )
+
+private const val BUSY_TIMEOUT_MILLIS = "60000"
 
 @JvmName("create")
 fun TemporaryDatabase(): TemporaryDatabase<FSDatabase> {
