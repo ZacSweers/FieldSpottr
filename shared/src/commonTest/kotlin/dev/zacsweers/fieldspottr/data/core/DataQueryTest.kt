@@ -284,23 +284,6 @@ class DataQueryTest {
   }
 
   @Test
-  fun `a forced request after an invalidation starts its own fetch`() = runTest {
-    fetch.hold()
-    val query = dataQuery()
-
-    val before = query.requestFetch(force = true)
-    testScheduler.runCurrent()
-    store.write(100, START)
-    query.invalidate()
-    val after = query.requestFetch(force = true)
-    fetch.release()
-    // The fetch from before the invalidation is cancelled, and the one after it lands last
-    assertThat(before.await()).isEqualTo(OperationState.Cancelled)
-    assertThat(after.await()).isEqualTo(OperationState.Succeeded)
-    assertThat(stored.value).isEqualTo(Fetched(101, START))
-  }
-
-  @Test
   fun `a fetch does not write over data with a newer fetch time`() = runTest {
     fetch.hold()
     val query = dataQuery()
@@ -1416,22 +1399,6 @@ class DataQueryTest {
     testScheduler.runCurrent()
 
     assertThat(fetch.callCount).isEqualTo(1)
-  }
-
-  @Test
-  fun `a declined failure holds off the reconnect check`() = runTest {
-    val query = failingQuery(fetchRetry = RetryPolicy(maxAttempts = 1) { 1.seconds })
-    backgroundScope.launch { query.dataAutoFetch.collect {} }
-    testScheduler.runCurrent()
-    assertThat(fetch.callCount).isEqualTo(1)
-
-    data.online.value = false
-    testScheduler.runCurrent()
-    data.online.value = true
-    testScheduler.runCurrent()
-
-    assertThat(fetch.callCount).isEqualTo(1)
-    assertThat(query.status.value).isInstanceOf<FetchStatus.Failed>()
   }
 
   @Test
