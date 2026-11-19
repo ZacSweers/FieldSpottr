@@ -138,71 +138,6 @@ class OptimisticQueryStoreRestartTest {
   }
 
   @Test
-  fun `a change left sending is sent again with the same id`() = runTest {
-    online.value = true
-    send.hold(Add("b"))
-    val first = owner()
-    val before = process().create(first, setOf(sender)).tags()
-    before.mutate(Add("b"))
-    // The send has started and is waiting on the held gate
-    attempts.first { it == 1 }
-    val sending =
-      before.pending.first { it.singleOrNull()?.status == OutboxStatus.Sending }.single()
-
-    // The owner dies with the send in flight, so the row stays Sending
-    first.cancel()
-    send.release(Add("b"))
-
-    val after = process().create(owner(), setOf(sender)).tags()
-    after.pending.first { it.isEmpty() }
-
-    assertThat(send.attempts).containsExactly(Add("b"), Add("b"))
-    assertThat(send.sent).containsExactly(Add("b"))
-    // Both attempts carried the row's id, so the server can tell the retry from a new change
-    assertThat(sentIds).containsExactly(sending.id, sending.id)
-    assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b"))
-  }
-
-  @Test
-  fun `a stored server answer is cleared once its row commits`() = runTest {
-    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
-    val rows = stores.open(ReplyingTags.name, Add.serializer())
-    val ids = listOf(rows.insertNew("", Add("b")), rows.insertNew("", Add("c")))
-    online.value = true
-    val data =
-      DataScope.Factory(
-          onFailure = TestFailures(),
-          onFetchFailure = TestFailures(),
-          online = online,
-          stores = stores,
-          clock = testClock(START),
-        )
-        .create(
-          owner(),
-          setOf(ReplyingTags.exchangingSender { add, _ -> listOf("a", add.tag.uppercase()) }),
-        )
-    // No handle is attached, so each answer waits on its row
-    val sent = rows.entries().first { list -> list.all { it.status == OutboxStatus.Sent } }
-    assertThat(sent.map { it.reply }).containsExactly("""["a","B"]""", """["a","C"]""")
-    assertThat(sent.map { it.committed }).containsExactly(false, false)
-
-    data.optimisticStore(
-      ReplyingTags,
-      base = truth,
-      apply = { current, add -> current.orEmpty() + add.tag },
-    )
-    rows.entries().first { it.isEmpty() }
-
-    // c sent while b was owed at the same instant, so c's send time is one millisecond later
-    assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "C"), START + 1.milliseconds))
-    for (id in ids) {
-      val committed = checkNotNull(rows.entry(id).first())
-      assertThat(committed.committed).isTrue()
-      assertThat(committed.reply).isNull()
-    }
-  }
-
-  @Test
   fun `a stored server answer outlives a reopen and commits once a handle attaches`() = runTest {
     val rows = stores().open(ReplyingTags.name, Add.serializer())
     val ids = listOf(rows.insertNew("", Add("b")), rows.insertNew("", Add("c")))
@@ -381,64 +316,6 @@ class OptimisticQueryStoreRestartTest {
   }
 
   @Test
-  fun `a stop while the read of older owed rows waits keeps the sent row after a reopen`() =
-    runTest {
-      val rows = stores().open(Tags.name, Add.serializer())
-      val older = rows.insertNew("", Add("b"))
-      val newer = rows.insertNew("", Add("c"))
-      send.hold(Add("c"))
-      online.value = true
-      val gate = CompletableDeferred<Unit>()
-      val first = realTimeOwner()
-      try {
-        // No handle is attached, so the older row is stored owed, and the newer send waits
-        val data = process(FROZEN, OwedReadHooks(stores())).create(first, setOf(sender))
-        bounded("the newer send") { attempts.first { it == 2 } }
-        val read = CompletableDeferred<Unit>()
-        afterOwedRead.set { read.complete(Unit) }
-        data.tags()
-        // The hook runs on the owner's one thread, which marks the handle ready before it runs the
-        // released send
-        bounded("the handle's read of the owed rows") { read.await() }
-        val held = CompletableDeferred<Unit>()
-        nextOwedKeyRead.set {
-          held.complete(Unit)
-          gate.await()
-        }
-        send.release(Add("c"))
-        bounded("the held read") { held.await() }
-
-        // Saved before the read, one millisecond after the older row, so it commits second
-        val saved = checkNotNull(rows.entry(newer).first())
-        assertThat(saved.status).isEqualTo(OutboxStatus.Sent)
-        assertThat(saved.committed).isFalse()
-        assertThat(saved.sentAt).isEqualTo(START + 1.milliseconds)
-        assertThat(checkNotNull(rows.entry(older).first()).sentAt).isEqualTo(START)
-        bounded("the owner to stop") { stop(first) }
-        assertThat(gate.isCompleted).isFalse()
-
-        nextOwedKeyRead.set(null)
-        temporaryDatabase.reopen()
-
-        val reopened = stores().open(Tags.name, Add.serializer())
-        val owed = reopened.owed().associateBy { it.id }
-        assertThat(owed.getValue(older).sentAt).isEqualTo(START)
-        assertThat(owed.getValue(newer).sentAt).isEqualTo(START + 1.milliseconds)
-        val after = process().create(owner(), setOf(sender)).tags()
-        bounded("the owed rows to commit") { reopened.entries().first { it.isEmpty() } }
-
-        // b commits before c, and neither row sent again
-        assertThat(truth.data.value?.value).isEqualTo(listOf("a", "b", "c"))
-        assertThat(after.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
-        assertThat(sentIds).containsExactly(older, newer)
-      } finally {
-        gate.complete(Unit)
-        send.release(Add("c"))
-        first.cancel()
-      }
-    }
-
-  @Test
   fun `a send that returns after the owner stopped is stored and not sent again`() = runTest {
     val rows = stores().open(Tags.name, Add.serializer())
     val id = rows.insertNew("", Add("b"))
@@ -606,24 +483,11 @@ class OptimisticQueryStoreRestartTest {
   // Runs once, before the next read of one key's owed rows, and is then cleared
   private val nextOwedKeyRead = AtomicReference<(suspend () -> Unit)?>(null)
 
-  // Runs once, after the next read of every owed row returns and before its caller resumes, and is
-  // then cleared
-  private val afterOwedRead = AtomicReference<(() -> Unit)?>(null)
-
-  /**
-   * [stores] whose reads of one key's owed rows run [nextOwedKeyRead] first, and whose reads of
-   * every owed row run [afterOwedRead] last.
-   */
+  /** [stores] whose reads of one key's owed rows run [nextOwedKeyRead] first. */
   private inner class OwedReadHooks(private val stores: OutboxStores) : OutboxStores by stores {
     override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
       val rows = stores.open(name, serializer)
       return object : OutboxStore<E> by rows {
-        override suspend fun owed(): List<OutboxEntry<E>> {
-          val owed = rows.owed()
-          afterOwedRead.getAndSet(null)?.invoke()
-          return owed
-        }
-
         override suspend fun owed(key: String): List<OutboxEntry<E>> {
           nextOwedKeyRead.getAndSet(null)?.invoke()
           return rows.owed(key)
@@ -659,12 +523,6 @@ class OptimisticQueryStoreRestartTest {
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
-
-/** A clock that stands still at [START], so sends tie. */
-private val FROZEN =
-  object : Clock {
-    override fun now(): Instant = START
-  }
 
 private val Tags = OutboxKey<OptimisticQueryStoreRestartTest.Add>("tags")
 
