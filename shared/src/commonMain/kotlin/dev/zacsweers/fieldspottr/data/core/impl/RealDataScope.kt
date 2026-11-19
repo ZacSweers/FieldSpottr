@@ -88,10 +88,10 @@ internal class RealDataScopeFactory(
   /** The hold-off policy of every query built without one of its own. */
   val fetchRetry: RetryPolicy,
 ) : DataScope.Factory {
-  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
+  // The names of the running outbox senders. This and reported change by compare-and-set only, and
+  // nothing observes them, so they need no StateFlow.
   private val runningOutboxes = AtomicReference(persistentHashSetOf<String>())
-  // Each running outbox's last reported backlog, null until its first read. Updated by
-  // compare-and-set only.
+  // Each running outbox's last reported backlog, null until its first read
   private val reported = AtomicReference(persistentHashMapOf<Any, OutboxBacklog?>())
   // The combined backlog, null while a running outbox has not read its rows yet
   private val combined = MutableStateFlow<OutboxBacklog?>(OutboxBacklog.Empty)
@@ -140,8 +140,7 @@ internal class RealDataScopeFactory(
   /**
    * Counts a new outbox in [scope] as running, with its backlog unknown until it first reads its
    * rows, and stops counting it when the scope completes. Returns the callback the outbox reports
-   * its backlog through. A scope without a job never completes, so its outbox stays counted for
-   * good, the same way [claimOutbox] keeps such an outbox's name claimed.
+   * its backlog through. A scope without a job never completes, so its outbox stays counted.
    */
   fun track(scope: CoroutineScope): (OutboxBacklog) -> Unit {
     val token = Any()
