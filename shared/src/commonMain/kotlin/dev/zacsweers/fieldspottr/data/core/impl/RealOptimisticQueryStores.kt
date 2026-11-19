@@ -119,7 +119,8 @@ import kotlinx.coroutines.sync.withLock
  * HandedOff, Failed and Dropped expire [RECORD_LIFETIME] after the change entered them, for a row
  * the list never shows. HandedOff, which shows a change, ends by a timer in the set's scope, so its
  * bound holds on an idle set. Failed and Dropped show nothing, so the set checks their expiry only
- * on each new list, commit and fetch write.
+ * on each new list, commit and fetch write. Commit records expire the same lazy way, so an idle set
+ * keeps them until its next commit or fetch write.
  *
  * A change whose insert failed, or whose owner stopped before the insert, has no row, and the set
  * forgets it at once. A change the set forgot is decided by the list: a row in flight applies, and
@@ -305,8 +306,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * [apply] that throws marks the truth stale and leaves the change out of the view, since no
      * view can apply it. An answer that cannot be decoded marks the truth stale too, and a record
      * without a value applies the change once on top of every truth fetched before the send, until
-     * a fetch from after the send, which holds the change, replaces it. A stale mark that fails
-     * throws, so the commit runs again.
+     * a fetch from after the send, which holds the change, replaces it. That lasts at most ten
+     * minutes from the send, after which the stale mark alone makes the next fetch correct the
+     * value. A stale mark that fails throws, so the commit runs again.
      */
     override suspend fun commit(
       entry: OutboxEntry<KeyedMutation<K, M>>,

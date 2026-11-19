@@ -12,7 +12,8 @@ import kotlinx.serialization.Serializable
  * The store keeps the truth, which is the last value the server sent, and a durable row for each
  * change that waits. It shows the truth with the waiting changes applied on top. A change shows at
  * once, stays on top of a fetch that lands while it waits, and drops out when the server rejects
- * it. A query over this store sees a plain [QueryStore].
+ * it. A query over this store sees a plain [QueryStore]. [data] emits its first value once the
+ * outbox's rows have been read, and a failed read is reported and retried.
  *
  * ```
  * mutate(m2)                 data = apply(apply(truth, m1), m2)
@@ -42,10 +43,11 @@ import kotlinx.serialization.Serializable
  * A commit that fails on a store error, like a base store write on a full disk, is reported there
  * too, once per attempt. The change still counts as sent, since the server has it, so its row stays
  * sent and waits, and the commit runs again after a pause that doubles from 1 second to 1 minute
- * and resets once the key's commits all land. The change keeps showing meanwhile. Within one
- * process, a commit whose truth write landed never applies the change again: when only the write
- * that marks the row committed fails, it is reported to the sender's handler, and a retry repeats
- * that write alone, after the same doubling pause.
+ * and resets once the key's commits all land. The change keeps showing meanwhile. When the base
+ * write of a server answer keeps failing for more than ten minutes, [data] shows the `apply`
+ * estimate between commit retries. Within one process, a commit whose truth write landed never
+ * applies the change again: when only the write that marks the row committed fails, it is reported
+ * to the sender's handler, and a retry repeats that write alone, after the same doubling pause.
  *
  * On the live path, right after the send, the row is still Sending when that write runs. If it
  * fails there, the row stays Sending, and the outbox sends it again with the same id, as [Outbox]
