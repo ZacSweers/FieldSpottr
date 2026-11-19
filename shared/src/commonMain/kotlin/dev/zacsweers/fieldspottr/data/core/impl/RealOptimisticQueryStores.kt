@@ -1143,8 +1143,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       awaitStored(key)
       base.lock.withLock {
         val dropped = unconfirmed.load()[key]
-        if (dropped != null) {
-          if (fetched?.fetchedAt?.isAfterSend(dropped) != true) {
+        val fetchedAt = fetched?.fetchedAt
+        // Only a fetch time tells what the server held. A write without one and a clear replace the
+        // truth as QueryStore.write promises, and the entry stays for a later fetch from before it.
+        if (dropped != null && fetchedAt != null) {
+          if (!fetchedAt.isAfterSend(dropped)) {
             // May lack a change whose record is gone, so the truth stays and a new fetch runs
             truth.invalidate()
             pruneAfter(fetched)

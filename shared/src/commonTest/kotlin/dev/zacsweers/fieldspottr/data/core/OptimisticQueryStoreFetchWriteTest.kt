@@ -152,6 +152,42 @@ class OptimisticQueryStoreFetchWriteTest {
     failures.assertNone()
   }
 
+  /** Sends "b" on key x, then lets its record expire unconfirmed and prunes it. */
+  private suspend fun TestScope.expiredUnconfirmedSend() {
+    tagSets()
+    advanceTimeBy(1.seconds)
+    sets("x").mutate(Add("b")).awaitSucceeded()
+    runCurrent()
+    advanceTimeBy(11.minutes)
+    writeOtherKey()
+    assertThat(sets.committedRecords).isEqualTo(0)
+  }
+
+  @Test
+  fun `a write without a fetch time replaces the truth after a record expired unconfirmed`() =
+    runTest {
+      expiredUnconfirmedSend()
+
+      sets("x").write(Fetched(listOf("q"), fetchedAt = null))
+
+      assertThat(truths.getValue("x").data.value).isEqualTo(Fetched(listOf("q"), null))
+      // A later fetch from before the send may still lack the change, so it keeps the truth
+      sets("x").writeFetched(Fetched(listOf("a"), START)) { _, _ -> false }
+      assertThat(truths.getValue("x").data.value)
+        .isEqualTo(Fetched(listOf("q"), null, invalidated = true))
+      failures.assertNone()
+    }
+
+  @Test
+  fun `a clear removes the truth after a record expired unconfirmed`() = runTest {
+    expiredUnconfirmedSend()
+
+    sets("x").clearFetched { _, _ -> false }
+
+    assertThat(truths.getValue("x").data.value).isEqualTo(null)
+    failures.assertNone()
+  }
+
   @Test
   fun `a fetch that starts after a pruned record's send is the server's word`() = runTest {
     val fetch = TestFetch { listOf("a") }
