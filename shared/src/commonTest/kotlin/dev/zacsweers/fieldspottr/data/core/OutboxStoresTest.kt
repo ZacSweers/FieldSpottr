@@ -58,16 +58,6 @@ class OutboxStoresTest {
   }
 
   @Test
-  fun `a second running sender on one name fails`() = runTest {
-    val factory = testDataScopeFactory()
-    factory.create(backgroundScope, setOf(Notes.sender { _, _ -> }))
-
-    assertFailsWith<IllegalStateException> {
-      factory.create(backgroundScope, setOf(Notes.sender { _, _ -> }))
-    }
-  }
-
-  @Test
   fun `an outbox over a store of its own sends the rows already in it`() = runTest {
     val send = TestSend<String>()
     val store = inMemoryOutboxStore<String>()

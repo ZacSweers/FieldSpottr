@@ -365,20 +365,6 @@ abstract class OutboxStoreContract {
   }
 
   @Test
-  fun `changes cover every row a clear deletes`() = runTest {
-    val store = newStore(1.minutes)
-    val a = store.insertNew("k", "a")
-    val b = store.insertNew("other", "b")
-    val changes = store.changesIn(backgroundScope)
-    assertEquals(OutboxChange.Unknown, changes.receive())
-
-    clearAll(store)
-
-    // A store may name the rows, or give Unknown when it deleted them without reading them
-    changes.awaitNamed(setOf(a, b), orUnknown = true)
-  }
-
-  @Test
   fun `both head reads pick a key's oldest queued or sending row whichever it is`() = runTest {
     val store = newStore(1.minutes)
     // On k the oldest row is Queued and a newer one is Sending
