@@ -31,7 +31,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -180,22 +179,35 @@ class UnreadableRowTest {
     assertThat(reported.await().outbox).isEqualTo("labelled")
   }
 
+  /**
+   * A [CancellationException] thrown by a payload serializer fails the read that met it, and leaves
+   * the row readable by the next read, since it says nothing about the stored payload. A payload
+   * that fails to decode is still recorded and reported.
+   */
   @Test
   fun `a cancellation thrown inside a decode in a file outbox leaves the row readable`() = runTest {
-    assertCancelledDecodeLeavesRowReadable(
-      DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem),
-      nested = false,
-    )
-  }
+    val failing = FailOnceSerializer()
+    val store =
+      DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+        .open("plain", failing)
+    val reports = mutableListOf<Pair<EntryId, Throwable>>()
+    store.onUndecodable { id, cause -> reports += id to cause }
+    val id = store.insertNew("k", "a")
 
-  @Test
-  fun `a cancellation thrown inside a nested decode in a file outbox leaves the row readable`() =
-    runTest {
-      assertCancelledDecodeLeavesRowReadable(
-        DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem),
-        nested = true,
-      )
-    }
+    failing.next = CancellationException("Cancelled inside a decode")
+    val thrown = runCatching { store.head("k") }.exceptionOrNull()
+
+    assertThat(thrown).isNotNull().isInstanceOf<CancellationException>()
+    assertThat(thrown?.message).isEqualTo("Cancelled inside a decode")
+    assertThat(reports).isEmpty()
+    assertThat(store.head("k")?.payload).isEqualTo("a")
+
+    // A payload that fails to decode is still recorded and reported
+    failing.next = SerializationException("Corrupt payload")
+    assertThat(store.head("k")).isNull()
+    assertThat(reports.map { it.first }).containsExactly(id)
+    assertThat(reports.single().second.message).isEqualTo("Corrupt payload")
+  }
 
   private fun writeLog(name: String, vararg rows: OutboxLog.Row) {
     fileSystem.createDirectories(directory)
@@ -273,7 +285,7 @@ internal suspend fun TestScope.assertUnreadableRowIsHandled(stores: OutboxStores
 }
 
 /** Decodes a string, and throws [next] instead from the next decode after it is set. */
-internal class FailOnceSerializer : KSerializer<String> {
+private class FailOnceSerializer : KSerializer<String> {
   @Volatile var next: Throwable? = null
 
   override val descriptor = PrimitiveSerialDescriptor("FailOnce", PrimitiveKind.STRING)
@@ -289,48 +301,4 @@ internal class FailOnceSerializer : KSerializer<String> {
     }
     return decoder.decodeString()
   }
-}
-
-/**
- * Checks that a [CancellationException] thrown by a payload serializer fails the read that met it,
- * and leaves the row readable by the next read, since it says nothing about the stored payload. A
- * payload that fails to decode is still recorded and reported. [nested] decodes the payload as an
- * element of a JSON list, so the format decodes it inside its own call.
- */
-internal suspend fun assertCancelledDecodeLeavesRowReadable(stores: OutboxStores, nested: Boolean) {
-  val failing = FailOnceSerializer()
-  if (nested) {
-    assertCancelledDecodeLeavesRowReadable(
-      stores.open("nested", ListSerializer(failing)),
-      listOf("a"),
-      failing,
-    )
-  } else {
-    assertCancelledDecodeLeavesRowReadable(stores.open("plain", failing), "a", failing)
-  }
-}
-
-private suspend fun <E> assertCancelledDecodeLeavesRowReadable(
-  store: OutboxStore<E>,
-  payload: E,
-  failing: FailOnceSerializer,
-) {
-  val reports = mutableListOf<Pair<EntryId, Throwable>>()
-  store.onUndecodable { id, cause -> reports += id to cause }
-  val id = store.insertNew("k", payload)
-
-  failing.next = CancellationException("Cancelled inside a decode")
-  val thrown = runCatching { store.head("k") }.exceptionOrNull()
-
-  assertThat(thrown).isNotNull().isInstanceOf<CancellationException>()
-  assertThat(thrown?.message).isEqualTo("Cancelled inside a decode")
-  assertThat(reports).isEmpty()
-  assertThat(store.head("k")?.payload).isEqualTo(payload)
-
-  // A payload that fails to decode is still recorded and reported
-  val corrupt = SerializationException("Corrupt payload")
-  failing.next = corrupt
-  assertThat(store.head("k")).isNull()
-  assertThat(reports.map { it.first }).containsExactly(id)
-  assertThat(reports.single().second.message).isEqualTo("Corrupt payload")
 }

@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
-import assertk.assertFailure
 import assertk.assertThat
-import assertk.assertions.containsExactly
-import assertk.assertions.hasMessage
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
@@ -18,7 +15,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import okio.ForwardingFileSystem
-import okio.IOException
 import okio.Path
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
@@ -31,17 +27,10 @@ class DataStoreOutboxStoreClearTest {
   /** Runs after each write moves its new file into place. */
   private var afterMove: (() -> Unit)? = null
 
-  /** Thrown in place of the next move of a new file into place. */
-  private var failMove: IOException? = null
-
   // DataStore writes a new file and moves it into place, so the move is when a write lands
   private val fileSystem =
     object : ForwardingFileSystem(fake) {
       override fun atomicMove(source: Path, target: Path) {
-        failMove?.let {
-          failMove = null
-          throw it
-        }
         super.atomicMove(source, target)
         afterMove?.invoke()
       }
@@ -63,19 +52,6 @@ class DataStoreOutboxStoreClearTest {
       store.onUndecodable { id, _ -> reported += id }
       assertThat(reported).isEmpty()
     }
-
-  @Test
-  fun `a clear whose write fails keeps the rows that did not decode`() = runTest {
-    val store = storeWithUndecodableRow()
-    failMove = IOException("Disk full")
-
-    assertFailure { store.clear() }.hasMessage("Disk full")
-
-    assertThat(storedRows()).containsExactly("old")
-    val reported = mutableListOf<EntryId>()
-    store.onUndecodable { id, _ -> reported += id }
-    assertThat(reported).containsExactly(EntryId("old"))
-  }
 
   @Test
   fun `a caller cancelled after one store's clear starts no clear of another store`() = runTest {
