@@ -54,7 +54,6 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.selects.SelectClause0
 import kotlinx.coroutines.selects.select
 
 /**
@@ -116,9 +115,9 @@ internal class RealDataQuery<T>(
   /**
    * The store's values with the status that applies to them, from one collection of the store per
    * observer, as [StateObserver] describes. Each observer checks the first value it gets, since the
-   * data can go stale between observers, as [checkOnSubscribe] describes. The check is a command of
-   * its own, so an observer that leaves after one value, like `first()`, still started it. The
-   * first observer then starts the watcher, which can wait for that check, as [watch] describes.
+   * data can go stale between observers. The check is a command of its own, so an observer that
+   * leaves after one value, like `first()`, still started it. The first observer then starts the
+   * watcher, which can wait for that check, as [watch] describes.
    */
   override val stateAutoFetch: Flow<QueryState<T>> = flow {
     StateObserver(fetches = true).observe(this)
@@ -187,10 +186,8 @@ internal class RealDataQuery<T>(
     private val reads = MutableStateFlow(0)
     // This collector's first check, set when its first status shows Fetching on its behalf
     private val speculation = MutableStateFlow<Operation?>(null)
-    // Set once the first value was handled
+    // Set once the first value was handled. A collector that fetches was counted in then.
     private var started = false
-    // Set once this collector was counted in, which also started its check
-    private var counted = false
     private var speculative = false
     // Set once this collector showed the value of the write in progress, so it shows Idle
     private var wroteEarly = false
@@ -223,7 +220,7 @@ internal class RealDataQuery<T>(
             }
           }
       } finally {
-        if (counted) {
+        if (fetches && started) {
           stopWatching()
         }
       }
@@ -277,12 +274,7 @@ internal class RealDataQuery<T>(
       ) {
         wroteEarly = true
       }
-      val wrote = current.wrote
-      if (wrote != null && wrote !== handled) {
-        settle(wrote, current, out)
-      } else {
-        show(latest, current, out)
-      }
+      update(current, out)
     }
 
     /**
@@ -294,12 +286,20 @@ internal class RealDataQuery<T>(
     private suspend fun first(value: Fetched<T>?, out: FlowCollector<QueryState<T>>) {
       started = true
       if (fetches) {
-        counted = true
         val quiet = idle && submissions.load() == submitted
         // Read before the check is queued, so a watcher this collector starts sees a reconnect that
         // comes after the check ran offline and before the watcher collects the network state
         val wasOnline = online.value
-        val check = checkOnSubscribe(value, quiet)
+        // A quiet key had no command queued, running or submitted from before the read until now,
+        // so the value already shows every write this query made. A fresh value then needs no check
+        // and no second read. Otherwise the collector joins or queues a check that reads the store
+        // again when its turn comes.
+        val check =
+          if (quiet && !isStale(value)) {
+            null
+          } else {
+            autoCheck()
+          }
         if (check != null) {
           holds.holdUntilSettled(check)
         }
@@ -316,12 +316,7 @@ internal class RealDataQuery<T>(
       }
       // A write that settled while the first read ran may be missing from it, so the record comes
       // before anything shows
-      val wrote = current.wrote
-      if (wrote != null && wrote !== handled) {
-        settle(wrote, current, out)
-      } else {
-        show(value, current, out)
-      }
+      update(current, out)
     }
 
     private suspend fun onProgress(out: FlowCollector<QueryState<T>>) {
@@ -329,13 +324,21 @@ internal class RealDataQuery<T>(
         return
       }
       val current = progress.value
-      val wrote = current.wrote
       if (current.status is FetchStatus.Fetching) {
         speculative = false
       }
       if (!current.writing) {
         wroteEarly = false
       }
+      update(current, out)
+    }
+
+    /**
+     * Lines this collector up with the write record in [current] when it has not yet, else shows
+     * [latest] with the status [current] shows, unless a new read is still due.
+     */
+    private suspend fun update(current: Progress<T>, out: FlowCollector<QueryState<T>>) {
+      val wrote = current.wrote
       when {
         wrote != null && wrote !== handled -> settle(wrote, current, out)
         // The new read's first value shows the status then
@@ -388,20 +391,6 @@ internal class RealDataQuery<T>(
       out.emit(next)
     }
   }
-
-  /**
-   * Starts a check for an observer whose first value is [current], or returns null when none is
-   * needed. When the key was [quiet], no command was queued, running or submitted from before the
-   * observer's read until now, so [current] already shows every write this query made. A fresh
-   * value then needs no check and no second read. Otherwise the observer joins or queues a check
-   * that reads the store again when its turn comes.
-   */
-  private fun checkOnSubscribe(current: Fetched<T>?, quiet: Boolean): Operation? =
-    if (quiet && !isStale(current)) {
-      null
-    } else {
-      autoCheck()
-    }
 
   /**
    * Counts an observer in, and starts the watcher for the first one, whose check is [check], whose
@@ -622,49 +611,32 @@ internal class RealDataQuery<T>(
    * hold off, or a check that is fetching. Else checks the stored time and fetches if stale. A
    * check that may still hold off is not joined, since an explicit request never holds off.
    */
-  private fun fetchIfStale(): Operation {
-    submissions.update { it + 1 }
-    val check = Check(CheckKind.Requested)
-    return actions.runOrJoin(
-      ordering,
-      check,
-      joins = { it.tag is ForcedFetch || (it.tag as? Check)?.servesRequest == true },
-    ) {
-      runCheck(check)
+  private fun fetchIfStale(): Operation =
+    submitCheck(CheckKind.Requested) {
+      it.tag is ForcedFetch || (it.tag as? Check)?.servesRequest == true
     }
-  }
 
   /**
    * A collector's check. Single flight: joins the forced fetch or check that is the newest command
    * on this query's key, else checks the stored time and fetches if stale and not held off.
    */
-  private fun autoCheck(): Operation {
-    submissions.update { it + 1 }
-    val check = Check(CheckKind.Automatic)
-    return actions.runOrJoin(ordering, check, joins = { it.tag is Request }) { runCheck(check) }
-  }
+  private fun autoCheck(): Operation = submitCheck(CheckKind.Automatic) { it.tag is Request }
 
   /**
    * Checks the stored time once the work already queued is done. It joins only a check that has not
    * started, which reads the store later anyway, and never work that may have read it already.
    */
-  private fun recheck(): Operation {
-    submissions.update { it + 1 }
-    val check = Check(CheckKind.Automatic)
-    return actions.runOrJoin(
-      ordering,
-      check,
-      joins = { it.tag is Check && !it.hasStarted },
-    ) {
-      runCheck(check)
-    }
-  }
+  private fun recheck(): Operation =
+    submitCheck(CheckKind.Automatic) { it.tag is Check && !it.hasStarted }
 
   /** A check of its own after a reconnect, which never joins one that may skip a failed fetch. */
-  private fun reconnectCheck(): Operation {
+  private fun reconnectCheck(): Operation = submitCheck(CheckKind.Reconnected) { false }
+
+  /** Submits a check of [kind] on this query's key, or joins the newest command that [joins]. */
+  private fun submitCheck(kind: CheckKind, joins: (Entry) -> Boolean): Operation {
     submissions.update { it + 1 }
-    val check = Check(CheckKind.Reconnected)
-    return actions.runOrJoin(ordering, check, joins = { false }) { runCheck(check) }
+    val check = Check(kind)
+    return actions.runOrJoin(ordering, check, joins = joins) { runCheck(check) }
   }
 
   /**
@@ -722,7 +694,7 @@ internal class RealDataQuery<T>(
     val read = async(start = CoroutineStart.UNDISPATCHED) { needsFetch(check.kind) }
     select {
       read.onAwait { it }
-      check.onWake {
+      check.woken.onJoin {
         read.cancel()
         true
       }
@@ -773,8 +745,8 @@ internal class RealDataQuery<T>(
             failure = t
           }
         }
-      attempt.invokeOnCompletion { check.wake() }
-      check.awaitWake()
+      attempt.invokeOnCompletion { check.woken.complete(Unit) }
+      check.woken.await()
       if (check.isReplaced) {
         setStatus(FetchStatus.Fetching(forced = true))
         attempt.cancelAndJoin()
@@ -863,12 +835,7 @@ internal class RealDataQuery<T>(
       }
       val outdated = lastInvalidation.load() > started
       progress.value =
-        Progress(
-          progress.value.status,
-          writing = true,
-          writingAt = fetchedAt,
-          writingStale = outdated,
-        )
+        Progress(progress.value.status, writingAt = fetchedAt, writingStale = outdated)
       // A fetch also never overwrites data that another writer put in the store meanwhile with a
       // newer fetch time, like a second query's fetch or a sent change the server already holds.
       // The store checks and writes in one update, so such a write cannot land between the two. An
@@ -966,8 +933,12 @@ internal class RealDataQuery<T>(
    */
   private class Check(val kind: CheckKind) : Request {
     private val state = AtomicReference<CheckState>(CheckState.Open)
-    // Completes on a takeover or once the check's fetch has finished, whichever comes first
-    private val woken = CompletableDeferred<Unit>()
+
+    /**
+     * Completes on a takeover or once the check's fetch has finished, whichever comes first. Before
+     * the check fetches, only a takeover completes it.
+     */
+    val woken = CompletableDeferred<Unit>()
     // Set once the check decided to fetch, so an explicit request may join it
     @Volatile var fetching = false
 
@@ -1006,21 +977,6 @@ internal class RealDataQuery<T>(
     fun commit(): Boolean =
       state.compareAndSet(CheckState.Open, CheckState.Committed) ||
         state.load() == CheckState.Committed
-
-    fun wake() {
-      woken.complete(Unit)
-    }
-
-    suspend fun awaitWake() {
-      woken.await()
-    }
-
-    /**
-     * Selects once the check is woken. Before the check fetches, only a takeover wakes it, since
-     * [wake] runs only once its fetch has finished.
-     */
-    val onWake: SelectClause0
-      get() = woken.onJoin
   }
 
   /** Where a check stands for a takeover. */
@@ -1039,19 +995,22 @@ internal class RealDataQuery<T>(
 }
 
 /**
- * What a query's fetches are doing. [writing] is true while a successful fetch writes and reads
- * back what it wrote, [writingAt] is that fetch's time, and [writingStale] is whether it writes its
+ * What a query's fetches are doing. [writingAt] is the time of a successful fetch while it writes
+ * and reads back what it wrote, or null otherwise, and [writingStale] is whether it writes its
  * value marked stale. [wrote] is the record of the write that settled the last fetch, or null when
  * the last change to [status] was something else. Each instance is new, so a state flow of it emits
  * every change.
  */
 private class Progress<T>(
   val status: FetchStatus,
-  val writing: Boolean = false,
   val writingAt: Instant? = null,
   val writingStale: Boolean = false,
   val wrote: Wrote<T>? = null,
 ) {
+  /** Whether a successful fetch writes now, as [writingAt] describes. */
+  val writing: Boolean
+    get() = writingAt != null
+
   /**
    * Whether [value] carries the time and flag of the fetch that writes now, so it is that write's
    * value.
