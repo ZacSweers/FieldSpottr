@@ -125,9 +125,45 @@ class KeyedDataQueriesTest {
   }
 
   @Test
+  fun `data over many keys shows each key's store in one map without fetching`() = runTest {
+    val values = values()
+    val seen = mutableListOf<Map<String, String?>>()
+
+    backgroundScope.launch {
+      values.data(listOf("a", "b")).collect { loaded ->
+        seen += loaded.mapValues { it.value?.value }
+      }
+    }
+    testScheduler.runCurrent()
+    assertThat(seen).containsExactly(mapOf("a" to null, "b" to null))
+    assertThat(fetch.calls).isEmpty()
+
+    // A fetch from elsewhere shows in the map, and the other key still fetches nothing
+    values.requestFetch("a", force = false).await()
+    testScheduler.runCurrent()
+    assertThat(seen.last()).isEqualTo(mapOf("a" to "a#1", "b" to null))
+    assertThat(fetch.calls).containsExactly("a")
+  }
+
+  @Test
+  fun `data over many keys counts a duplicate key once`() = runTest {
+    val stores = QueryStore.inMemoryByKey<String, String>()
+    stores("a").write("cached", START - 2.hours)
+    val values = values(store = stores)
+
+    val loaded = values.data(listOf("a", "b", "a")).first()
+    assertThat(loaded.mapValues { it.value?.value }).isEqualTo(mapOf("a" to "cached", "b" to null))
+    testScheduler.runCurrent()
+    // a is stale and b is empty, yet nothing fetched, and both queries are gone
+    assertThat(fetch.calls).isEmpty()
+    assertThat(values.keysHeld).isEqualTo(0)
+  }
+
+  @Test
   fun `no keys emits an empty map and an idle status`() = runTest {
     val values = values()
 
+    assertThat(values.data(emptyList()).first()).isEmpty()
     assertThat(values.dataEager(emptyList()).first()).isEmpty()
     assertThat(values.status(emptyList()).first()).isEqualTo(FetchStatus.Idle)
   }

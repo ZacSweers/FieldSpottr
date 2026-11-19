@@ -35,21 +35,19 @@ interface KeyedDataQueries<K : Any, T> {
   fun data(key: K): Flow<Fetched<T>?>
 
   /**
-   * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
-   * Duplicate keys count once, and an empty collection of keys emits one empty map.
+   * Every key's [data] in one map, without checking freshness or fetching. Collecting it keeps each
+   * key's query but starts no work. Duplicate keys count once, and an empty collection of keys
+   * emits one empty map. Use [dataEager] to also fetch the stale keys.
    */
-  fun dataEager(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> {
-    val distinct = keys.distinct()
-    if (distinct.isEmpty()) {
-      return flowOf(emptyMap())
-    }
-    // combine needs a reified element type, which T is not here
-    val flows: List<Flow<Any?>> = distinct.map { dataEager(it) }
-    return combine(flows) { values ->
-      @Suppress("UNCHECKED_CAST")
-      distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
-    }
-  }
+  fun data(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> = combinedByKey(keys) { data(it) }
+
+  /**
+   * Every key's data in one map, collected in parallel so stale keys fetch at the same time.
+   * Duplicate keys count once, and an empty collection of keys emits one empty map. Use [data] to
+   * read the same map without starting any work.
+   */
+  fun dataEager(keys: Collection<K>): Flow<Map<K, Fetched<T>?>> =
+    combinedByKey(keys) { dataEager(it) }
 
   /**
    * [key]'s fetch status, as [DataQuery.status] describes. Collecting it keeps the key's query but
@@ -112,6 +110,26 @@ interface KeyedDataQueries<K : Any, T> {
    * handle settles once every request has, failed if any failed.
    */
   fun requestFetchAll(force: Boolean): Operation
+}
+
+/**
+ * One map of every distinct key's latest value from [flowFor]. An empty collection of keys emits
+ * one empty map.
+ */
+private fun <K : Any, T> combinedByKey(
+  keys: Collection<K>,
+  flowFor: (K) -> Flow<Fetched<T>?>,
+): Flow<Map<K, Fetched<T>?>> {
+  val distinct = keys.distinct()
+  if (distinct.isEmpty()) {
+    return flowOf(emptyMap())
+  }
+  // combine needs a reified element type, which T is not here
+  val flows: List<Flow<Any?>> = distinct.map { flowFor(it) }
+  return combine(flows) { values ->
+    @Suppress("UNCHECKED_CAST")
+    distinct.indices.associate { i -> distinct[i] to values[i] as Fetched<T>? }
+  }
 }
 
 /**
