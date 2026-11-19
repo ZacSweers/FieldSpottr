@@ -57,14 +57,14 @@ class DataStoreOutboxStoresClearTest {
             scope.launch {
               notes.entries().collect { rows -> reader.send(rows.map { it.payload }) }
             }
-            assertEquals(listOf("a"), runBlocking { reader.receive() })
+            assertEquals(listOf("a"), runBlocking { withTimeout(10.seconds) { reader.receive() } })
           }
           return super.list(dir)
         }
       }
     stores = DataStoreOutboxStores(scope, directory, fileSystem = fileSystem)
 
-    stores.clearAll()
+    withTimeout(10.seconds) { stores.clearAll() }
 
     withTimeout(10.seconds) {
       while (reader.receive().isNotEmpty()) {

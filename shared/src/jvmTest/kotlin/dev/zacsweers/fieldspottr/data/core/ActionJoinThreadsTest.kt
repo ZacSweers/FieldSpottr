@@ -7,6 +7,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isGreaterThanOrEqualTo
 import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
+import dev.zacsweers.fieldspottr.data.core.testing.TestThread
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentHashMap
@@ -14,7 +15,6 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -44,7 +44,7 @@ class ActionJoinThreadsTest {
         val barrier = CyclicBarrier(THREADS)
         val submitters =
           List(THREADS) {
-            thread {
+            TestThread {
               barrier.await(10, SECONDS)
               repeat(STEPS) {
                 val written = CompletableDeferred<Int>()
@@ -62,7 +62,7 @@ class ActionJoinThreadsTest {
               }
             }
           }
-        submitters.forEach { it.join(30_000) }
+        submitters.forEach { it.joinOrFail(30_000) }
         withTimeout(30_000) { steps.forEach { it.read.await() } }
 
         // Each handle comes from exactly one call whose block ran, and the others joined it

@@ -6,12 +6,12 @@ import assertk.assertThat
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
+import dev.zacsweers.fieldspottr.data.core.testing.TestThread
 import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit.SECONDS
-import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +37,7 @@ class CommandAdmissionThreadsTest {
           val ran = ConcurrentLinkedQueue<Int>()
           val submitters =
             List(THREADS) { index ->
-              thread {
+              TestThread {
                 barrier.await(10, SECONDS)
                 handles +=
                   actions.run(Ordering.Keyed(index), conflictKey = "sync") {
@@ -46,7 +46,7 @@ class CommandAdmissionThreadsTest {
                   }
               }
             }
-          submitters.forEach { it.join(10_000) }
+          submitters.forEach { it.joinOrFail(10_000) }
 
           val rejected = handles.count {
             (it.state.value as? OperationState.Failed)?.cause is CommandRejectedException
@@ -85,7 +85,7 @@ class CommandAdmissionThreadsTest {
         val accepted = ConcurrentLinkedQueue<Operation>()
         val submitters =
           List(THREADS) { owner ->
-            thread {
+            TestThread {
               barrier.await(10, SECONDS)
               for (step in 0 until COMMANDS) {
                 val key = owner to step
@@ -94,7 +94,7 @@ class CommandAdmissionThreadsTest {
               }
             }
           }
-        submitters.forEach { it.join(10_000) }
+        submitters.forEach { it.joinOrFail(10_000) }
 
         for (copy in copies) {
           assertThat(

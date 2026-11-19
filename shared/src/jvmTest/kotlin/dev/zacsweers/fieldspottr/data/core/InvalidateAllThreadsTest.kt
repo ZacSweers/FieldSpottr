@@ -4,11 +4,11 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import dev.zacsweers.fieldspottr.data.core.testing.TestThread
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.hours
@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 /**
  * Two invalidateAll() calls on different threads, where the older call stores its record last. Real
@@ -60,17 +61,18 @@ class InvalidateAllThreadsTest {
         }
 
       // The older call takes its ticket first, then stalls in its clock read
-      val first = thread {
+      val first = TestThread {
         stalling.set(Thread.currentThread())
         values.invalidateAll()
       }
       check(stalled.await(10, SECONDS)) { "The older call never read the clock" }
       values.invalidateAll()
       resume.countDown()
-      first.join(10_000)
+      first.joinOrFail(10_000)
 
       // The newer call's record stays, so the value fetched before it is stale
-      assertThat(values.fetchIfStale("k").await()).isEqualTo(OperationState.Succeeded)
+      assertThat(withTimeout(10_000) { values.fetchIfStale("k").await() })
+        .isEqualTo(OperationState.Succeeded)
       assertThat(fetches.get()).isEqualTo(1)
     } finally {
       scope.cancel()

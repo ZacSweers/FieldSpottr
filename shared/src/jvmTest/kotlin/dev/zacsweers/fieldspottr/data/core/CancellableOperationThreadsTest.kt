@@ -9,6 +9,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
 import dev.zacsweers.fieldspottr.data.core.impl.invokeOnSettled
+import dev.zacsweers.fieldspottr.data.core.testing.TestThread
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -43,13 +44,13 @@ class CancellableOperationThreadsTest {
         // Two threads cancel every other command, so some calls race each other and the start
         val cancellers =
           List(2) {
-            thread {
-              go.await()
+            TestThread {
+              check(go.await(10, SECONDS)) { "The cancellers were never released" }
               handles.filterIndexed { index, _ -> index % 2 == 0 }.forEach { it.cancel() }
             }
           }
         go.countDown()
-        cancellers.forEach { it.join(10_000) }
+        cancellers.forEach { it.joinOrFail(10_000) }
 
         withTimeout(10_000) {
           for ((index, handle) in handles.withIndex()) {
@@ -95,14 +96,14 @@ class CancellableOperationThreadsTest {
           // ahead of it settle at the same time on several threads
           val cancellers =
             List(4) { seed ->
-              thread {
+              TestThread {
                 val order = queued.shuffled(Random(round * 4 + seed))
-                go.await()
+                check(go.await(10, SECONDS)) { "The cancellers were never released" }
                 order.forEach { it.cancel() }
               }
             }
           go.countDown()
-          cancellers.forEach { it.join(10_000) }
+          cancellers.forEach { it.joinOrFail(10_000) }
           check(settled.await(10, SECONDS)) { "A cancelled command never settled" }
 
           // The running command still holds the key, so a new one waits for it

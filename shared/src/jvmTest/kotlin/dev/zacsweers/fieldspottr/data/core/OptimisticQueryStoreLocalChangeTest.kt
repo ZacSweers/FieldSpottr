@@ -67,19 +67,21 @@ class OptimisticQueryStoreLocalChangeTest {
       val collector = scope.launch {
         count.data.collect { value -> seen += (value?.value ?: 0) to made.get() }
       }
-      count.data.first { it != null }
+      withTimeout(TEST_TIMEOUT_MILLIS) {
+        count.data.first { it != null }
 
-      repeat(CHANGES) {
-        made.incrementAndGet()
-        count.mutate(Increment(1)).stored.await()
+        repeat(CHANGES) {
+          made.incrementAndGet()
+          count.mutate(Increment(1)).stored.await()
+        }
+        count.pending.first { it.size == CHANGES }
+        count.data.first { it?.value == CHANGES }
       }
-      count.pending.first { it.size == CHANGES }
-      count.data.first { it?.value == CHANGES }
       collector.cancel()
 
       // Each value counts at most the changes made before it arrived
       assertThat(seen.filter { (value, madeSoFar) -> value > madeSoFar }).isEmpty()
-      assertThat(count.data.first()?.value).isEqualTo(CHANGES)
+      assertThat(withTimeout(TEST_TIMEOUT_MILLIS) { count.data.first() }?.value).isEqualTo(CHANGES)
       failures.assertNone()
     } finally {
       scope.cancel()
@@ -117,11 +119,13 @@ class OptimisticQueryStoreLocalChangeTest {
           )
         val seen = CopyOnWriteArrayList<List<String>>()
         val collector = scope.launch { tags.data.collect { seen += it?.value.orEmpty() } }
-        tags.data.first { it != null }
-        // Fire and forget, as a user tapping fast does
-        repeat(TAGS) { tags.mutate(Tag("t$it")) }
-        tags.pending.first { it.size == TAGS }
-        tags.data.first { it?.value?.size == TAGS }
+        withTimeout(TEST_TIMEOUT_MILLIS) {
+          tags.data.first { it != null }
+          // Fire and forget, as a user tapping fast does
+          repeat(TAGS) { tags.mutate(Tag("t$it")) }
+          tags.pending.first { it.size == TAGS }
+          tags.data.first { it?.value?.size == TAGS }
+        }
         collector.cancel()
         // A tag that showed shows in every later value
         for (i in seen.indices) {
@@ -284,8 +288,10 @@ class OptimisticQueryStoreLocalChangeTest {
           )
       val tags = sets(Unit)
       val collector = scope.launch { tags.data.collect {} }
-      tags.data.first { it != null }
-      coroutineScope { block(sets, tags, rejected, stores) }
+      withTimeout(TEST_TIMEOUT_MILLIS) {
+        tags.data.first { it != null }
+        coroutineScope { block(sets, tags, rejected, stores) }
+      }
       collector.cancel()
     } finally {
       scope.cancel()
@@ -297,6 +303,8 @@ class OptimisticQueryStoreLocalChangeTest {
     const val CHANGES = 50
     const val TAGS = 50
     const val TAG_ROUNDS = 20
+    // Bounds each test's waits, since a stuck wait on a real thread would hang the build
+    const val TEST_TIMEOUT_MILLIS = 60_000L
     val START: Instant = Instant.fromEpochSeconds(1_700_000_000)
     val Count = OutboxKey.replying<Increment, Int>("count")
   }
