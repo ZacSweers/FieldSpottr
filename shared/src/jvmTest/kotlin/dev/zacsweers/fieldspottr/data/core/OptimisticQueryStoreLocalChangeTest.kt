@@ -6,8 +6,10 @@ import assertk.assertThat
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -37,8 +39,6 @@ import kotlinx.serialization.Serializable
  */
 class OptimisticQueryStoreLocalChangeTest {
   @Serializable data class Increment(val by: Int)
-
-  @Serializable data class Tag(val tag: String)
 
   @Test
   fun `a change never shows twice while its row is stored`() = runBlocking {
@@ -94,7 +94,7 @@ class OptimisticQueryStoreLocalChangeTest {
     try {
       val dropped = mutableListOf<String>()
       // Each round has its own outbox, and the data scope drains them all from its creation
-      val keys = List(TAG_ROUNDS) { OutboxKey<Tag>("tags$it") }
+      val keys = List(TAG_ROUNDS) { OutboxKey<Add>("tags$it") }
       val data =
         DataScope.Factory(
             onFailure = TestFailures(),
@@ -105,24 +105,17 @@ class OptimisticQueryStoreLocalChangeTest {
           .create(scope, keys.mapTo(mutableSetOf()) { key -> key.sender { _, _ -> } })
       repeat(TAG_ROUNDS) { round ->
         val tags =
-          data.optimisticStore<List<String>, Tag>(
+          data.optimisticStore<List<String>, Add>(
             keys[round],
             base = QueryStore.inMemory(Fetched(emptyList(), START)),
-            apply = { current, tag ->
-              val list = current.orEmpty()
-              if (tag.tag in list) {
-                list
-              } else {
-                list + tag.tag
-              }
-            },
+            apply = ::addOnce,
           )
         val seen = CopyOnWriteArrayList<List<String>>()
         val collector = scope.launch { tags.data.collect { seen += it?.value.orEmpty() } }
         withTimeout(TEST_TIMEOUT_MILLIS) {
           tags.data.first { it != null }
           // Fire and forget, as a user tapping fast does
-          repeat(TAGS) { tags.mutate(Tag("t$it")) }
+          repeat(TAGS) { tags.mutate(Add("t$it")) }
           tags.pending.first { it.size == TAGS }
           tags.data.first { it?.value?.size == TAGS }
         }
@@ -181,7 +174,7 @@ class OptimisticQueryStoreLocalChangeTest {
     repeat(CALL_ROUNDS) { round ->
       withTags(round, online = true) { sets, tags, rejected, _ ->
         rejected.value = true
-        tags.mutate(Tag("b")).await()
+        tags.mutate(Add("b")).await()
         val id = tags.pending.first { it.singleOrNull()?.status is OutboxStatus.Failed }.single().id
         rejected.value = false
         val calls = List(2) { async(Dispatchers.Default) { tags.retry(id).await() } }
@@ -204,7 +197,7 @@ class OptimisticQueryStoreLocalChangeTest {
     repeat(CALL_ROUNDS) { round ->
       withTags(round, online = true) { sets, tags, rejected, stores ->
         rejected.value = true
-        tags.mutate(Tag("b")).await()
+        tags.mutate(Add("b")).await()
         val id = tags.pending.first { it.singleOrNull()?.status is OutboxStatus.Failed }.single().id
         // Each requeue reads its row first, which fails here
         stores.failEntryReads = true
@@ -229,7 +222,7 @@ class OptimisticQueryStoreLocalChangeTest {
   fun `two discards of one row at once leave it out of view`() = runBlocking {
     repeat(CALL_ROUNDS) { round ->
       withTags(round, online = false) { _, tags, _, _ ->
-        tags.mutate(Tag("b")).stored.await()
+        tags.mutate(Add("b")).stored.await()
         val id = tags.pending.first { it.isNotEmpty() }.single().id
         val calls = List(2) { async(Dispatchers.Default) { tags.discard(id).await() } }
         val outcomes = calls.awaitAll()
@@ -250,8 +243,8 @@ class OptimisticQueryStoreLocalChangeTest {
     online: Boolean,
     block:
       suspend CoroutineScope.(
-        sets: OptimisticQueryStores<Unit, List<String>, Tag>,
-        tags: OptimisticQueryStore<List<String>, Tag>,
+        sets: OptimisticQueryStores<Unit, List<String>, Add>,
+        tags: OptimisticQueryStore<List<String>, Add>,
         rejected: MutableStateFlow<Boolean>,
         stores: LaggingOutboxStores,
       ) -> Unit,
@@ -260,7 +253,7 @@ class OptimisticQueryStoreLocalChangeTest {
     try {
       val stores = LaggingOutboxStores()
       val rejected = MutableStateFlow(false)
-      val key = OutboxKey<KeyedMutation<Unit, Tag>>("tags$round")
+      val key = OutboxKey<KeyedMutation<Unit, Add>>("tags$round")
       val sender = key.sender { change, _ ->
         if (rejected.value) {
           throw PermanentFailure("Rejected ${change.mutation}")
@@ -274,17 +267,10 @@ class OptimisticQueryStoreLocalChangeTest {
             clock = Clock.System,
           )
           .create(scope, setOf(sender))
-          .optimisticStores<Unit, List<String>, Tag>(
+          .optimisticStores<Unit, List<String>, Add>(
             key,
             base = { QueryStore.inMemory(Fetched(emptyList(), START)) },
-            apply = { current, tag ->
-              val list = current.orEmpty()
-              if (tag.tag in list) {
-                list
-              } else {
-                list + tag.tag
-              }
-            },
+            apply = ::addOnce,
           )
       val tags = sets(Unit)
       val collector = scope.launch { tags.data.collect {} }

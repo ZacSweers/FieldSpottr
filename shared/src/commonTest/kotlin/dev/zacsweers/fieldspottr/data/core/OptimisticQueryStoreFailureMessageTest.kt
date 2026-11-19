@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotEmpty
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
@@ -16,15 +17,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /**
  * The failures an optimistic store reports name a change by its row id. A change can hold private
  * data, so no message holds its payload.
  */
 class OptimisticQueryStoreFailureMessageTest {
-  @Serializable data class Add(val tag: String)
-
   private val failures = TestFailures()
 
   /** A tag list over [apply], which the server takes and answers with nothing. */
@@ -96,4 +94,4 @@ class OptimisticQueryStoreFailureMessageTest {
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag list's outbox, whose server answers nothing. */
-private val Tags = OutboxKey<OptimisticQueryStoreFailureMessageTest.Add>("messageTags")
+private val Tags = OutboxKey<Add>("messageTags")

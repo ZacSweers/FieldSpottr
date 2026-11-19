@@ -19,6 +19,7 @@ import dev.zacsweers.fieldspottr.data.core.impl.IDEMPOTENCE_CHECKS
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.impl.committedValues
 import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScopeFactory
@@ -26,6 +27,8 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
+import dev.zacsweers.fieldspottr.data.core.testing.append
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
@@ -66,9 +69,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 
 class OptimisticQueryStoreTest {
-  /** Adds one tag. */
-  @Serializable data class Add(val tag: String)
-
   /** Sets a note's text, or deletes the note when [text] is null. */
   @Serializable data class SetText(val text: String?)
 
@@ -1587,14 +1587,7 @@ class OptimisticQueryStoreTest {
       data.optimisticStore<List<String>, Add>(
         Tags,
         base = QueryStore.inMemory(Fetched(listOf("a"), START)),
-        apply = { current, add ->
-          val list = current.orEmpty()
-          if (add.tag in list) {
-            list
-          } else {
-            list + add.tag
-          }
-        },
+        apply = ::addOnce,
       )
     val seen = mutableListOf<List<String>?>()
     backgroundScope.launch { tags.data.collect { seen += it?.value } }
@@ -2170,36 +2163,29 @@ private class SlowEntryOutboxStores : OutboxStores {
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag list's outbox, whose server answers nothing. */
-private val Tags = OutboxKey<OptimisticQueryStoreTest.Add>("tags")
+private val Tags = OutboxKey<Add>("tags")
 
 /** The tag list's outbox, whose server answers with the list it holds. */
-private val ReplyingTags = OutboxKey.replying<OptimisticQueryStoreTest.Add, List<String>>("tags")
+private val ReplyingTags = OutboxKey.replying<Add, List<String>>("tags")
 
 /** The tag lists' outbox, one list per item name. */
-private val TagsByItem =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreTest.Add>>("tagsByItem")
+private val TagsByItem = OutboxKey<KeyedMutation<String, Add>>("tagsByItem")
 
 /** [TagsByItem] whose server answers with the list it holds. */
 private val ReplyingTagsByItem =
-  OutboxKey.replying<KeyedMutation<String, OptimisticQueryStoreTest.Add>, List<String>>(
-    "tagsByItem"
-  )
+  OutboxKey.replying<KeyedMutation<String, Add>, List<String>>("tagsByItem")
 
 /** The tag lists' outbox, one list per name, beside [TagsByItem]. */
-private val TagsByName =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreTest.Add>>("tagsByName")
+private val TagsByName = OutboxKey<KeyedMutation<String, Add>>("tagsByName")
 
 /**
  * A new key for the tag lists' outbox, one list per [OptimisticQueryStoreTest.Item]. Each call
  * builds a new key with a new serializer object.
  */
-private fun itemTags() =
-  OutboxKey<KeyedMutation<OptimisticQueryStoreTest.Item, OptimisticQueryStoreTest.Add>>(
-    "tagsByItem"
-  )
+private fun itemTags() = OutboxKey<KeyedMutation<OptimisticQueryStoreTest.Item, Add>>("tagsByItem")
 
 /** A tag list set keyed by [Unit], so its one key still orders its rows by a serialized form. */
-private val UnitTags = OutboxKey<KeyedMutation<Unit, OptimisticQueryStoreTest.Add>>("tags")
+private val UnitTags = OutboxKey<KeyedMutation<Unit, Add>>("tags")
 
 /** The note's outbox, whose server answers nothing. */
 private val Note = OutboxKey<OptimisticQueryStoreTest.SetText>("note")
@@ -2219,20 +2205,3 @@ private val Tallies =
 
 /** The ops' outbox, whose server answers nothing. */
 private val Ops = OutboxKey<OptimisticQueryStoreTest.Op>("ops")
-
-/** Adds the tag once, as the store requires: a tag already there leaves the list as it is. */
-private fun addOnce(current: List<String>?, add: OptimisticQueryStoreTest.Add): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
-/**
- * Appends the tag, which is not idempotent, so a change the overlay applied twice would show. The
- * store reports it once per set, which the tests that use it expect.
- */
-private fun append(current: List<String>?, add: OptimisticQueryStoreTest.Add): List<String> =
-  current.orEmpty() + add.tag

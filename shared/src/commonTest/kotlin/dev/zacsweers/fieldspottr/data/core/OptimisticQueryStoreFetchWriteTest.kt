@@ -6,10 +6,12 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.messageContains
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
@@ -22,12 +24,9 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /** Fetch writes through an optimistic store, and what they leave of the sent changes on record. */
 class OptimisticQueryStoreFetchWriteTest {
-  @Serializable data class Add(val tag: String)
-
   private val failures = TestFailures()
   private val stores = LaggingOutboxStores()
   private lateinit var clock: TestClock
@@ -148,21 +147,7 @@ class OptimisticQueryStoreFetchWriteTest {
   }
 }
 
-/** Adds the tag once, as the store requires. */
-private fun addOnce(
-  current: List<String>?,
-  add: OptimisticQueryStoreFetchWriteTest.Add,
-): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag lists' outbox, one list per key, whose server answers nothing. */
-private val Tags =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreFetchWriteTest.Add>>("fetchWriteTags")
+private val Tags = OutboxKey<KeyedMutation<String, Add>>("fetchWriteTags")

@@ -6,6 +6,8 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
+import dev.zacsweers.fieldspottr.data.core.testing.Add
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
@@ -14,7 +16,6 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /**
  * A fetch write marked stale, like one from a fetch that started before the newest invalidate,
@@ -22,8 +23,6 @@ import kotlinx.serialization.Serializable
  * to its value.
  */
 class OptimisticQueryStoreStaleFetchTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `a stale fetch that a server answer replaces lands stale`() = runTest {
     val data =
@@ -92,23 +91,10 @@ class OptimisticQueryStoreStaleFetchTest {
 /** The value [apply] removes. */
 private const val REMOVE = "remove"
 
-/** Adds the tag once, so applying a change again keeps the value. */
-private fun addOnce(
-  current: List<String>?,
-  add: OptimisticQueryStoreStaleFetchTest.Add,
-): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
 /** [addOnce], except that [REMOVE] removes the value. */
 private fun addOrRemove(
   current: List<String>?,
-  add: OptimisticQueryStoreStaleFetchTest.Add,
+  add: Add,
 ): List<String>? =
   if (add.tag == REMOVE) {
     null
@@ -119,11 +105,8 @@ private fun addOrRemove(
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag lists' outbox, one list per key, whose server answers nothing. */
-private val Tags =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreStaleFetchTest.Add>>("staleTags")
+private val Tags = OutboxKey<KeyedMutation<String, Add>>("staleTags")
 
 /** The tag lists' outbox, whose server answers with the list it holds. */
 private val ReplyingTags =
-  OutboxKey.replying<KeyedMutation<String, OptimisticQueryStoreStaleFetchTest.Add>, List<String>>(
-    "staleReplyingTags"
-  )
+  OutboxKey.replying<KeyedMutation<String, Add>, List<String>>("staleReplyingTags")

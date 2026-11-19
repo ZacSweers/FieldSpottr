@@ -4,6 +4,8 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import dev.zacsweers.fieldspottr.data.core.testing.Add
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Executors
@@ -15,12 +17,9 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /** Where an optimistic store's overlay runs, which takes a named real thread to tell. */
 class OptimisticQueryStoreDispatcherTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `apply runs on the data scope's dispatcher and not the collector's`() = runTest {
     val executor = Executors.newSingleThreadExecutor { Thread(it, "data") }
@@ -37,12 +36,7 @@ class OptimisticQueryStoreDispatcherTest {
           apply = { current, add ->
             // Coroutine debug mode appends the coroutine's name to the thread's
             threads += Thread.currentThread().name.substringBefore(" @")
-            val tags = current.orEmpty()
-            if (add.tag in tags) {
-              tags
-            } else {
-              tags + add.tag
-            }
+            addOnce(current, add)
           },
         )
       store.mutate(Add("b"))
@@ -60,4 +54,4 @@ class OptimisticQueryStoreDispatcherTest {
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
-private val TagsOutbox = OutboxKey<OptimisticQueryStoreDispatcherTest.Add>("tags")
+private val TagsOutbox = OutboxKey<Add>("tags")

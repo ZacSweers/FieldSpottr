@@ -17,9 +17,11 @@ import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import assertk.assertions.messageContains
 import dev.zacsweers.fieldspottr.data.core.impl.landedCommits
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
@@ -47,7 +49,6 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 
 /**
@@ -55,8 +56,6 @@ import kotlinx.serialization.builtins.serializer
  * handle that a repository builds later and that commits or reverts what the sender left it.
  */
 class OutboxSenderTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `a handle whose key holds another payload type throws`() = runTest {
     val data = testDataScope(senders = setOf(Tags.sender { _, _ -> }))
@@ -1015,13 +1014,5 @@ class OutboxSenderTest {
      * doubles from 1 second to 1 minute, then one a minute, with room for the first attempt.
      */
     const val RETRY_BOUND = 40
-
-    /** Adds the tag once, so a change applied again changes nothing. */
-    fun addOnce(current: List<String>?, add: Add): List<String> =
-      if (add.tag in current.orEmpty()) {
-        current.orEmpty()
-      } else {
-        current.orEmpty() + add.tag
-      }
   }
 }

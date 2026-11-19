@@ -6,7 +6,9 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isLessThanOrEqualTo
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
@@ -34,13 +36,10 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.Serializable
 
 /** How much a set of optimistic stores reads from its row list as its keys and collectors grow. */
 @OptIn(ExperimentalAtomicApi::class)
 class OptimisticQueryStoreScaleTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `many keys share one subscription to the row list`() = runTest {
     val stores = CountingOutboxStores()
@@ -57,14 +56,7 @@ class OptimisticQueryStoreScaleTest {
       data.optimisticStores<String, List<String>, Add>(
         TagsByItem,
         base = QueryStore.inMemoryByKey(),
-        apply = { current, add ->
-          val list = current.orEmpty()
-          if (add.tag in list) {
-            list
-          } else {
-            list + add.tag
-          }
-        },
+        apply = ::addOnce,
       )
     val queries =
       data.keyed(store = tags, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
@@ -135,12 +127,7 @@ class OptimisticQueryStoreScaleTest {
           } else {
             otherApplies.update { it + 1 }
           }
-          val list = current.orEmpty()
-          if (add.tag in list) {
-            list
-          } else {
-            list + add.tag
-          }
+          addOnce(current, add)
         },
       )
     val keys = List(VIEWS) { "k$it" }
@@ -320,12 +307,7 @@ class OptimisticQueryStoreScaleTest {
         onFailure = failures,
         apply = { current, add ->
           applies.update { it + 1 }
-          val list = current.orEmpty()
-          if (add.tag in list) {
-            list
-          } else {
-            list + add.tag
-          }
+          addOnce(current, add)
         },
       )
     val store = tags("k")

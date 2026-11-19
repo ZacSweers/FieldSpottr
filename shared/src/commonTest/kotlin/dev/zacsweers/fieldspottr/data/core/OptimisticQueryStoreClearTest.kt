@@ -6,8 +6,10 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.seconds
@@ -22,15 +24,12 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /**
  * An optimistic store's clear after the owner's scope stopped, as on logout. Nothing collects the
  * store's data or pending rows, so the set learns of each change only from its own handles.
  */
 class OptimisticQueryStoreClearTest {
-  @Serializable data class Add(val tag: String)
-
   /** A tag list over [stores], offline, in a data scope whose scope [owner] owns. */
   private class Harness(scope: TestScope, val stores: OutboxStores) {
     val owner = Job(scope.backgroundScope.coroutineContext.job)
@@ -105,17 +104,7 @@ class OptimisticQueryStoreClearTest {
   }
 }
 
-/** Adds the tag once, and makes a list from nothing. */
-private fun addOnce(current: List<String>?, add: OptimisticQueryStoreClearTest.Add): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag list's outbox, whose server answers nothing. */
-private val Tags = OutboxKey<OptimisticQueryStoreClearTest.Add>("clearTags")
+private val Tags = OutboxKey<Add>("clearTags")

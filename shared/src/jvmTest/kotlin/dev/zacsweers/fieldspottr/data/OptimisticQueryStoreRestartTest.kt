@@ -24,6 +24,7 @@ import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.exchangingSender
 import dev.zacsweers.fieldspottr.data.core.replying
 import dev.zacsweers.fieldspottr.data.core.sender
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
@@ -67,8 +68,6 @@ import org.junit.Rule
  */
 class OptimisticQueryStoreRestartTest {
   @get:Rule val temporaryDatabase = TemporaryDatabase()
-
-  @Serializable data class Add(val tag: String)
 
   @Serializable data class Flag(val on: Boolean)
 
@@ -524,14 +523,12 @@ class OptimisticQueryStoreRestartTest {
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
-private val Tags = OutboxKey<OptimisticQueryStoreRestartTest.Add>("tags")
+private val Tags = OutboxKey<Add>("tags")
 
 private val Flags = OutboxKey<OptimisticQueryStoreRestartTest.Flag>("flags")
 
 /** An outbox whose server answers each change with the tag list it holds. */
-private val ReplyingTags =
-  OutboxKey.replying<OptimisticQueryStoreRestartTest.Add, List<String>>("replyingTags")
+private val ReplyingTags = OutboxKey.replying<Add, List<String>>("replyingTags")
 
 /** An outbox whose server answers each change with a nullable note. */
-private val NullableNote =
-  OutboxKey.replying<OptimisticQueryStoreRestartTest.Add, String?>("nullableNote")
+private val NullableNote = OutboxKey.replying<Add, String?>("nullableNote")

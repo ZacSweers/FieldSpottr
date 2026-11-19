@@ -8,7 +8,9 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.messageContains
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
 import kotlin.time.Instant
@@ -16,12 +18,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /** Retry and discard on a key's store, which act only on that key's rows. */
 class OptimisticQueryStoreRowCallsTest {
-  @Serializable data class Add(val tag: String)
-
   /** Fails unless [operation] failed for naming row [id] of another key, with no payload. */
   private fun assertOtherKey(operation: OperationState?, id: EntryId) {
     val failed = operation as? OperationState.Failed
@@ -67,21 +66,7 @@ class OptimisticQueryStoreRowCallsTest {
   }
 }
 
-/** Adds the tag once, as the store requires. */
-private fun addOnce(
-  current: List<String>?,
-  add: OptimisticQueryStoreRowCallsTest.Add,
-): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag lists' outbox, one list per key, whose server answers nothing. */
-private val Tags =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreRowCallsTest.Add>>("rowCallTags")
+private val Tags = OutboxKey<KeyedMutation<String, Add>>("rowCallTags")

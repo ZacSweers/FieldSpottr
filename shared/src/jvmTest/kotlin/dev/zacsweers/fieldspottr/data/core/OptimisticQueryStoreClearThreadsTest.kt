@@ -6,6 +6,7 @@ import assertk.assertThat
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -22,7 +23,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -34,8 +34,6 @@ import kotlinx.serialization.encoding.Encoder
  * holds the mutate: the set encodes the key for the row's order right before it enqueues the row.
  */
 class OptimisticQueryStoreClearThreadsTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `clear waits for a change admitted before it and discards its row`() = runBlocking {
     val keys = PausingKeys()

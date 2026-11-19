@@ -5,10 +5,13 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
+import dev.zacsweers.fieldspottr.data.core.testing.append
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
@@ -21,15 +24,12 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 
 /**
  * A view whose reader of the base store runs late, or whose truth lags a write the set already
  * recorded, while sent changes commit and fetches land.
  */
 class OptimisticQueryStoreLaggingReaderTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `a view keeps a sent change until its reader of the base catches up`() = runTest {
     val clock = testClock(START)
@@ -109,27 +109,7 @@ class OptimisticQueryStoreLaggingReaderTest {
       .optimisticStores(Tags, base = { _: Unit -> base }, apply = ::append)(Unit)
 }
 
-/** Adds the tag once, as the store requires. */
-private fun addOnce(
-  current: List<String>?,
-  add: OptimisticQueryStoreLaggingReaderTest.Add,
-): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
-/** Appends the tag, which is not idempotent, so a change a view applied twice shows. */
-private fun append(
-  current: List<String>?,
-  add: OptimisticQueryStoreLaggingReaderTest.Add,
-): List<String> = current.orEmpty() + add.tag
-
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag list's outbox, keyed by [Unit], whose server answers nothing. */
-private val Tags =
-  OutboxKey<KeyedMutation<Unit, OptimisticQueryStoreLaggingReaderTest.Add>>("laggingReaderTags")
+private val Tags = OutboxKey<KeyedMutation<Unit, Add>>("laggingReaderTags")
