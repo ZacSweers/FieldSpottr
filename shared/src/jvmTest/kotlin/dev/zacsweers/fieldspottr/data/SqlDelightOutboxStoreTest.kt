@@ -35,6 +35,7 @@ import dev.zacsweers.fieldspottr.data.core.PayloadCodec
 import dev.zacsweers.fieldspottr.data.core.TaggedFormat
 import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
 import dev.zacsweers.fieldspottr.data.core.asCodec
+import dev.zacsweers.fieldspottr.data.core.assertCancelledDecodeLeavesRowReadable
 import dev.zacsweers.fieldspottr.data.core.assertOneTypePerName
 import dev.zacsweers.fieldspottr.data.core.assertUnreadableRowIsHandled
 import dev.zacsweers.fieldspottr.data.core.sender
@@ -280,6 +281,24 @@ class SqlDelightUnreadableRowTest {
     // It stays in the table
     assertThat(queries.byId("changes", "old").executeAsOneOrNull()).isNotNull()
   }
+
+  @Test
+  fun `a cancellation thrown inside a decode in a database outbox leaves the row readable`() =
+    runTest {
+      assertCancelledDecodeLeavesRowReadable(
+        SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO),
+        nested = false,
+      )
+    }
+
+  @Test
+  fun `a cancellation thrown inside a nested decode in a database outbox leaves the row readable`() =
+    runTest {
+      assertCancelledDecodeLeavesRowReadable(
+        SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO),
+        nested = true,
+      )
+    }
 
   @Test
   fun `a failed row that does not decode is reported like a queued one`() = runBlocking {
