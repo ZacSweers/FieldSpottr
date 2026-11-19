@@ -348,7 +348,9 @@ interface OutboxStores {
 
   /**
    * Encodes the server's answers for [OutboxEntry.reply], for a row sent while no handle could
-   * commit it. A durable set encodes answers in its payload format. The default uses JSON.
+   * commit it. A durable set encodes answers in its payload format. The default uses JSON. A codec
+   * must never encode an answer as the text `} unknown reply`, since the outbox reads that back as
+   * an unknown answer.
    */
   fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
     serializer.asCodec(DefaultPayloadFormat)
