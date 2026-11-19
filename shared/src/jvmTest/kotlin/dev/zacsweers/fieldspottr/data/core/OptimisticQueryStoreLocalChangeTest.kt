@@ -30,7 +30,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 
 /**
@@ -50,7 +49,7 @@ class OptimisticQueryStoreLocalChangeTest {
             onFailure = failures,
             // Offline, so every change stays a row and the count is the number of changes made
             online = MutableStateFlow(false),
-            stores = SlowReturningOutboxStores(),
+            stores = LaggingOutboxStores(insertReturnsAfter = 2.milliseconds),
             clock = Clock.System,
           )
           .create(scope, setOf(Count.exchangingSender { _, _ -> error("Offline") }))
@@ -99,7 +98,7 @@ class OptimisticQueryStoreLocalChangeTest {
         DataScope.Factory(
             onFailure = TestFailures(),
             online = MutableStateFlow(false),
-            stores = SlowInsertStores(),
+            stores = LaggingOutboxStores(insertStartsAfter = 2.milliseconds),
             clock = Clock.System,
           )
           .create(scope, keys.mapTo(mutableSetOf()) { key -> key.sender { _, _ -> } })
@@ -133,40 +132,6 @@ class OptimisticQueryStoreLocalChangeTest {
     } finally {
       scope.cancel()
     }
-  }
-
-  /** In-memory outbox stores whose insert waits a moment before it stores the row. */
-  private class SlowInsertStores : OutboxStores {
-    private val delegate = InMemoryOutboxStores()
-
-    override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
-      val rows = delegate.open(name, serializer)
-      return object : OutboxStore<E> by rows {
-        override suspend fun insert(id: EntryId, key: String, payload: E) {
-          delay(2.milliseconds)
-          rows.insert(id, key, payload)
-        }
-      }
-    }
-
-    override suspend fun clearAll() = delegate.clearAll()
-  }
-
-  /** In-memory outbox stores whose insert returns a moment after it stored the row. */
-  private class SlowReturningOutboxStores : OutboxStores {
-    private val delegate = InMemoryOutboxStores()
-
-    override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
-      val rows = delegate.open(name, serializer)
-      return object : OutboxStore<E> by rows {
-        override suspend fun insert(id: EntryId, key: String, payload: E) {
-          rows.insert(id, key, payload)
-          delay(2.milliseconds)
-        }
-      }
-    }
-
-    override suspend fun clearAll() = delegate.clearAll()
   }
 
   @Test
