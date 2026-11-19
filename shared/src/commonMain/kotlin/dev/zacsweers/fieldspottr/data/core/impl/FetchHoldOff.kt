@@ -72,13 +72,8 @@ internal abstract class FetchHoldOff {
    * Whether the policy declined the last failure, so even the check after a reconnect must wait.
    * The offline rule of [holdsOff] applies here too.
    */
-  fun declines(now: Instant, online: Boolean): Boolean {
-    val current = load(now) ?: return false
-    if (current.offline && online) {
-      return false
-    }
-    return current.declined
-  }
+  fun declines(now: Instant, online: Boolean): Boolean =
+    load(now)?.let { it.declined && it.holds(now, online) } == true
 
   /**
    * What the last failure the record counted threw, while the record still makes a fetch the query
