@@ -57,6 +57,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -1812,6 +1813,83 @@ class OutboxTest {
     runCurrent()
     assertThat(rows.entries().first().single().status).isEqualTo(OutboxStatus.Sent)
     return sentIds
+  }
+
+  @Test
+  fun `a recheck that read a queued row never moves a sending row's handle back`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insertNew("k", "a")
+    val named = MutableSharedFlow<OutboxChange>(extraBufferCapacity = 1)
+    var holdNextRead = false
+    val readHeld = CompletableDeferred<Unit>()
+    val finishRead = CompletableDeferred<Unit>()
+    // Holds a row read after it read the row, and lets the test name a row as changed
+    val slowRead =
+      object : OutboxStore<String> by rows {
+        override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+          val row = rows.entry(id).first()
+          if (holdNextRead) {
+            holdNextRead = false
+            readHeld.complete(Unit)
+            finishRead.await()
+          }
+          emit(row)
+        }
+
+        override fun changes(): Flow<OutboxChange> = merge(rows.changes(), named)
+      }
+    val online = MutableStateFlow(false)
+    val handle = outboxOver(slowRead, online).operation(id)
+    val states = statesOf(handle)
+    runCurrent()
+
+    // A change names the row, and its recheck reads it Queued and waits
+    holdNextRead = true
+    named.emit(OutboxChange.Rows(setOf(id)))
+    readHeld.await()
+    // The drain claims the row and holds in its send
+    send.hold("a")
+    online.value = true
+    runCurrent()
+    assertThat(handle.state.value).isEqualTo(OperationState.Running)
+    finishRead.complete(Unit)
+    runCurrent()
+    assertThat(handle.state.value).isEqualTo(OperationState.Running)
+    send.release("a")
+    runCurrent()
+
+    assertThat(states)
+      .containsExactly(OperationState.Queued, OperationState.Running, OperationState.Succeeded)
+  }
+
+  @Test
+  fun `a handle shows queued again while its row backs off`() = runTest {
+    send.failTransiently()
+    val handle = outbox().enqueue("a")
+    val states = statesOf(handle)
+    runCurrent()
+    assertThat(handle.state.value).isEqualTo(OperationState.Queued)
+
+    advanceTimeBy(1.seconds)
+    runCurrent()
+
+    assertThat(states)
+      .containsExactly(
+        OperationState.Queued,
+        OperationState.Running,
+        OperationState.Queued,
+        OperationState.Running,
+        OperationState.Succeeded,
+      )
+  }
+
+  /** Every state [handle] shows from now on, collected at once in the test's background. */
+  private fun TestScope.statesOf(handle: Operation): List<OperationState> {
+    val states = mutableListOf<OperationState>()
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      handle.state.collect { states += it }
+    }
+    return states
   }
 
   /** The handle on outbox [Rows] over [rows] in a data scope that reads [online], at [START]. */

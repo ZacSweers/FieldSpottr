@@ -1317,9 +1317,10 @@ internal class RealOutbox<E>(
 
   /**
    * Reads row [id] again and settles its handles if something else settled or removed the row, like
-   * a discard by an optimistic store's clear or a logout's clearAll. Otherwise it shows the row's
-   * state. One recheck of a row runs at a time, and a request that comes meanwhile runs once more
-   * after it, so a burst of changes to one row costs at most two reads.
+   * a discard by an optimistic store's clear or a logout's clearAll. It only settles handles, and
+   * leaves a row that has not settled to the drain. One recheck of a row runs at a time, and a
+   * request that comes meanwhile runs once more after it, so a burst of changes to one row costs at
+   * most two reads.
    */
   private fun recheck(id: EntryId) {
     val before = checking.fetchAndUpdate { it.putting(id, it.containsKey(id)) }
@@ -1367,9 +1368,10 @@ internal class RealOutbox<E>(
       recheckLater(id)
       return
     }
+    // The drain shows a row's progress itself, and its claim is not on the row's key, so a read
+    // off the drain's order could show a state the drain already moved past
     if (state !is OperationState.Terminal) {
       recheckedAll(id)
-      showFollowers(id, state)
       return
     }
     val settled =
@@ -1380,10 +1382,7 @@ internal class RealOutbox<E>(
             settleFollowers(id, again)
             true
           }
-          else -> {
-            showFollowers(id, again)
-            true
-          }
+          else -> true
         }
       }
     if (settled) {
