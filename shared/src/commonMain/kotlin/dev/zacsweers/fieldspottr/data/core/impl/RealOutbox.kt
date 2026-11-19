@@ -426,7 +426,7 @@ internal class RealOutbox<E>(
   fun enqueue(id: EntryId, payload: E, key: String?): OutboxOperation {
     val owner = checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner
     val rowKey = key ?: WHOLE_QUEUE
-    return tracked(id, Ordering.Keyed(Enqueue(this, rowKey))) { attempt ->
+    return tracked(id, Ordering.Keyed(Enqueue(rowKey))) { attempt ->
       // The owner's stop cuts off neither the apply nor what follows it. Once the change is
       // applied, the row goes in or the change is undone. A store that throws stored nothing, so no
       // send or revert would reach it.
@@ -436,7 +436,7 @@ internal class RealOutbox<E>(
         // The watcher's list can lag the insert, so a waiter that subscribes once the row is
         // stored still sees work owed
         onBacklog(OutboxBacklog.Ready)
-        attempt.started(id)
+        attempt.started()
       }
       // Without waiting for the watcher, which may be pausing after a store failure
       drain(rowKey)
@@ -450,7 +450,7 @@ internal class RealOutbox<E>(
    * store that throws fails this handle with that exception.
    */
   fun retry(id: EntryId): Operation =
-    tracked(id, Ordering.Keyed(Row(this, id))) { attempt ->
+    tracked(id, Ordering.Keyed(Row(id))) { attempt ->
       val row = store.entry(id).first()
       when (row?.status) {
         is OutboxStatus.Failed -> {
@@ -468,13 +468,13 @@ internal class RealOutbox<E>(
         else -> Unit
       }
       // A row that is gone still gets a handle, which its first read settles Cancelled
-      attempt.started(id)
+      attempt.started()
       row?.let { drain(it.key) }
     }
 
   // Its caller does not own the command, so the handle cannot cancel it
   fun discard(id: EntryId): Operation =
-    actions.run(Ordering.Keyed(Row(this, id))) {
+    actions.run(Ordering.Keyed(Row(id))) {
       val row = checkNotNull(store.entry(id).first()) { "$id is gone" }
       val pending = row.status == OutboxStatus.Queued || row.status is OutboxStatus.Failed
       // A row marked reverted promises an undo attempt, so the write that marks it and that attempt
@@ -507,7 +507,7 @@ internal class RealOutbox<E>(
     val state = MutableStateFlow<OperationState>(OperationState.Queued)
     // Before the first read, so a change after the read reaches the handle through a recheck
     follow(id, state)
-    val handle = latched(state, { id }) { stateOf(id, readRow(id)) }
+    val handle = latched(state, id) { stateOf(id, readRow(id)) }
     return Operation.of(handle)
   }
 
@@ -517,7 +517,7 @@ internal class RealOutbox<E>(
    * tried again after a pause, since no new row or reconnect may come to start another.
    */
   private fun drain(key: String): Operation =
-    drains.run(Ordering.Keyed(Drain(this, key), OnPrevious.Supersede)) {
+    drains.run(Ordering.Keyed(Drain(key), OnPrevious.Supersede)) {
       try {
         sendQueued(key)
       } catch (t: Throwable) {
@@ -1074,7 +1074,7 @@ internal class RealOutbox<E>(
   private suspend fun <R> onRow(id: EntryId, block: suspend () -> R): R {
     val result = CompletableDeferred<Result<R>>()
     val command =
-      actions.run(Ordering.Keyed(Row(this, id))) {
+      actions.run(Ordering.Keyed(Row(id))) {
         result.complete(runCatchingCancellable { block() })
       }
     // A command cancelled before it ran, like when the owner stops, left the row as it was
@@ -1163,21 +1163,20 @@ internal class RealOutbox<E>(
     ordering: Ordering,
     write: suspend (attempt: Attempt) -> Unit,
   ): OutboxOperation {
-    val attempt = Attempt(MutableStateFlow(OperationState.Queued))
+    val attempt = Attempt(id, MutableStateFlow(OperationState.Queued))
     val written = actions.run(ordering) { write(attempt) }
     // A write that ends without reporting a row stored nothing, whether it failed or was cancelled
     // before the insert. The state is terminal by the time the command settles.
     written.invokeOnSettled {
-      if (!attempt.id.isCompleted) {
+      if (attempt.stored.value != OperationState.Succeeded) {
         attempt.stored.update { it.settledOr(written.state.value) }
       }
     }
     val state =
-      latched(attempt.state, { attempt.row }) {
+      latched(attempt.state, id) {
         val done = written.await()
-        if (attempt.id.isCompleted) {
-          val row = attempt.id.await()
-          stateOf(row, readRow(row))
+        if (attempt.stored.value == OperationState.Succeeded) {
+          stateOf(id, readRow(id))
         } else {
           // The write itself failed or was cancelled
           done
@@ -1187,17 +1186,14 @@ internal class RealOutbox<E>(
   }
 
   /** Where a write reports its row, so the handle follows that row's current attempt. */
-  private inner class Attempt(val state: MutableStateFlow<OperationState>) {
-    val id = CompletableDeferred<EntryId>()
-    @Volatile var row: EntryId? = null
-    // Whether the row is in the store, for the handle's stored milestone
+  private inner class Attempt(val id: EntryId, val state: MutableStateFlow<OperationState>) {
+    // Whether the row is in the store, for the handle's stored milestone. Every write that succeeds
+    // reports its row first, so Succeeded means the write reported it.
     val stored = MutableStateFlow<OperationState>(OperationState.Queued)
 
-    /** Follows [row] before anything can settle the attempt, then records it. */
-    fun started(row: EntryId) {
-      follow(row, state)
-      this.row = row
-      id.complete(row)
+    /** Follows row [id] before anything can settle the attempt, then records it. */
+    fun started() {
+      follow(id, state)
       stored.value = OperationState.Succeeded
     }
   }
@@ -1219,7 +1215,7 @@ internal class RealOutbox<E>(
    */
   private fun latched(
     state: MutableStateFlow<OperationState>,
-    id: () -> EntryId?,
+    id: EntryId,
     firstRead: suspend () -> OperationState,
   ): StateFlow<OperationState> {
     val reader = scope.launch {
@@ -1245,14 +1241,14 @@ internal class RealOutbox<E>(
         }
       }
       if (state.value is OperationState.Terminal) {
-        id()?.let { unfollow(it, state) }
+        unfollow(id, state)
       }
     }
     // Also runs when the scope had already stopped, so the reader never started
     reader.invokeOnCompletion { cause ->
       if (cause != null) {
         state.update { it.settledOr(OperationState.Cancelled) }
-        id()?.let { unfollow(it, state) }
+        unfollow(id, state)
       }
     }
     return state.asStateFlow()
@@ -1513,13 +1509,12 @@ internal class RealOutbox<E>(
     @Volatile var ready = false
   }
 
-  // Keys this outbox owns on its ActionRunners. They include the instance, so two outboxes on one
-  // runner never chain on each other.
-  private data class Enqueue(val owner: RealOutbox<*>, val key: String)
+  // Keys on this outbox's own ActionRunners, which no other outbox shares
+  private data class Enqueue(val key: String)
 
-  private data class Drain(val owner: RealOutbox<*>, val key: String)
+  private data class Drain(val key: String)
 
-  private data class Row(val owner: RealOutbox<*>, val id: EntryId)
+  private data class Row(val id: EntryId)
 
   /** A row's Failed [status] as written, and the outcome with the exception send threw. */
   private class FailedRow(val status: OutboxStatus.Failed, val outcome: OperationState.Failed)
