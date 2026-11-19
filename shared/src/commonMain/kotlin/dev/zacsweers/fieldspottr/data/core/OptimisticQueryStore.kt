@@ -50,8 +50,7 @@ import kotlinx.serialization.Serializable
  * to the sender's handler, and a retry repeats that write alone, after the same doubling pause.
  *
  * On the live path, right after the send, the row is still Sending when that write runs. If it
- * fails there, the row stays Sending, and the outbox sends it again with the same id, as [Outbox]
- * describes. The commit that follows does not apply the change again in this process.
+ * fails there, the row stays Sending, and [Outbox] sends it again with the same id.
  *
  * Across a restart that guarantee cannot hold. A process that dies after a commit wrote the truth
  * and before the row was marked committed leaves the row owed, and the next process commits it
@@ -67,9 +66,8 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * Shows [mutation] in [data] now, stores it as a row, and sends it after the rows before it.
    *
    * From the moment this returns, each value [data] computes holds the change until it is sent,
-   * fails or is dropped, also before its row is stored. An `apply` that throws for it leaves it
-   * out. A value computed before this call can still arrive after it. If the row cannot be stored,
-   * the change leaves [data] and the handle fails.
+   * fails or is dropped, also before its row is stored. A value computed before this call can still
+   * arrive after it. If the row cannot be stored, the change leaves [data] and the handle fails.
    *
    * The handle follows the row, and a restart keeps it. It succeeds once sent, fails once rejected
    * for good or out of attempts, and settles Cancelled once discarded. Its [OutboxOperation.stored]
