@@ -15,12 +15,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -38,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -71,6 +75,7 @@ import dev.zacsweers.fieldspottr.panes.PaneRole
 import dev.zacsweers.fieldspottr.panes.PaneScreen
 import dev.zacsweers.fieldspottr.panes.PaneStyle
 import dev.zacsweers.fieldspottr.ui.Group
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.fieldspottr.ui.Schedule
 import dev.zacsweers.fieldspottr.util.DragToDismiss
 import dev.zacsweers.fieldspottr.util.ReflowText
@@ -242,6 +247,11 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
         )
         Scaffold(
           containerColor = Color.Transparent,
+          // The list below pads for the bottom inset and the tab bar together
+          contentWindowInsets =
+            ScaffoldDefaults.contentWindowInsets.only(
+              WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+            ),
           topBar = {
             CenterAlignedTopAppBar(
               modifier = topBarModifier,
@@ -375,7 +385,7 @@ fun PermitDetails(state: PermitDetailsScreen.State, modifier: Modifier = Modifie
                 }
                 HorizontalDivider()
 
-                LazyColumn {
+                LazyColumn(contentPadding = PaddingValues(bottom = LocalBottomBarPadding.current)) {
                   for ((month, dayGroups) in state.otherPermits) {
                     // Sticky month header
                     stickyHeader(key = "header-$month") {

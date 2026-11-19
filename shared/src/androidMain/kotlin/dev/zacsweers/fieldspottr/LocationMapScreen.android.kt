@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -22,6 +23,7 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.slack.circuit.codegen.annotations.CircuitInject
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.metro.AppScope
 
 @CircuitInject(LocationMapScreen::class, AppScope::class)
@@ -35,7 +37,12 @@ actual fun LocationMap(state: LocationMapScreen.State, modifier: Modifier) {
       this.position = CameraPosition.fromLatLngZoom(position, 15f)
     }
 
-    GoogleMap(modifier = modifier.fillMaxSize(), cameraPositionState = cameraPositionState) {
+    // Keeps the map's logo and controls above the tab bar
+    GoogleMap(
+      modifier = modifier.fillMaxSize(),
+      cameraPositionState = cameraPositionState,
+      contentPadding = PaddingValues(bottom = LocalBottomBarPadding.current),
+    ) {
       val markerState = remember { MarkerState(position = position) }
       Marker(state = markerState, title = state.title)
     }

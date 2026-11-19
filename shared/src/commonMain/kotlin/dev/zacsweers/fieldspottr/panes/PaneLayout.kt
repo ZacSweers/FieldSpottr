@@ -14,16 +14,13 @@ import androidx.window.core.layout.computeWindowSizeClass
 import com.slack.circuit.runtime.screen.Screen
 
 /*
- * Rules for showing screens side by side on wide windows, such as tablets and the iPhone Duo in
- * landscape, open foldables like the Pixel 9 Pro Fold, and the desktop window.
+ * Rules for showing screens side by side on wide windows, such as tablets in either orientation,
+ * the iPhone Duo in landscape, open foldables like the Pixel 9 Pro Fold, and the desktop window.
  *
  * The rules read only the window size, so Android, iOS, and desktop choose the same layout for the
- * same size. Medium windows, such as tablets in portrait or the iPhone Duo in portrait, keep the
- * phone layout because two panes there leave each one too narrow for the grid.
+ * same size. Narrower windows, such as phones and the iPhone Duo in portrait, keep the phone layout
+ * because two panes there leave each one too narrow for the grid.
  */
-
-/** Width of the Material 3 navigation rail, before window insets. */
-val NavigationRailWidth: Dp = 80.dp
 
 /** The narrowest pane worth showing on either side of a hinge. */
 private val MinHingePaneWidth: Dp = 280.dp
@@ -65,14 +62,14 @@ enum class PaneRole {
 
 @Immutable
 data class PaneLayout(
-  /** The window fits a navigation rail and side-by-side panes. */
+  /** The window fits side-by-side panes. */
   val isWide: Boolean,
   /**
    * The right pane's style, or null when one screen fills the window. With only the root on the
-   * back stack, the right pane takes space only while [PaneHost.emptyDetailMessage] reserves it.
+   * back stack, the right pane takes space only while [PaneHost.placeholder] reserves it.
    */
   val detailStyle: PaneStyle?,
-  /** Width of the list beside the rail in the left pane, for [PaneStyle.LIST_DETAIL]. */
+  /** Width of the list in the left pane, before window insets, for [PaneStyle.LIST_DETAIL]. */
   val listPaneWidth: Dp,
   /** Width of the right pane, for [PaneStyle.SUPPORTING]. */
   val supportingPaneWidth: Dp,
@@ -92,31 +89,51 @@ data class PaneLayout(
 }
 
 /**
- * Picks the layout for a window of [windowSize].
- *
- * Wide means Material's expanded width (840dp and up) with at least medium height (480dp and up),
- * using the window size class breakpoints from androidx.window. On most tablets that means
- * landscape.
- *
- * @param firstAboveRoot the screen directly above the root on the back stack, or null when the root
- *   is the only visible screen. When it's a [PaneScreen], it and everything above it open in the
- *   right pane.
- * @param separatingHinge a vertical hinge that separates the display, if any. The panes split at it
- *   when both sides have room for a pane.
+ * The narrowest window that splits into panes. At 700dp the list gets its 280dp minimum and the
+ * detail keeps room for a three-field grid. Tablets in portrait, such as the iPad mini at 744dp,
+ * split. Phones and the iPhone Duo held open in portrait, at 669dp, keep one screen.
  */
-fun paneLayout(
-  windowSize: DpSize,
-  firstAboveRoot: Screen?,
-  separatingHinge: PaneHinge? = null,
-): PaneLayout {
+private val MinSplitWidth: Dp = 700.dp
+
+/**
+ * Whether a window of [windowSize] fits side-by-side panes: at least [MinSplitWidth] wide and
+ * Material's medium height (480dp and up). Phones in landscape are too short.
+ */
+fun fitsSidePanes(windowSize: DpSize): Boolean =
+  windowSize.width >= MinSplitWidth && windowSize.height.value >= HEIGHT_DP_MEDIUM_LOWER_BOUND
+
+/**
+ * Whether a window of [windowSize] gets a navigation rail: Material's expanded width (840dp and up)
+ * with at least medium height (480dp and up), using the window size class breakpoints from
+ * androidx.window. On most tablets that means landscape. Narrower windows use a navigation bar.
+ */
+fun isExpandedWindow(windowSize: DpSize): Boolean {
   val sizeClass =
     WindowSizeClass.BREAKPOINTS_V1.computeWindowSizeClass(
       widthDp = windowSize.width.value,
       heightDp = windowSize.height.value,
     )
-  val isWide =
-    sizeClass.isAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND, HEIGHT_DP_MEDIUM_LOWER_BOUND)
-  if (!isWide) {
+  return sizeClass.isAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND, HEIGHT_DP_MEDIUM_LOWER_BOUND)
+}
+
+/**
+ * Picks the layout for a window of [windowSize]. Windows that [fitsSidePanes] accepts split.
+ *
+ * @param firstAboveRoot the screen directly above the root on the back stack, or null when the root
+ *   is the only visible screen. When it's a [PaneScreen], it and everything above it open in the
+ *   right pane.
+ * @param separatingHinge a vertical hinge that separates the display, if any, measured from the
+ *   start of the panes. The panes split at it when both sides have room for a pane.
+ * @param panesWidth the width the panes share. Navigation beside the panes, such as a rail, takes
+ *   the rest of the window.
+ */
+fun paneLayout(
+  windowSize: DpSize,
+  firstAboveRoot: Screen?,
+  separatingHinge: PaneHinge? = null,
+  panesWidth: Dp = windowSize.width,
+): PaneLayout {
+  if (!fitsSidePanes(windowSize)) {
     return PaneLayout.Single
   }
   val detailStyle =
@@ -128,16 +145,14 @@ fun paneLayout(
       else -> null
     }
   val hinge = separatingHinge?.takeIf {
-    detailStyle != null &&
-      it.start >= MinHingePaneWidth &&
-      windowSize.width - it.end >= MinHingePaneWidth
+    detailStyle != null && it.start >= MinHingePaneWidth && panesWidth - it.end >= MinHingePaneWidth
   }
   return PaneLayout(
     isWide = true,
     detailStyle = detailStyle,
     // The detail gets most of the width, so a grid beside the list keeps room for its columns
-    listPaneWidth = ((windowSize.width - NavigationRailWidth) * 0.4f).coerceIn(280.dp, 400.dp),
-    supportingPaneWidth = (windowSize.width * 0.33f).coerceIn(320.dp, 400.dp),
+    listPaneWidth = (panesWidth * 0.4f).coerceIn(280.dp, 400.dp),
+    supportingPaneWidth = (panesWidth * 0.33f).coerceIn(320.dp, 400.dp),
     detailRoot = firstAboveRoot.takeIf { detailStyle != null },
     hinge = hinge,
   )

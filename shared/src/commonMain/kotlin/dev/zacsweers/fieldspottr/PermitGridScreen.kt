@@ -67,6 +67,7 @@ import dev.zacsweers.fieldspottr.data.WeatherRepository
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.favorites.FavoritesRepository
 import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.currentNyHour
@@ -574,7 +575,8 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
                       state.eventSink(PermitGridScreen.Event.FilterDate(newDate))
                     }
                   },
-                  modifier = Modifier.fillMaxSize(),
+                  // The week grid fills its space without scrolling, so it ends above the bar
+                  modifier = Modifier.fillMaxSize().padding(bottom = LocalBottomBarPadding.current),
                 ) { date ->
                   state.eventSink(PermitGridScreen.Event.SelectWeekDay(date))
                 }
@@ -593,6 +595,7 @@ fun PermitGrid(state: PermitGridScreen.State, modifier: Modifier = Modifier) {
               weather = state.weather,
               cornerSlot = cornerSlot,
               modifier = Modifier.fillMaxSize(),
+              contentBottomPadding = LocalBottomBarPadding.current,
               verticalScrollState = gridVerticalScrollState,
               horizontalScrollState = gridHorizontalScrollState,
               autoScrollToFirstPermit = autoScrollToFirstPermit,

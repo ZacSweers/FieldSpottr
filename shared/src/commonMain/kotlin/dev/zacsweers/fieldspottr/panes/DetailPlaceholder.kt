@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 
 /** The right pane's content while nothing is open there. */
 @Composable
-internal fun DetailPlaceholder(message: String?, modifier: Modifier = Modifier) {
+fun DetailPlaceholder(message: String?, modifier: Modifier = Modifier) {
   Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceContainerLow) {
     Column(
       modifier = Modifier.fillMaxSize().padding(32.dp),

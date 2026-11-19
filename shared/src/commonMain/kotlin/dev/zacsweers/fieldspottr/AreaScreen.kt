@@ -69,6 +69,7 @@ import dev.zacsweers.fieldspottr.panes.PaneRole
 import dev.zacsweers.fieldspottr.panes.PaneScreen
 import dev.zacsweers.fieldspottr.panes.PaneStyle
 import dev.zacsweers.fieldspottr.ui.DataNote
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.util.CurrentPlatform
 import dev.zacsweers.fieldspottr.util.Platform.Native
@@ -289,6 +290,7 @@ fun AreaPresenter(
 fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedElementTransitionScope {
   val animatedScope = requireAnimatedScope(Navigation)
   val snackbarHostState = remember { SnackbarHostState() }
+  val bottomBarPadding = LocalBottomBarPadding.current
 
   LaunchedEffect(state.defaultGroupMessage) {
     state.defaultGroupMessage?.let {
@@ -403,13 +405,22 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           },
         )
       },
+      // This Scaffold applies no bottom inset, so the FAB and snackbars pad for the tab bar and the
+      // inset together
       snackbarHost = {
-        SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+        SnackbarHost(
+          hostState = snackbarHostState,
+          modifier = Modifier.padding(bottom = bottomBarPadding),
+        ) { snackbarData ->
           Snackbar(snackbarData = snackbarData)
         }
       },
       floatingActionButton = {
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = spacedBy(16.dp)) {
+        Column(
+          modifier = Modifier.padding(bottom = bottomBarPadding),
+          horizontalAlignment = Alignment.End,
+          verticalArrangement = spacedBy(16.dp),
+        ) {
           if (state.permits?.fields.orEmpty().isEmpty()) {
             ExtendedFloatingActionButton(onClick = {}) { Text("No permits today!") }
           }
@@ -474,6 +485,7 @@ fun AreaUi(state: AreaScreen.State, modifier: Modifier = Modifier) = SharedEleme
           weather = state.weather,
           cornerSlot = cornerSlot,
           modifier = Modifier.fillMaxWidth().weight(1f),
+          contentBottomPadding = bottomBarPadding,
           verticalScrollState = gridVerticalScrollState,
           horizontalScrollState = gridHorizontalScrollState,
           autoScrollToFirstPermit = autoScrollToFirstPermit,

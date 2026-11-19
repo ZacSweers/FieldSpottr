@@ -3,7 +3,6 @@
 package dev.zacsweers.fieldspottr
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -11,21 +10,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Place
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -42,53 +32,51 @@ import com.slack.circuit.foundation.onNavEvent
 import com.slack.circuit.retained.collectAsRetainedState
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.Navigator
-import com.slack.circuit.runtime.popUntil
 import com.slack.circuit.runtime.screen.Screen
 import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.data.PermitRepository
+import dev.zacsweers.fieldspottr.panes.DetailPlaceholder
 import dev.zacsweers.fieldspottr.panes.LocalPaneHost
-import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
 import dev.zacsweers.fieldspottr.panes.PaneHost
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.metro.AppScope
 
-private enum class Tab(
+/** The app's top-level destinations. Each one has its own back stack. */
+enum class HomeTab(
   val label: String,
   /**
-   * Text for the empty pane beside this tab on wide windows, or null when the tab fills the width.
+   * The [PaneHost.placeholder] beside this tab on wide windows, or null when the tab fills the
+   * width. Each tab keeps one lambda instance, so setting it again changes nothing.
    */
-  val emptyPaneMessage: String? = null,
+  val placeholder: (@Composable () -> Unit)? = null,
 ) {
-  FIND_FIELD("Find a field", emptyPaneMessage = "Pick a field to see its schedule"),
+  FIND_FIELD(
+    "Find a field",
+    placeholder = { DetailPlaceholder("Pick a field to see its schedule") },
+  ),
   AREAS("Areas"),
   ABOUT("About"),
 }
 
 /**
- * The empty pane text for the tab Home opens on, which is the first one. The app's [PaneHost]
- * starts with it, so the first frame lays out with the right pane widths.
+ * The root of one tab's back stack. Switching tabs swaps the root with Circuit's saved back stacks,
+ * so each tab keeps the screens opened in it.
  */
-internal val HomeInitialEmptyPaneMessage: String? = Tab.entries.first().emptyPaneMessage
-
 @CircuitSerializable(AppScope::class)
-data object HomeScreen : Screen {
-  data class State(
-    val selectedTabIndex: Int,
-    val loadingMessage: String?,
-    val navigator: Navigator,
-    val eventSink: (Event) -> Unit = {},
-  ) : CircuitUiState
-
-  sealed interface Event {
-    data class SelectTab(val index: Int) : Event
-  }
+data class HomeScreen(val tab: HomeTab = HomeTab.entries.first()) : Screen {
+  data class State(val tab: HomeTab, val loadingMessage: String?, val navigator: Navigator) :
+    CircuitUiState
 }
 
 @CircuitInject(HomeScreen::class, AppScope::class)
 @Composable
-fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScreen.State {
-  var selectedTabIndex by retain { mutableStateOf(0) }
-
-  // Sync whatever is stale, once
+fun HomePresenter(
+  screen: HomeScreen,
+  repository: PermitRepository,
+  navigator: Navigator,
+): HomeScreen.State {
+  // Sync whatever is stale, once. Each tab's root asks, and the repository runs one sync at a time
+  // and skips fresh data.
   var prewarmPending by retain { mutableStateOf(true) }
   if (prewarmPending) {
     LaunchedEffect(Unit) {
@@ -100,21 +88,7 @@ fun HomePresenter(repository: PermitRepository, navigator: Navigator): HomeScree
   // Observe loading state from repository
   val loadingMessage by repository.loadingMessage.collectAsRetainedState(null)
 
-  return HomeScreen.State(
-    selectedTabIndex = selectedTabIndex,
-    loadingMessage = loadingMessage,
-    navigator = navigator,
-  ) { event ->
-    when (event) {
-      is HomeScreen.Event.SelectTab -> {
-        // In the split layout the rail stays visible beside open details, so close them before
-        // showing another tab. Phones cover the bar with pushed screens, so this pops nothing
-        // there.
-        navigator.popUntil { it is HomeScreen }
-        selectedTabIndex = event.index
-      }
-    }
-  }
+  return HomeScreen.State(tab = screen.tab, loadingMessage = loadingMessage, navigator = navigator)
 }
 
 @CircuitInject(HomeScreen::class, AppScope::class)
@@ -123,15 +97,10 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
   val snackbarHostState = remember { SnackbarHostState() }
   val onNavEvent: (NavEvent) -> Unit = { state.navigator.onNavEvent(it) }
   val paneHost = LocalPaneHost.current
-  val selectTab: (Int) -> Unit = { index ->
-    // Reserve or release the empty pane with the switch, so the next frame composes the new tab and
-    // lays it out at its final width together
-    paneHost?.emptyDetailMessage = Tab.entries[index].emptyPaneMessage
-    state.eventSink(HomeScreen.Event.SelectTab(index))
-  }
-  // Keeps the reservation in step if the tab changes any other way
-  val currentTab = Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD
-  SideEffect { paneHost?.emptyDetailMessage = currentTab.emptyPaneMessage }
+  // Keeps the empty pane reservation in step with the tab. The tab bar also sets it when it
+  // switches
+  // tabs, so the first frame of the new tab lays out at its final width.
+  SideEffect { paneHost?.placeholder = state.tab.placeholder }
 
   LaunchedEffect(state.loadingMessage) {
     if (state.loadingMessage != null) {
@@ -139,71 +108,36 @@ fun Home(state: HomeScreen.State, modifier: Modifier = Modifier) {
     }
   }
 
-  // Wide windows put the tabs in a rail on the start edge, which leaves the full height for content
-  val showsRail = LocalPaneLayout.current.isWide
-  Row(modifier.fillMaxSize()) {
-    if (showsRail) {
-      NavigationRail(
-        windowInsets =
-          WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)
-      ) {
-        Tab.entries.forEachIndexed { index, tab ->
-          NavigationRailItem(
-            selected = state.selectedTabIndex == index,
-            onClick = { selectTab(index) },
-            icon = { TabIcon(tab) },
-            label = { Text(tab.label) },
-          )
-        }
+  val bottomBarPadding = LocalBottomBarPadding.current
+  Scaffold(
+    modifier = modifier.fillMaxSize(),
+    // Content draws to the bottom and pads its own scrolling content with LocalBottomBarPadding, so
+    // the bottom inset doesn't apply here
+    contentWindowInsets =
+      ScaffoldDefaults.contentWindowInsets.only(
+        WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+      ),
+    snackbarHost = {
+      SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.padding(bottom = bottomBarPadding),
+      ) { snackbarData ->
+        Snackbar(snackbarData = snackbarData)
       }
-    }
-    Scaffold(
-      modifier =
-        if (showsRail) {
-          Modifier.weight(1f)
-            .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
-        } else {
-          Modifier.weight(1f)
-        },
-      snackbarHost = {
-        SnackbarHost(hostState = snackbarHostState) { snackbarData ->
-          Snackbar(snackbarData = snackbarData)
-        }
-      },
-      bottomBar = {
-        if (!showsRail) {
-          NavigationBar {
-            Tab.entries.forEachIndexed { index, tab ->
-              NavigationBarItem(
-                selected = state.selectedTabIndex == index,
-                onClick = { selectTab(index) },
-                icon = { TabIcon(tab) },
-                label = { Text(tab.label) },
-              )
-            }
-          }
-        }
-      },
-    ) { innerPadding ->
-      Box(Modifier.padding(innerPadding).fillMaxSize()) {
-        when (Tab.entries.getOrNull(state.selectedTabIndex) ?: Tab.FIND_FIELD) {
-          Tab.FIND_FIELD -> CircuitContent(FindFieldScreen, onNavEvent = onNavEvent)
-          Tab.AREAS -> CircuitContent(PermitGridScreen, onNavEvent = onNavEvent)
-          Tab.ABOUT -> CircuitContent(AboutScreen, onNavEvent = onNavEvent)
-        }
+    },
+  ) { innerPadding ->
+    // The tab content covers the bottom inset through LocalBottomBarPadding, so it's consumed here
+    Box(
+      Modifier.padding(innerPadding)
+        .consumeWindowInsets(innerPadding)
+        .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+        .fillMaxSize()
+    ) {
+      when (state.tab) {
+        HomeTab.FIND_FIELD -> CircuitContent(FindFieldScreen, onNavEvent = onNavEvent)
+        HomeTab.AREAS -> CircuitContent(PermitGridScreen, onNavEvent = onNavEvent)
+        HomeTab.ABOUT -> CircuitContent(AboutScreen, onNavEvent = onNavEvent)
       }
     }
   }
-}
-
-@Composable
-private fun TabIcon(tab: Tab) {
-  Icon(
-    when (tab) {
-      Tab.FIND_FIELD -> Icons.Outlined.Search
-      Tab.AREAS -> Icons.Outlined.Place
-      Tab.ABOUT -> Icons.Outlined.Info
-    },
-    contentDescription = tab.label,
-  )
 }
