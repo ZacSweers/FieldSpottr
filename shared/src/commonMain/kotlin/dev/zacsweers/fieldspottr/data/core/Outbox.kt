@@ -156,7 +156,7 @@ class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throw
  * ```
  * enqueue(payload, key) --> id --> apply(payload, id) --> store.insert(id) --> drain(key)
  *
- * attach --> read the owed rows once --> drain(key) for each key with owed rows --> ready
+ * attach --> read the owed rows once --> ready --> drain(key) for each key with owed rows
  *
  * a drain of a key with owed rows settles them, oldest first, online or not:
  *   Sent, not committed: commit with the stored answer, then mark committed
