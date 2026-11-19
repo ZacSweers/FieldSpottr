@@ -140,11 +140,7 @@ import kotlinx.coroutines.sync.withLock
  * reads the store after that read. Every record stays until [RECORD_LIFETIME] after its send.
  *
  * A view reads the base store and [state] in two collectors, so either can run late. It plans with
- * the newest state, which holds every record and fold mark before their truth writes. A plan that
- * puts no recorded change back shows the truth it was given, which at worst lags. A plan that puts
- * one back may pair an old truth with a record that gave up the value it could tell it by, so the
- * view reads the store again until the key's slice stays the same across a read, and plans with
- * that value.
+ * the newest state, which holds every record and fold mark before their truth writes.
  *
  * A sent change reaches the truth in two writes, the base store's and the row's status, and no
  * store makes them atomic. Meanwhile a fetch that started before the send can land with a value
@@ -154,11 +150,9 @@ import kotlinx.coroutines.sync.withLock
  * folded in, so a restart, which has no records, keeps it too.
  *
  * Records stay small. The newest record on a key keeps the value it wrote and the newest fetch
- * value it was folded into, and the one before it only until that fetch's write lands, or, when the
- * write throws, until the next fetch write reads the store again. A record drops its folds once a
- * newer commit on its key is in the store, or once it is passed and confirmed. The newest server
- * answer keeps its own value too, since a slow fetch gets it back. The rest keep only the change
- * and its send time.
+ * value it was folded into. A record drops its folds once a newer commit on its key is in the
+ * store, or once it is passed and confirmed. The newest server answer keeps its own value too,
+ * since a slow fetch gets it back. The rest keep only the change and its send time.
  *
  * Two cases fall outside the records: a fetch that overlapped the send but read the server after it
  * took the change, and a restart between the truth write and the row's status. In both, [apply]
@@ -890,8 +884,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
   /**
    * The plan that puts back on [stored] every sent change it may lack, oldest first. It adds those
-   * changes to [changes] and returns the plan over them, marked [Plan.putsBack] when it puts any
-   * back.
+   * changes to [changes] and returns the plan over them.
    *
    * [stored] holds a sent change when that change's commit or a later one wrote it, since each
    * commit carries the earlier changes, or when it was fetched after the send. Any other sent
@@ -921,7 +914,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     for (record in missing.drop(answer + 1)) {
       changes += Planned(record.change, record.mutation)
     }
-    return Plan(start, changes, putsBack = missing.isNotEmpty())
+    return Plan(start, changes)
   }
 
   /**
@@ -1048,51 +1041,21 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       var lastEmitted: Fetched<T>? = null
       var lastSlice: KeySlice<K, T, M>? = null
       var lastPlan: Plan<T, M>? = null
-      // Whether the last store read returned a value other than the emitted truth. The read can be
-      // ahead of this collection's truth, whose next emissions can then be older than the value
-      // last shown. So while this is set, every wake reads the store, and it clears once a read
-      // returns the emitted truth.
-      var readAhead = false
       // The combine collects the truth and the state in two coroutines, so the state it passes can
       // be older or newer than the truth it passes. The state is collected only to wake the view.
       // The overlay reads the newest state, which holds every record and fold mark of the truths
       // this collection has seen, since each lands in the state before its truth write.
       val views =
         combineTransform(truth.data, state, watching) { emitted, _, _ ->
-          var current = state.value
+          val current = state.value
           if (current.rows == null) {
             return@combineTransform
           }
-          var slice = current.slice(key)
+          val slice = current.slice(key)
           if (lastPlan != null && emitted === lastEmitted && slice === lastSlice) {
             return@combineTransform
           }
-          var plan = plan(emitted, slice)
-          // A plan that puts no recorded change back leaves the emitted truth as the records found
-          // it, so an old truth only lags. A plan that puts one back may pair the truth with
-          // records of a later write, like a record that gave up the value it could tell the truth
-          // by. Then the store is read again until the key's slice stays the same instance across
-          // a read, since every write of the set changes the slice before or after its truth
-          // write, or leaves a slice that is valid for both values. After a read that was ahead of
-          // the emitted truth, the store is read the same way until the truth catches up, so the
-          // view never goes back to an older value.
-          if (plan.putsBack || readAhead) {
-            var stored: Fetched<T>?
-            while (true) {
-              stored = truth.data.first()
-              current = state.value
-              if (current.rows == null) {
-                return@combineTransform
-              }
-              val after = current.slice(key)
-              if (after === slice) {
-                break
-              }
-              slice = after
-            }
-            readAhead = stored != emitted
-            plan = plan(stored, slice)
-          }
+          val plan = plan(emitted, slice)
           lastEmitted = emitted
           lastSlice = slice
           if (plan == lastPlan) {
@@ -1179,14 +1142,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             } else {
               folded
             }
-          // Before the write, so views count every change on record as in the folded truth both
-          // before and after it lands, and never apply one twice
+          // Before the write, so views count every change on record as in the folded truth once it
+          // lands, and never apply one twice
           val newest = sentSince.lastOrNull()
           if (newest != null) {
             edit { s ->
               s.updatingRecords(key) {
                 if (it.change == newest.change) {
-                  it.alsoHeldBy(next, stored)
+                  it.alsoHeldBy(next)
                 } else {
                   it
                 }
@@ -1197,20 +1160,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             truth.clearFetched(keepsStored)
           } else {
             truth.writeFetched(next, keepsStored)
-          }
-          // The store no longer holds the previous fold, so the record lets it go. A view that
-          // still has it puts the change back on it, so it reads the store again. If the write
-          // throws, the record keeps the previous fold until its next fold or withoutValue.
-          if (newest != null) {
-            edit { s ->
-              s.updatingRecords(key) {
-                if (it.change == newest.change) {
-                  it.withoutPreviousFold()
-                } else {
-                  it
-                }
-              }
-            }
           }
         }
         pruneAfter(fetched)
@@ -1812,12 +1761,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * A truth fetched after [sentAt] holds the change. On a truth fetched before, a view puts the
    * change back: [truth] itself when [replaced] says the server answered with it, else the change
-   * applied again. [folded] is the value the newest overlapping fetch was written as, and
-   * [previousFold] the one before it. A fetch write marks the record before its truth write, so the
-   * store holds [previousFold] until that write lands, and the record lets it go after that write.
-   * A write that throws leaves it until the next fetch write reads the store again. Older folds,
-   * like large response bodies, can go. A view that would put the change back on one reads the
-   * store again.
+   * applied again. [folded] is the value the newest overlapping fetch was written as. Older folds,
+   * like large response bodies, can go.
    *
    * [shown] says the list showed the row, [passed] that the list has moved past it, and [confirmed]
    * that a fetch from after the send landed. Once both of the last two hold, a record of a send
@@ -1831,7 +1776,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     val truth: Fetched<T>?,
     val replaced: Boolean,
     val folded: Fold<T>? = null,
-    val previousFold: Fold<T>? = null,
     val hasValue: Boolean = true,
     val shown: Boolean = false,
     val passed: Boolean = false,
@@ -1840,7 +1784,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     private fun copy(
       truth: Fetched<T>? = this.truth,
       folded: Fold<T>? = this.folded,
-      previousFold: Fold<T>? = this.previousFold,
       hasValue: Boolean = this.hasValue,
       shown: Boolean = this.shown,
       passed: Boolean = this.passed,
@@ -1854,7 +1797,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         truth,
         replaced,
         folded,
-        previousFold,
         hasValue,
         shown,
         passed,
@@ -1864,7 +1806,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     /**
      * This record with its list and fetch marks set. Once it is passed and confirmed, it drops its
      * folds and, unless it keeps a server answer, its own value, as [withoutValue] says. Only a
-     * late reader would need them, and a view that would put the change back reads the store again.
+     * late reader would need them.
      */
     fun marked(
       shown: Boolean = this.shown,
@@ -1885,15 +1827,13 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
     /**
      * Whether [stored] already holds this change: its commit wrote it, or the newest fetch folded
-     * it in, or [stored] is the value that held it when that fetch's write began, until the write
-     * lands. A record that gave up its value cannot tell, and a newer record answers in its place.
+     * it in. A record that gave up its value cannot tell, and a newer record answers in its place.
      * A record of an unknown answer never had a value, and only a fold tells that a truth holds it.
      * A stored null is a value, so it never matches nothing stored.
      */
     fun isHeldBy(stored: Fetched<T>?): Boolean {
       return (hasValue && (truth == null) == (stored == null) && truth?.value == stored?.value) ||
-        folded?.holds(stored) == true ||
-        previousFold?.holds(stored) == true
+        folded?.holds(stored) == true
     }
 
     /** This record with its server answer marked stale. A record without one stays as it is. */
@@ -1905,31 +1845,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
 
     /**
-     * This record, held by [next], a fetch's value with this change folded in, from now on. It also
-     * keeps [stored], the value the store holds before [next] is written, as [previousFold] when
-     * this record holds it, so it tells both values apart from any other whatever earlier writes
-     * did. [withoutPreviousFold] lets [stored] go after the write. [next] no longer comes from
-     * after the send, so the record is no longer confirmed.
+     * This record, held by [next], a fetch's value with this change folded in, from now on. [next]
+     * no longer comes from after the send, so the record is no longer confirmed.
      */
-    fun alsoHeldBy(next: Fetched<T>?, stored: Fetched<T>?): Committed<K, T, M> =
-      copy(
-        folded = Fold(next),
-        previousFold =
-          if (isHeldBy(stored)) {
-            Fold(stored)
-          } else {
-            null
-          },
-        confirmed = false,
-      )
-
-    /** This record without [previousFold], once the store no longer holds it, or this as it is. */
-    fun withoutPreviousFold(): Committed<K, T, M> =
-      if (previousFold == null) {
-        this
-      } else {
-        copy(previousFold = null)
-      }
+    fun alsoHeldBy(next: Fetched<T>?): Committed<K, T, M> =
+      copy(folded = Fold(next), confirmed = false)
 
     /**
      * This record without its copies of the value, once a newer commit on its key is in the store
@@ -1940,12 +1860,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      */
     fun withoutValue(newerAnswer: Boolean): Committed<K, T, M> {
       val keepsAnswer = !hasValue || (replaced && !newerAnswer)
-      return if (keepsAnswer && folded == null && previousFold == null) {
+      return if (keepsAnswer && folded == null) {
         this
       } else if (keepsAnswer) {
-        copy(folded = null, previousFold = null)
+        copy(folded = null)
       } else {
-        copy(truth = null, folded = null, previousFold = null, hasValue = false)
+        copy(truth = null, folded = null, hasValue = false)
       }
     }
 
@@ -1991,11 +1911,6 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   private class Plan<T, M>(
     val start: Fetched<T>?,
     val changes: List<Planned<M>>,
-    /**
-     * Whether the plan puts a recorded change back on the truth, or starts from a record's answer.
-     * Equality ignores it, since it says nothing about the value.
-     */
-    val putsBack: Boolean = false,
   ) {
     override fun equals(other: Any?): Boolean =
       other is Plan<*, *> && start === other.start && changes == other.changes
