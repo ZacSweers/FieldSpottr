@@ -40,7 +40,7 @@ class PaneLayoutTest {
   private val desktop = DpSize(1200.dp, 800.dp)
 
   @Test
-  fun phonesAndMediumWindowsKeepTheSingleLayout() {
+  fun phonesAndNarrowWindowsKeepTheSingleLayout() {
     val sizes =
       listOf(
         phonePortrait,
@@ -48,8 +48,6 @@ class PaneLayoutTest {
         duoFoldedPortrait,
         duoFoldedLandscape,
         duoOpenPortrait,
-        iPadMiniPortrait,
-        iPadPortrait,
       )
     for (size in sizes) {
       val layout = paneLayout(size, Detail(1))
@@ -58,8 +56,17 @@ class PaneLayoutTest {
   }
 
   @Test
+  fun splitStartsAt700dpWithMediumHeight() {
+    assertThat(paneLayout(DpSize(699.dp, 900.dp), Detail(1))).isEqualTo(PaneLayout.Single)
+    assertThat(paneLayout(DpSize(700.dp, 900.dp), Detail(1)).isSplit).isTrue()
+    // Wide enough, but too short, as phones in landscape are
+    assertThat(paneLayout(DpSize(800.dp, 479.dp), Detail(1))).isEqualTo(PaneLayout.Single)
+  }
+
+  @Test
   fun wideWindowsSplitListDetail() {
-    for (size in listOf(duoOpenLandscape, pixelFoldOpen, desktop)) {
+    val sizes = listOf(iPadMiniPortrait, iPadPortrait, duoOpenLandscape, pixelFoldOpen, desktop)
+    for (size in sizes) {
       val layout = paneLayout(size, Detail(1))
       assertThat(layout.isWide).isTrue()
       assertThat(layout.detailStyle).isEqualTo(PaneStyle.LIST_DETAIL)
@@ -110,11 +117,27 @@ class PaneLayoutTest {
 
   @Test
   fun paneWidthsScaleWithinBounds() {
-    assertThat(paneLayout(pixelFoldOpen, Detail(1)).listPaneWidth.value).isCloseTo(308.4f, 0.01f)
-    assertThat(paneLayout(duoOpenLandscape, Detail(1)).listPaneWidth.value).isCloseTo(348.4f, 0.01f)
+    assertThat(paneLayout(pixelFoldOpen, Detail(1)).listPaneWidth.value).isCloseTo(340.4f, 0.01f)
+    assertThat(paneLayout(duoOpenLandscape, Detail(1)).listPaneWidth.value).isCloseTo(380.4f, 0.01f)
     assertThat(paneLayout(desktop, Detail(1)).listPaneWidth).isEqualTo(400.dp)
     assertThat(paneLayout(duoOpenLandscape, Detail(1)).supportingPaneWidth).isEqualTo(320.dp)
     assertThat(paneLayout(desktop, Detail(1)).supportingPaneWidth.value).isCloseTo(396f, 0.01f)
+  }
+
+  @Test
+  fun navigationBesideThePanesKeepsTheWindowClassButNarrowsThePanes() {
+    // A 96dp rail leaves the open Pixel Fold's panes 755dp, under the 840dp expanded width
+    val panesWidth = pixelFoldOpen.width - 96.dp
+    val layout = paneLayout(pixelFoldOpen, Detail(1), panesWidth = panesWidth)
+    assertThat(layout.isWide).isTrue()
+    assertThat(layout.listPaneWidth.value).isCloseTo(302f, 0.01f)
+    // Hinges are measured from the panes' start. The fold sits 329dp in, with room on both sides.
+    val fold = PaneHinge(329.dp, 330.dp)
+    assertThat(paneLayout(pixelFoldOpen, Detail(1), fold, panesWidth = panesWidth).hinge)
+      .isEqualTo(fold)
+    // 264dp in leaves too little room before the hinge
+    assertThat(paneLayout(pixelFoldOpen, Detail(1), PaneHinge(264.dp, 265.dp), panesWidth).hinge)
+      .isNull()
   }
 
   @Test

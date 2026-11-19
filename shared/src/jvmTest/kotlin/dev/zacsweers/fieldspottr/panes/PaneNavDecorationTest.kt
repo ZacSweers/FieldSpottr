@@ -78,8 +78,8 @@ class PaneNavDecorationTest {
   private data class TestState(val screen: Screen) : CircuitUiState
 
   private val phone = DpSize(411.dp, 900.dp)
-  /** An iPad mini in portrait, which keeps the phone layout. */
-  private val portraitTablet = DpSize(744.dp, 1133.dp)
+  /** An iPhone Duo held open in portrait, which keeps the phone layout. */
+  private val narrowTablet = DpSize(669.dp, 951.dp)
   // The test window is 1024px wide at density 1, so wider sizes would clamp
   private val tablet = DpSize(1000.dp, 700.dp)
 
@@ -88,6 +88,9 @@ class PaneNavDecorationTest {
       .addPresenterFactory { screen, _, _ -> presenterOf { TestState(screen) } }
       .addUiFactory { _, _ -> ui<TestState> { state, modifier -> TestUi(state.screen, modifier) } }
       .build()
+
+  /** One instance, as [PaneHost.placeholder] requires. */
+  private val pickOnePlaceholder: @Composable () -> Unit = { DetailPlaceholder("Pick one") }
 
   private var windowSize by mutableStateOf(phone)
   private lateinit var navigator: Navigator
@@ -101,7 +104,11 @@ class PaneNavDecorationTest {
             val backStack = rememberSaveableBackStack(root)
             val circuitNavigator = rememberCircuitNavigator(backStack) {}
             val host = remember {
-              PaneHost(emptyDetailMessage = if (root == ReservingRoot) "Pick one" else null)
+              PaneHost().apply {
+                if (root == ReservingRoot) {
+                  placeholder = pickOnePlaceholder
+                }
+              }
             }
             navigator =
               remember(circuitNavigator) {
@@ -110,7 +117,10 @@ class PaneNavDecorationTest {
             val decoration = remember {
               PaneNavDecoration(
                 host,
-                AnimatedNavDecoration(emptyMap(), GestureNavigationDecorationFactory()),
+                AnimatedNavDecoration(
+                  emptyMap(),
+                  PaneAnimatedNavDecoratorFactory(GestureNavigationDecorationFactory()),
+                ),
               )
             }
             CompositionLocalProvider(LocalPaneHost provides host) {
@@ -151,8 +161,8 @@ class PaneNavDecorationTest {
   }
 
   @Test
-  fun mediumWindowKeepsThePhoneLayoutUntilRotated() = runComposeUiTest {
-    windowSize = portraitTablet
+  fun narrowWindowKeepsThePhoneLayoutUntilWidened() = runComposeUiTest {
+    windowSize = narrowTablet
     setNavContent(ReservingRoot)
     assertLabel("root", PaneRole.SINGLE, taps = 0)
     onAllNodesWithText("Pick one").assertCountEquals(0)
@@ -192,7 +202,7 @@ class PaneNavDecorationTest {
   fun reservationSizesTheListPane() = runComposeUiTest {
     windowSize = tablet
     setNavContent(ReservingRoot)
-    // Rail plus the list pane, with no window insets in tests
+    // No window insets in tests
     onNodeWithTag("root-container").assertWidthIsEqualTo(expectedListPaneWidth())
   }
 
@@ -263,8 +273,7 @@ class PaneNavDecorationTest {
     onNodeWithText("Pick one").assertExists()
   }
 
-  private fun expectedListPaneWidth() =
-    NavigationRailWidth + paneLayout(tablet, firstAboveRoot = null).listPaneWidth
+  private fun expectedListPaneWidth() = paneLayout(tablet, firstAboveRoot = null).listPaneWidth
 
   @Composable
   private fun TestUi(screen: Screen, modifier: Modifier) {

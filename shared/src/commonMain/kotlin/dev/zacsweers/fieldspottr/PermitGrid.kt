@@ -104,6 +104,8 @@ fun PermitGrid(
   areas: Areas,
   selectedDate: LocalDate,
   modifier: Modifier = Modifier,
+  /** Space after the last hour, so it can scroll clear of anything covering the grid's bottom. */
+  contentBottomPadding: Dp = 0.dp,
   verticalScrollState: ScrollState = rememberScrollState(),
   horizontalScrollState: ScrollState = rememberScrollState(),
   autoScrollToFirstPermit: Boolean = true,
@@ -150,6 +152,9 @@ fun PermitGrid(
       val fieldAreaWidth = maxOf(FieldColumnMinWidth * numColumns, availableFieldWidth)
       val fieldColumnWidth = fieldAreaWidth / numColumns.toFloat()
       val contentHeight = itemHeight * 24
+      // The grid used to end 16dp above the bottom. That gap now scrolls with the hours, so the
+      // viewport reaches the bottom and content behind a bottom inset or bar stays reachable.
+      val scrollEndPadding = 16.dp + contentBottomPadding
 
       // The grid owns retained scroll states, so only auto-jump to the first permit once for a
       // fresh group/date. Returning to a screen should preserve the user's scroll position.
@@ -244,7 +249,7 @@ fun PermitGrid(
           modifier =
             Modifier.weight(1f)
               .fillMaxWidth()
-              .padding(start = GridHorizontalPadding, end = GridHorizontalPadding, bottom = 16.dp)
+              .padding(start = GridHorizontalPadding, end = GridHorizontalPadding)
         ) {
           // Time column
           val hourlyWeather =
@@ -258,7 +263,7 @@ fun PermitGrid(
               // Share vertical scroll with the field body so time labels stay aligned.
               .verticalScroll(verticalScrollState)
           ) {
-            Column(Modifier.height(contentHeight)) {
+            Column(Modifier.padding(bottom = scrollEndPadding).height(contentHeight)) {
               for (rowNumber in 0..<24) {
                 Box(Modifier.height(itemHeight)) {
                   // Time marker
@@ -305,7 +310,9 @@ fun PermitGrid(
               .horizontalScroll(horizontalScrollState)
           ) {
             Row(
-              Modifier.width(fieldAreaWidth)
+              // Padding outermost, so the lines below draw over the hours only
+              Modifier.padding(bottom = scrollEndPadding)
+                .width(fieldAreaWidth)
                 .height(contentHeight)
                 // Outer draws last, so the now line stays on top of the sunset line
                 .nowIndicator(selectedDate, itemHeight, horizontalScrollState)

@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,6 +47,7 @@ import com.slack.circuit.codegen.annotations.CircuitInject
 import com.slack.circuit.runtime.screen.StaticScreen
 import com.slack.circuit.serialization.CircuitSerializable
 import dev.zacsweers.fieldspottr.theme.FSLinkStyle
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.metro.AppScope
 import kotlinx.collections.immutable.toPersistentList
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +84,7 @@ fun About(modifier: Modifier = Modifier) {
     LibrariesContainer(
       libraries = libs,
       modifier = modifier.fillMaxSize(),
+      contentPadding = PaddingValues(bottom = LocalBottomBarPadding.current),
       badges = LibraryBadges(author = true, version = false),
       header = { item(key = "header") { Header(Modifier.fillMaxWidth()) } },
       variantTextStyles =

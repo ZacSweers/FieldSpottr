@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -83,9 +84,10 @@ import dev.zacsweers.fieldspottr.data.TimeWindow
 import dev.zacsweers.fieldspottr.data.WeatherCondition
 import dev.zacsweers.fieldspottr.data.WeatherForecast
 import dev.zacsweers.fieldspottr.data.WeatherRepository
-import dev.zacsweers.fieldspottr.panes.LocalPaneLayout
+import dev.zacsweers.fieldspottr.panes.LocalPaneState
 import dev.zacsweers.fieldspottr.ui.DataNote
 import dev.zacsweers.fieldspottr.ui.EmphasizedEasing
+import dev.zacsweers.fieldspottr.ui.LocalBottomBarPadding
 import dev.zacsweers.fieldspottr.ui.PENDING_DATA_NOTE
 import dev.zacsweers.fieldspottr.ui.WeatherGlyph
 import dev.zacsweers.fieldspottr.ui.WeatherStrip
@@ -332,7 +334,7 @@ fun FindFieldPresenter(
 @Composable
 fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
   val daySwipe = rememberDaySwipeState()
-  val paneLayout = LocalPaneLayout.current
+  val paneLayout = LocalPaneState.current
   val openArea = paneLayout.detailRoot as? AreaScreen
   val openGroup = openArea?.initialGroup
   // An open grid beside the list follows the list's date. The grid's own date chip changes only
@@ -512,13 +514,19 @@ fun FindField(state: FindFieldScreen.State, modifier: Modifier = Modifier) {
       modifier = Modifier.fillMaxSize(),
     ) {
       if (state.availability == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+          Modifier.fillMaxSize().padding(bottom = LocalBottomBarPadding.current),
+          contentAlignment = Alignment.Center,
+        ) {
           AdaptiveCircularProgressIndicator()
         }
       } else {
         val (fullyOpen, partiallyOpen, closed) = state.availability
         val totalOpen = state.availability.totalOpen
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(bottom = LocalBottomBarPadding.current),
+        ) {
           item(key = "summary") {
             Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
               Text(
