@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertFailure
 import assertk.assertThat
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isLessThanOrEqualTo
@@ -177,6 +178,66 @@ class OptimisticQueryStoreLaggingReaderTest {
 
     assertThat(seen.filter { it != null && it.size != it.toSet().size }).isEmpty()
     assertThat(seen.last()).isEqualTo(listOf("b"))
+  }
+
+  @Test
+  fun `a view never goes back to a late value after it read a newer fold`() = runTest {
+    val clock = testClock(START)
+    val base =
+      LaggingQueryStore(
+        lag = 5.seconds,
+        delegate = QueryStore.inMemory(Fetched(listOf("a"), START)),
+      )
+    val tags = appendingTags(base, clock = clock)
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    advanceTimeBy(1.seconds)
+    // The commit writes [a, b], which the lagging reader holds back for five seconds
+    tags.mutate(Add("b")).awaitSucceeded()
+    runCurrent()
+    // A fetch that read the server before the send lands with the same fetch time and folds b in.
+    // The view reads the fold from the store while the reader still holds back [a, b].
+    tags.writeFetched(Fetched(listOf("a", "z"), START)) { _, _ -> false }
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a", "z", "b"))
+
+    advanceTimeBy(20.seconds)
+    runCurrent()
+
+    assertThat(seen).isEqualTo(listOf(listOf("a"), listOf("a", "b"), listOf("a", "z", "b")))
+    val fold = seen.indexOf(listOf("a", "z", "b"))
+    assertThat(seen.drop(fold)).doesNotContain(listOf("a", "b"))
+  }
+
+  @Test
+  fun `a view never goes back to a late value after it read a newer fetch`() = runTest {
+    val clock = testClock(START)
+    val base =
+      LaggingQueryStore(
+        lag = 5.seconds,
+        delegate = QueryStore.inMemory(Fetched(listOf("a"), START)),
+      )
+    // The row list never passes the row, so the confirmed record keeps its value
+    val tags =
+      appendingTags(base, clock = clock, stores = LaggingOutboxStores(firstListOnly = true))
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    advanceTimeBy(1.seconds)
+    // The commit writes [a, b], which the lagging reader holds back for five seconds
+    tags.mutate(Add("b")).awaitSucceeded()
+    runCurrent()
+    // A fetch from after the send lands as it is, inside the reader's lag
+    advanceTimeBy(1.seconds)
+    tags.writeFetched(Fetched(listOf("a", "b", "y"), clock.now())) { _, _ -> false }
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a", "b", "y"))
+
+    advanceTimeBy(20.seconds)
+    runCurrent()
+
+    assertThat(seen).isEqualTo(listOf(listOf("a"), listOf("a", "b"), listOf("a", "b", "y")))
   }
 
   @Test

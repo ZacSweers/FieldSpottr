@@ -1046,6 +1046,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       var lastEmitted: Fetched<T>? = null
       var lastSlice: KeySlice<K, T, M>? = null
       var lastPlan: Plan<T, M>? = null
+      // Whether the last store read returned a value other than the emitted truth. The read can be
+      // ahead of this collection's truth, whose next emissions can then be older than the value
+      // last shown. So while this is set, every wake reads the store, and it clears once a read
+      // returns the emitted truth.
+      var readAhead = false
       // The combine collects the truth and the state in two coroutines, so the state it passes can
       // be older or newer than the truth it passes. The state is collected only to wake the view.
       // The overlay reads the newest state, which holds every record and fold mark of the truths
@@ -1066,8 +1071,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           // records of a later write, like a record that gave up the value it could tell the truth
           // by. Then the store is read again until the key's slice stays the same instance across
           // a read, since every write of the set changes the slice before or after its truth
-          // write, or leaves a slice that is valid for both values.
-          if (plan.putsBack) {
+          // write, or leaves a slice that is valid for both values. After a read that was ahead of
+          // the emitted truth, the store is read the same way until the truth catches up, so the
+          // view never goes back to an older value.
+          if (plan.putsBack || readAhead) {
             var stored: Fetched<T>?
             while (true) {
               stored = truth.data.first()
@@ -1081,6 +1088,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
               }
               slice = after
             }
+            readAhead = stored != emitted
             plan = plan(stored, slice)
           }
           lastEmitted = emitted
