@@ -242,6 +242,32 @@ class OptimisticQueryStoreRestartTest {
   }
 
   @Test
+  fun `a stored null answer outlives a reopen and replaces the truth with null`() = runTest {
+    val rows = stores().open(NullableNote.name, Add.serializer())
+    rows.insertNew("", Add("b"))
+    online.value = true
+    val first = owner()
+    process().create(first, setOf(clearingSender()))
+    val sent = rows.entries().first { list -> list.singleOrNull()?.status == OutboxStatus.Sent }
+    // A null answer is stored as JSON null, distinct from an acknowledgment's missing reply
+    assertThat(sent.single().reply).isEqualTo("null")
+    stop(first)
+
+    temporaryDatabase.reopen()
+
+    val reopened = stores().open(NullableNote.name, Add.serializer())
+    val note = QueryStore.inMemory<String?>(Fetched("draft", START - 1.hours))
+    process()
+      .create(owner(), setOf(clearingSender()))
+      .optimisticStore(NullableNote, base = note, apply = { _, add -> add.tag })
+    reopened.entries().first { it.isEmpty() }
+
+    // The decoded null replaced the truth as a stored value, and nothing was sent again
+    assertThat(note.data.value).isEqualTo(Fetched(null, START))
+    assertThat(replies.value).isEqualTo(1)
+  }
+
+  @Test
   fun `a row committed before a reopen stays committed and applies once`() = runTest {
     online.value = true
     val first = owner()
@@ -624,6 +650,12 @@ class OptimisticQueryStoreRestartTest {
     replies.update { it + 1 }
     listOf("a", add.tag.uppercase())
   }
+
+  /** Answers each change with null, as a server that clears the note. */
+  private fun clearingSender() = NullableNote.exchangingSender { _, _ ->
+    replies.update { it + 1 }
+    null
+  }
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
@@ -641,3 +673,7 @@ private val Flags = OutboxKey<OptimisticQueryStoreRestartTest.Flag>("flags")
 /** An outbox whose server answers each change with the tag list it holds. */
 private val ReplyingTags =
   OutboxKey.replying<OptimisticQueryStoreRestartTest.Add, List<String>>("replyingTags")
+
+/** An outbox whose server answers each change with a nullable note. */
+private val NullableNote =
+  OutboxKey.replying<OptimisticQueryStoreRestartTest.Add, String?>("nullableNote")

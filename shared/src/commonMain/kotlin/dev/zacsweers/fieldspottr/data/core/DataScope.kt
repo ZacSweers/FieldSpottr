@@ -197,7 +197,7 @@ interface DataScope {
    *   sender's handler hears the drain's failures. Null uses the factory's handler.
    */
   fun <T, M> optimisticStore(
-    key: OutboxKey<M, T>,
+    key: OutboxKey<M, out T>,
     base: QueryStore<T>,
     apply: (current: T?, mutation: M) -> T?,
     onFailure: ((Throwable) -> Unit)? = null,
@@ -229,7 +229,7 @@ interface DataScope {
    * is absent.
    */
   fun <K : Any, T, M> optimisticStores(
-    key: OutboxKey<KeyedMutation<K, M>, T>,
+    key: OutboxKey<KeyedMutation<K, M>, out T>,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
     apply: (current: T?, mutation: M) -> T?,
@@ -340,7 +340,7 @@ interface DataScope {
 
 /** [DataScope.optimisticStores] with the serializer for a `@Serializable` key. */
 inline fun <reified K : Any, T, M> DataScope.optimisticStores(
-  key: OutboxKey<KeyedMutation<K, M>, T>,
+  key: OutboxKey<KeyedMutation<K, M>, out T>,
   noinline base: (key: K) -> QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
   noinline onFailure: ((Throwable) -> Unit)? = null,

@@ -11,6 +11,10 @@ import kotlinx.serialization.serializer
  * [DataScope.optimisticStore]. [R] is the type of the server's answer, for a key built with
  * [replying]. A plain key has `R = Nothing`, and it fits a store of any value type.
  *
+ * [R] is invariant, so a sender's answer type is exactly the key's reply type. A sender whose
+ * answer has another type does not compile. Parameters that accept a plain key for any value type
+ * take `OutboxKey<E, out T>`.
+ *
  * A data scope drains every sender it was created with, from the moment it is created, so rows
  * stored before a restart send even before any repository is built. The repository builds the
  * handle later with the same key, and the handle keeps all local state: the optimistic change, the
@@ -46,13 +50,13 @@ import kotlinx.serialization.serializer
  *   store of its own is checked only within its data scope.
  * @property serializer stores each payload as a row.
  */
-class OutboxKey<E, out R>
+class OutboxKey<E, R>
 @PublishedApi
 internal constructor(
   val name: String,
   val serializer: KSerializer<E>,
   /** Encodes the server's answers, or null for a plain key, whose sends answer with nothing. */
-  @PublishedApi internal val replySerializer: KSerializer<@UnsafeVariance R>?,
+  @PublishedApi internal val replySerializer: KSerializer<R>?,
 ) {
   override fun toString(): String = "OutboxKey($name)"
 

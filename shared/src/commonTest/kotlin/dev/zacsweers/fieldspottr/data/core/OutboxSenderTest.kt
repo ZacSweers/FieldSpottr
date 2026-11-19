@@ -69,11 +69,13 @@ class OutboxSenderTest {
   fun `the reply builders throw for a plain key`() {
     val plain = OutboxKey<Add>("plain")
 
+    // A plain key's answer type is Nothing, so these lambdas compile only because they give no
+    // answer
     assertFailsWith<IllegalArgumentException> {
-      plain.exchangingSender<Add, List<String>> { _, _ -> emptyList() }
+      plain.exchangingSender { _, _ -> error("never sent") }
     }
     assertFailsWith<IllegalArgumentException> {
-      plain.deliveringSender<Add, List<String>> { _, _ -> Delivery.Acknowledged }
+      plain.deliveringSender { _, _ -> Delivery.Acknowledged }
     }
   }
 

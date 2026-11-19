@@ -139,8 +139,9 @@ fun <E, R> OutboxKey<E, R>.deliveringSender(
 }
 
 /**
- * Throws unless this key has a reply serializer. A plain key fits a reply builder through its `R =
- * Nothing`, so only this check stops a send whose answer has no codec.
+ * Throws unless this key has a reply serializer. The key fixes the answer type at compile time, so
+ * a plain key reaches a reply builder only with a lambda that gives no answer, like one that throws
+ * or returns [Delivery.Acknowledged]. This check stops that sender.
  */
 private fun OutboxKey<*, *>.requireReplies(builder: String) {
   require(replySerializer != null) {

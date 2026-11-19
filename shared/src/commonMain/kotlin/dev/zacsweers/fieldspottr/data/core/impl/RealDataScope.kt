@@ -517,7 +517,7 @@ private class RealDataScope(
   }
 
   override fun <T, M> optimisticStore(
-    key: OutboxKey<M, T>,
+    key: OutboxKey<M, out T>,
     base: QueryStore<T>,
     apply: (current: T?, mutation: M) -> T?,
     onFailure: ((Throwable) -> Unit)?,
@@ -537,7 +537,7 @@ private class RealDataScope(
   }
 
   override fun <K : Any, T, M> optimisticStores(
-    key: OutboxKey<KeyedMutation<K, M>, T>,
+    key: OutboxKey<KeyedMutation<K, M>, out T>,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
     apply: (current: T?, mutation: M) -> T?,
