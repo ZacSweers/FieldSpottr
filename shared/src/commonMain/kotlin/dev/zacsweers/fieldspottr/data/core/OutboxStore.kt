@@ -20,8 +20,8 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 @JvmInline value class EntryId(val value: String)
 
 /**
- * Where an outbox row stands. [Sent] and [Discarded] are final. The store prunes a Discarded row,
- * and a Sent row once its handle has committed it, as [OutboxEntry.committed] describes.
+ * Where an outbox row stands. [Sent] and [Discarded] are final. The store prunes a row some time
+ * after [isDone] becomes true for it.
  */
 sealed interface OutboxStatus {
   /** Waiting for its turn, the network or a backoff. */
