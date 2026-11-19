@@ -164,14 +164,22 @@ internal class RealDataScopeFactory(
    * that throws is reported to [onFactoryFailure], whichever data scope's report published, and
    * neither holds up the drain that reported nor the next report. Its call counts as made only once
    * it returns, so the next report makes it again, even one with the same result.
+   *
+   * While an outbox has not read its rows, the result stays unknown, and the scheduler hears the
+   * earliest backoff the other outboxes reported, so a known deadline still gets its platform job.
    */
   private fun publish() {
     dirty.store(true)
     while (dirty.load() && publishing.compareAndSet(expectedValue = false, newValue = true)) {
       try {
         dirty.store(false)
-        val next = combinedOf(reported.load().values)
-        combined.value = next
+        val states = reported.load().values
+        val combinedNow = combinedOf(states)
+        combined.value = combinedNow
+        // A Ready report makes the result Ready, so an unknown result has only backoffs to tell
+        val next =
+          combinedNow
+            ?: states.filterIsInstance<OutboxBacklog.BackingOff>().minByOrNull { it.until }
         if (next != null && next != told.load()) {
           runCatching {
               when (next) {

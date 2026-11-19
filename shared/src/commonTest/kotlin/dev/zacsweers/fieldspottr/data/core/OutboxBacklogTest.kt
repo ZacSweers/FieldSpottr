@@ -8,6 +8,7 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog.BackingOff
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog.Empty
@@ -16,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.RecordingOutboxScheduler
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.test.Test
@@ -28,7 +30,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.withIndex
@@ -347,6 +351,43 @@ class OutboxBacklogTest {
     assertThat(heard).containsExactly(Ready, Ready)
     assertThat(data.actionFailures.all).containsExactly(failing)
   }
+
+  @Test
+  fun `a known deadline reaches the scheduler while another outbox has not read its heads`() =
+    runTest {
+      val factory = factory()
+      // A row stored by an earlier process backs off for five minutes
+      val waiting = factory.outboxStore<String>(Changes.name)
+      val id = waiting.insertNew("k", "a")
+      val row = checkNotNull(waiting.entry(id).first()).copy(retryAt = START + 5.minutes)
+      assertThat(waiting.update(row, expected = OutboxStatus.Queued)).isTrue()
+      // The other outbox's first read of its heads waits
+      val rows = inMemoryOutboxStore<String>()
+      val firstRead = CompletableDeferred<Unit>()
+      val slow =
+        object : OutboxStore<String> by rows {
+          override fun heads(): Flow<List<OutboxEntry<String>>> = flow {
+            firstRead.await()
+            emitAll(rows.heads())
+          }
+        }
+
+      factory.create(
+        backgroundScope,
+        setOf(Changes.sender(send = send), Flaky.sender(store = slow, send = send)),
+      )
+      runCurrent()
+
+      assertThat(scheduler.calls).containsExactly(BackingOff(START + 5.minutes))
+      // The backlog stays unknown, so no waiter takes it as drained
+      assertThat(withTimeoutOrNull(1.minutes) { factory.backlog.first() }).isNull()
+      assertThat(withTimeoutOrNull(1.minutes) { factory.awaitDrained() }).isNull()
+
+      firstRead.complete(Unit)
+      assertThat(factory.backlog.first()).isEqualTo(BackingOff(START + 5.minutes))
+      // The combined result equals what the scheduler already took
+      assertThat(scheduler.calls).containsExactly(BackingOff(START + 5.minutes))
+    }
 
   @Test
   fun `a waiting collector sees a backoff turn ready at its deadline while offline`() = runTest {
