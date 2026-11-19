@@ -168,11 +168,12 @@ class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throw
  * Until a handle is ready, after its first read of the owed rows, a sent row is written owed and
  * settled at once, so a commit never overtakes an older owed row on its key.
  *
- * The write that marks a row Sent after its send can fail, like on a store error. The row then
- * stays Sending, the sender's handler hears the failure, and the drain sends the row again with the
- * same id after a pause that doubles up to 1 minute while the write keeps failing. So the server
- * must take the id as an idempotency key. Once a send has returned, that write still runs when the
- * data scope's scope stops.
+ * A write that records the end of an attempt, such as the one that marks a row Sent, can fail on a
+ * store error. The row then stays Sending, the sender's handler hears the failure, and the drain
+ * sends the row again with the same id after a pause that doubles up to 1 minute while the write
+ * keeps failing. That send can come before the retry policy's delay. So the server must take the id
+ * as an idempotency key. Once a send has returned, that write still runs when the data scope's
+ * scope stops.
  *
  * A sent row that waits for its commit stays in the store, and an optimistic store's data keeps
  * showing its change until the commit lands. A failed row that waits for its revert stays too. Both

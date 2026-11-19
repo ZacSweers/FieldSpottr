@@ -216,7 +216,7 @@ internal class RealOutbox<E>(
   // Keys whose drain stopped because the network was down, until drainWhenBackOnline drains them
   private val offlineKeys = MutableStateFlow(persistentHashSetOf<String>())
   // Wake-up timers for keys in backoff. The deadline itself is the row's retryAt. A timer that
-  // fired stays until a drain takes its row, so the drain knows the wait is over.
+  // fired stays until a drain reads its row as the head, so the drain knows the wait is over.
   private val waking = AtomicReference(persistentMapOf<String, Timer>())
   // The unsettled handles following each row's current attempt, so the attempt's outcome reaches
   // them and a recheck finds them. Updated by compare-and-set only, and nothing observes it, so it
@@ -358,7 +358,7 @@ internal class RealOutbox<E>(
       val until =
         when {
           timer == null -> wakeAt(retryAt, now)
-          // Fired, and the drain it started has not taken the row yet
+          // Fired, and the drain it started has not read the row yet
           !timer.job.isActive -> return OutboxBacklog.Ready
           else -> timer.wakeAt
         }

@@ -121,7 +121,9 @@ interface DataScope {
    * data scope of its own with [Factory.create] and its senders, and builds the handle there.
    *
    * @param apply makes the optimistic change of each payload [Outbox.enqueue] takes, before its row
-   *   is inserted. A throw inserts nothing and fails the handle.
+   *   is inserted. A throw inserts nothing and fails the handle. Once admitted, [apply] and the row
+   *   insert finish together even when the owner stops, so [apply] must be able to finish after the
+   *   scope's other jobs are cancelled.
    * @param revert undoes the optimistic change when a row fails for good or is discarded, at most
    *   once per row. It reads only the payload and the row's id, so it works after a restart too. A
    *   row that failed while no handle was attached reverts once a handle attaches.
@@ -220,9 +222,11 @@ interface DataScope {
    * small views over one bounded source, like [QueryStore.inMemoryByKey] or a database table.
    *
    * [keySerializer] encodes each key, and each key's encoded form orders its rows. Keys that are
-   * equal must encode to the same form, so they share one order. [apply] and [onFailure] work as in
-   * [optimisticStore]. So an acknowledged change must give the same value when [apply] runs it
-   * twice, like setting a star, or adding an item only when its id is absent.
+   * equal must encode to the same form, so they share one order. When equal keys can serialize
+   * differently, like a key with a `Set` field, pass a serializer that writes them the same way.
+   * [apply] and [onFailure] work as in [optimisticStore]. So an acknowledged change must give the
+   * same value when [apply] runs it twice, like setting a star, or adding an item only when its id
+   * is absent.
    */
   fun <K : Any, T, M> optimisticStores(
     key: OutboxKey<KeyedMutation<K, M>, T>,
