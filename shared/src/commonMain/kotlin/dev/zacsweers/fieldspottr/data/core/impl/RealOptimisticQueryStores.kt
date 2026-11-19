@@ -1886,12 +1886,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * it in, or [stored] is the value that held it when that fetch's write began, until the write
      * lands. A record that gave up its value cannot tell, and a newer record answers in its place.
      * A record of an unknown answer never had a value, and only a fold tells that a truth holds it.
+     * A stored null is a value, so it never matches nothing stored.
      */
     fun isHeldBy(stored: Fetched<T>?): Boolean {
-      val value = stored?.value
-      return (hasValue && truth?.value == value) ||
-        (folded != null && folded.value == value) ||
-        (previousFold != null && previousFold.value == value)
+      return (hasValue && (truth == null) == (stored == null) && truth?.value == stored?.value) ||
+        folded?.holds(stored) == true ||
+        previousFold?.holds(stored) == true
     }
 
     /** This record with its server answer marked stale. A record without one stays as it is. */
@@ -1911,10 +1911,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      */
     fun alsoHeldBy(next: Fetched<T>?, stored: Fetched<T>?): Committed<K, T, M> =
       copy(
-        folded = Fold(next?.value),
+        folded = Fold(next),
         previousFold =
           if (isHeldBy(stored)) {
-            Fold(stored?.value)
+            Fold(stored)
           } else {
             null
           },
@@ -1968,8 +1968,18 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     val started = CompletableDeferred<Operation>()
   }
 
-  /** A value a fetch was written as, which may be null when the folded changes removed it. */
-  private class Fold<T>(val value: T?)
+  /**
+   * The value a fetch was written as, or nothing stored when the folded changes removed it. It
+   * keeps the value alone, without the fetch time, and tells a stored null apart from nothing
+   * stored.
+   */
+  private class Fold<T>(written: Fetched<T>?) {
+    private val present = written != null
+    private val value = written?.value
+
+    /** Whether [stored] holds this fold's value: both present with equal values, or both absent. */
+    fun holds(stored: Fetched<T>?): Boolean = (stored != null) == present && stored?.value == value
+  }
 
   /**
    * What a view computes its value from: the value it [start]s from and the [changes] it applies on
