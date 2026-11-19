@@ -36,8 +36,11 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -371,6 +374,89 @@ class OutboxSenderTest {
       // One write per commit, the owed row first
       assertThat(writes).containsExactly(listOf("a", "x"), listOf("a", "x", "y"))
       factory.assertNoFailures()
+    }
+
+  @Test
+  fun `a ready handle commits an owed row before its key sends the next row`() = runTest {
+    val inner = InMemoryOutboxStores().open(Tags.name, Add.serializer())
+    // The watcher hears of no heads, so only the drain that the attach starts sends
+    val quiet =
+      object : OutboxStore<Add> by inner {
+        override fun heads(): Flow<List<OutboxEntry<Add>>> = flow { awaitCancellation() }
+      }
+    val x = sentRow(quiet, Add("x"))
+    quiet.insertNew("", Add("y"))
+    val send = TestSend<Add>()
+    send.hold(Add("y"))
+    val data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(Tags.sender(store = quiet, send = send)),
+      )
+    val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    val writes = mutableListOf<List<String>>()
+    val counted =
+      QueryStore.of(
+        truth.data,
+        write = { fetched, keepsStored ->
+          writes += fetched.value
+          truth.writeFetched(fetched, keepsStored)
+        },
+        clear = truth::clearFetched,
+      )
+
+    data.optimisticStore(Tags, base = counted, apply = ::addOnce)
+    runCurrent()
+
+    // y waits in its send, and x has already committed
+    assertThat(send.attempts).containsExactly(Add("y"))
+    assertThat(inner.entry(x).first()?.committed).isEqualTo(true)
+    assertThat(writes).containsExactly(listOf("a", "x"))
+    send.release(Add("y"))
+    runCurrent()
+
+    // One write per commit, the owed row first
+    assertThat(writes).containsExactly(listOf("a", "x"), listOf("a", "x", "y"))
+    assertThat(inner.entries().first()).isEmpty()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a later change settles no owed row while its key waits to retry a failed commit`() =
+    runTest {
+      val data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender { _, _ -> }))
+      val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+      var writes = 0
+      val diskFull =
+        QueryStore.of(
+          truth.data,
+          write = { fetched, keepsStored ->
+            if (++writes == 1) {
+              error("Disk full")
+            }
+            truth.writeFetched(fetched, keepsStored)
+          },
+          clear = truth::clearFetched,
+        )
+      val own = TestFailures()
+      val store = data.optimisticStore(Tags, base = diskFull, apply = ::addOnce, onFailure = own)
+      runCurrent()
+      store.mutate(Add("b")).awaitSucceeded()
+      runCurrent()
+      assertThat(writes).isEqualTo(1)
+
+      // The drain of the later change finds the key's commit retry pending
+      store.mutate(Add("c")).awaitSucceeded()
+      runCurrent()
+      assertThat(writes).isEqualTo(1)
+      advanceTimeBy(2.seconds)
+      runCurrent()
+
+      // The retry commits both rows in order
+      assertThat(writes).isEqualTo(3)
+      assertThat(truth.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
+      assertThat(own.take().map { it.message }).containsExactly("Disk full")
+      data.assertNoFailures()
     }
 
   @Test

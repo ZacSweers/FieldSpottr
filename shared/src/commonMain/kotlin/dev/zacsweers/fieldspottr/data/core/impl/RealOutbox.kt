@@ -565,10 +565,14 @@ internal class RealOutbox<E>(
   }
 
   /**
-   * Sends [key]'s head until none is left, the key backs off or the network drops. Then it settles
-   * the rows on [key] owed to the handle, offline too, since that needs no network.
+   * Settles the rows on [key] owed to the handle, then sends [key]'s head until none is left, the
+   * key backs off or the network drops, then settles again. The first settle lets a row owed from
+   * before, like one a handle that just attached found, commit before a newer row sends. The second
+   * settles the rows the sends left owed. Both run offline too, since a settle needs no network,
+   * and both skip a key whose commit retry is due, as [settleLater] describes.
    */
   private suspend fun sendQueued(key: String) {
+    settleKey(key)
     sendHeads(key)
     settleKey(key)
   }
