@@ -390,8 +390,14 @@ class DataStoreOutboxStore<E>(
 
   /** Drops every row, settled ones included, so each handle reads its row as absent. */
   suspend fun clear() {
-    dataStore.updateData { OutboxLog() }
-    undecodable.clear()
+    // A cancelled caller starts no clear. A started clear runs to the end and forgets the rows
+    // found not to decode once its write lands, also when the caller is cancelled meanwhile. A
+    // failed write keeps them.
+    currentCoroutineContext().ensureActive()
+    withContext(NonCancellable) {
+      dataStore.updateData { OutboxLog() }
+      undecodable.clear()
+    }
   }
 
   /** Settled more than keepSettledFor ago. It reads as absent until the next insert drops it. */

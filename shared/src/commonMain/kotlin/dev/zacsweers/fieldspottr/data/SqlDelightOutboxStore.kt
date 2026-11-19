@@ -98,13 +98,12 @@ class SqlDelightOutboxStores(
   override suspend fun clearAll() {
     withContext(io) {
       queries().deleteAll()
-      // Right after the delete, with no suspension between, so a cancelled caller cannot skip it
+      // Right after the delete, with no suspension between, so a cancelled caller cannot skip them.
+      // A failed delete skips them, so the rows that did not decode stay reported.
       for (entry in opened.load().values) {
+        entry.store.forgetUndecodable()
         entry.store.recordCleared()
       }
-    }
-    for (entry in opened.load().values) {
-      entry.store.forgetUndecodable()
     }
   }
 }

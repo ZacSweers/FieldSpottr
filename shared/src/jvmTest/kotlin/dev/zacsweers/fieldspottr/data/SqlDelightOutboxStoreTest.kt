@@ -7,10 +7,13 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlPreparedStatement
+import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.containsExactly
 import assertk.assertions.containsExactlyInAnyOrder
 import assertk.assertions.doesNotContain
+import assertk.assertions.hasMessage
 import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
@@ -22,6 +25,7 @@ import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.OutboxRowQueries
 import dev.zacsweers.fieldspottr.createFSDatabase
+import dev.zacsweers.fieldspottr.data.core.Change
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OLD_CHANGE
@@ -581,7 +585,14 @@ class SqlDelightOutboxStoreReopenTest {
 
 /** [SqlDelightOutboxStores.clearAll], which one statement does for every outbox in the table. */
 class SqlDelightOutboxStoresClearAllTest {
-  @get:Rule val temporaryDatabase = TemporaryDatabase()
+  private lateinit var driver: DeleteAllHookDriver
+
+  @get:Rule
+  val temporaryDatabase =
+    TemporaryDatabase(
+      { plain -> DeleteAllHookDriver(plain).also { driver = it }.createFSDatabase() },
+      FSDatabase.Schema,
+    )
 
   @Test
   fun `clearing the set empties every outbox in the table`() = runTest {
@@ -621,5 +632,69 @@ class SqlDelightOutboxStoresClearAllTest {
 
     assertThat(settled).isEqualTo(List(3) { OperationState.Cancelled })
     failures.assertNone()
+  }
+
+  @Test
+  fun `a clear whose caller is cancelled after the delete forgets the rows that did not decode`() =
+    runTest {
+      val queries = temporaryDatabase.db().outboxRowQueries
+      queries.insert(id = "old", outbox = "changes", orderingKey = "k", payload = OLD_CHANGE)
+      val stores =
+        SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+      val store = stores.open("changes", Change.serializer())
+      // Records the row as one that does not decode, with no listener to hear of it yet
+      assertThat(store.head("k")).isNull()
+      lateinit var caller: Job
+      driver.afterDeleteAll = { caller.cancel() }
+
+      caller = launch { stores.clearAll() }
+      caller.join()
+
+      assertThat(caller.isCancelled).isTrue()
+      assertThat(queries.byId("changes", "old").executeAsOneOrNull()).isNull()
+      val reported = mutableListOf<EntryId>()
+      store.onUndecodable { id, _ -> reported += id }
+      assertThat(reported).isEmpty()
+    }
+
+  @Test
+  fun `a clear whose delete fails keeps the rows that did not decode`() = runTest {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    queries.insert(id = "old", outbox = "changes", orderingKey = "k", payload = OLD_CHANGE)
+    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+    val store = stores.open("changes", Change.serializer())
+    assertThat(store.head("k")).isNull()
+    driver.failDeleteAll = IllegalStateException("Disk full")
+
+    assertFailure { stores.clearAll() }.hasMessage("Disk full")
+
+    assertThat(queries.byId("changes", "old").executeAsOneOrNull()).isNotNull()
+    val reported = mutableListOf<EntryId>()
+    store.onUndecodable { id, _ -> reported += id }
+    assertThat(reported).containsExactly(EntryId("old"))
+  }
+}
+
+/**
+ * A driver that hooks the statement deleting every outbox row. [failDeleteAll] throws in place of
+ * the delete. [afterDeleteAll] runs once the delete succeeded, before the driver returns.
+ */
+private class DeleteAllHookDriver(private val driver: SqlDriver) : SqlDriver by driver {
+  @Volatile var afterDeleteAll: (() -> Unit)? = null
+  @Volatile var failDeleteAll: Throwable? = null
+
+  override fun execute(
+    identifier: Int?,
+    sql: String,
+    parameters: Int,
+    binders: (SqlPreparedStatement.() -> Unit)?,
+  ): QueryResult<Long> {
+    if (sql.trim().removeSuffix(";").trim() != "DELETE FROM outboxRow") {
+      return driver.execute(identifier, sql, parameters, binders)
+    }
+    failDeleteAll?.let { throw it }
+    val result = driver.execute(identifier, sql, parameters, binders)
+    afterDeleteAll?.invoke()
+    return result
   }
 }
