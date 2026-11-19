@@ -46,3 +46,12 @@ class TestClock(private val scheduler: TestCoroutineScheduler, start: Instant = 
 /** A [TestClock] on this test's scheduler, reading [start] now. */
 fun TestScope.testClock(start: Instant = TestClock.DEFAULT_START): TestClock =
   TestClock(testScheduler, start)
+
+/**
+ * A clock that always reads [at], whatever virtual or wall time passes, so every time it gives
+ * ties.
+ */
+fun frozenClock(at: Instant): Clock =
+  object : Clock {
+    override fun now(): Instant = at
+  }

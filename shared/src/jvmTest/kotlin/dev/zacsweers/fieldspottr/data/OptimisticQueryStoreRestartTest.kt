@@ -29,6 +29,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.frozenClock
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import java.util.concurrent.ConcurrentHashMap
@@ -399,12 +400,8 @@ class OptimisticQueryStoreRestartTest {
         clear = flags.truth::clearFetched,
       )
     // The clock stands still while failed commits wait out their pauses, so both rows send at START
-    val frozen =
-      object : Clock {
-        override fun now(): Instant = START
-      }
     val store =
-      process(frozen, OwedReadHooks(stores()))
+      process(frozenClock(START), OwedReadHooks(stores()))
         .create(owner, setOf(flags.sender))
         .optimisticStore(Flags, base = diskFull, apply = { _, flag -> flag.on })
     val older = store.mutate(Flag(true))

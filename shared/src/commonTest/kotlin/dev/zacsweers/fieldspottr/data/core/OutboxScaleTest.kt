@@ -13,6 +13,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.discardDirectly
+import dev.zacsweers.fieldspottr.data.core.testing.frozenClock
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import kotlin.concurrent.atomics.AtomicInt
@@ -20,7 +21,6 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlin.test.Test
-import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -108,10 +108,7 @@ class OutboxScaleTest {
     val ids = List(ROWS) { store.insertNew("k", "p$it") }
     val failures = TestFailures()
     // The clock stands still, so every send reads the same time
-    val frozen =
-      object : Clock {
-        override fun now(): Instant = START
-      }
+    val frozen = frozenClock(START)
     // No handle is attached, so every row the drain sends is owed
     DataScope.Factory(onFailure = failures, online = MutableStateFlow(true), clock = frozen)
       .create(

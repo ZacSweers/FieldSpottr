@@ -13,10 +13,10 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.frozenClock
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import kotlin.concurrent.Volatile
 import kotlin.test.Test
-import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
@@ -780,10 +780,7 @@ class OutboxOwedReadTest {
 
   private companion object {
     val START: Instant = Instant.parse("2026-06-10T12:00:00Z")
-    val FROZEN =
-      object : Clock {
-        override fun now(): Instant = START
-      }
+    val FROZEN = frozenClock(START)
     val Flags = OutboxKey<Flag>("flags")
     val Rows = OutboxKey<String>("rows")
   }
