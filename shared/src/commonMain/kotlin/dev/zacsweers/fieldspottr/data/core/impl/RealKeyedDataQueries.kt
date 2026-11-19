@@ -92,55 +92,34 @@ internal class RealKeyedDataQueries<K : Any, T>(
   val keysRemembered: Int
     get() = allInvalidated.load()?.refreshed?.size ?: 0
 
-  override fun state(key: K): Flow<QueryState<T>> = flow {
+  override fun state(key: K): Flow<QueryState<T>> = heldFlow(key) { it.state }
+
+  override fun stateAutoFetch(key: K): Flow<QueryState<T>> = heldFlow(key) { it.stateAutoFetch }
+
+  override fun data(key: K): Flow<Fetched<T>?> = heldFlow(key) { it.data }
+
+  override fun status(key: K): Flow<FetchStatus> = heldFlow(key) { it.status }
+
+  override fun requestFetch(key: K, force: Boolean): Operation =
+    command(key) { it.requestFetch(force) }
+
+  override fun invalidate(key: K): Operation = command(key) { it.invalidate() }
+
+  /** Collects the flow [select] picks from [key]'s query, holding its entry while collected. */
+  private fun <R> heldFlow(key: K, select: (RealDataQuery<T>) -> Flow<R>): Flow<R> = flow {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.state)
+      emitAll(select(entry.query))
     } finally {
       entry.release()
     }
   }
 
-  override fun stateAutoFetch(key: K): Flow<QueryState<T>> = flow {
+  /** Starts [start] on [key]'s query, holding its entry until the operation settles. */
+  private inline fun command(key: K, start: (RealDataQuery<T>) -> Operation): Operation {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.stateAutoFetch)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun data(key: K): Flow<Fetched<T>?> = flow {
-    val entry = acquire(key)
-    try {
-      emitAll(entry.query.data)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun status(key: K): Flow<FetchStatus> = flow {
-    val entry = acquire(key)
-    try {
-      emitAll(entry.query.status)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun requestFetch(key: K, force: Boolean): Operation {
-    val entry = acquire(key)
-    try {
-      return entry.query.requestFetch(force).also(entry::holdUntilSettled)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun invalidate(key: K): Operation {
-    val entry = acquire(key)
-    try {
-      return entry.query.invalidate().also(entry::holdUntilSettled)
+      return start(entry.query).also(entry::holdUntilSettled)
     } finally {
       entry.release()
     }
