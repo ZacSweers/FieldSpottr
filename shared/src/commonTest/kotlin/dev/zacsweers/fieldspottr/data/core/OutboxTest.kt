@@ -11,6 +11,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotEmpty
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
@@ -1698,6 +1699,129 @@ class OutboxTest {
     assertThat(send.sent).containsExactly("b")
     attaching.complete(Unit)
   }
+
+  @Test
+  fun `a retry during the claim of a backing-off row leaves no deadline after an offline requeue`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      val id = rows.insertNew("k", "a")
+      // The row backs off with a deadline that has passed, as after a restart
+      val waiting =
+        checkNotNull(rows.entry(id).first()).copy(attempts = 1, retryAt = START - 1.minutes)
+      assertThat(rows.update(waiting, expected = OutboxStatus.Queued)).isTrue()
+      val online = MutableStateFlow(true)
+      val claimReached = CompletableDeferred<Unit>()
+      val finishClaim = CompletableDeferred<Unit>()
+      // Holds the claim after the drain read the head, and drops the network once it is written
+      val slowClaim =
+        object : OutboxStore<String> by rows {
+          override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+            if (entry.status != OutboxStatus.Sending || claimReached.isCompleted) {
+              return rows.update(entry, expected)
+            }
+            claimReached.complete(Unit)
+            finishClaim.await()
+            val wrote = rows.update(entry, expected)
+            online.value = false
+            return wrote
+          }
+        }
+      val outbox = outboxOver(slowClaim, online)
+
+      claimReached.await()
+      outbox.retry(id)
+      runCurrent()
+      assertThat(rows.entry(id).first()?.retryAt).isNull()
+      finishClaim.complete(Unit)
+      runCurrent()
+
+      // The requeue keeps the deadline the retry cleared
+      val row = checkNotNull(rows.entry(id).first())
+      assertThat(row.status).isEqualTo(OutboxStatus.Queued)
+      assertThat(row.retryAt).isNull()
+      assertThat(send.attempts).isEmpty()
+    }
+
+  @Test
+  fun `a row left sending with a later deadline sends at once after a drop during its claim`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      val id = rows.insertNew("k", "a")
+      // A process claimed the row with a deadline ahead, as after the clock moved back, and died
+      val left =
+        checkNotNull(rows.entry(id).first())
+          .copy(status = OutboxStatus.Sending, attempts = 1, retryAt = START + 5.minutes)
+      assertThat(rows.update(left, expected = OutboxStatus.Queued)).isTrue()
+
+      val sentIds = assertSendsAtOnceAfterDropDuringClaim(rows)
+
+      assertThat(sentIds).containsExactly(id)
+      // The time offline counted no attempt
+      assertThat(rows.entry(id).first()?.attempts).isEqualTo(1)
+    }
+
+  @Test
+  fun `a queued row sends at once after a drop during its claim`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insertNew("k", "a")
+
+    val sentIds = assertSendsAtOnceAfterDropDuringClaim(rows)
+
+    assertThat(sentIds).containsExactly(id)
+    assertThat(rows.entry(id).first()?.attempts).isEqualTo(0)
+  }
+
+  /**
+   * Starts an outbox over [rows] whose network drops right after its first claim is written, checks
+   * that the row went back to Queued unsent, then reconnects with no virtual time passing. Returns
+   * the ids sent, in order.
+   */
+  private suspend fun TestScope.assertSendsAtOnceAfterDropDuringClaim(
+    rows: OutboxStore<String>
+  ): List<EntryId> {
+    val online = MutableStateFlow(true)
+    var claimed = false
+    val dropOnClaim =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          val wrote = rows.update(entry, expected)
+          if (entry.status == OutboxStatus.Sending && !claimed) {
+            claimed = true
+            online.value = false
+          }
+          return wrote
+        }
+      }
+    val sentIds = mutableListOf<EntryId>()
+    DataScope.Factory(onFailure = TestFailures(), online = online, clock = testClock(START))
+      .create(
+        backgroundScope,
+        setOf(
+          Rows.sender(store = dropOnClaim) { payload, id ->
+            sentIds += id
+            send(payload, id)
+          }
+        ),
+      )
+    runCurrent()
+    assertThat(claimed).isTrue()
+    assertThat(rows.entries().first().single().status).isEqualTo(OutboxStatus.Queued)
+    assertThat(sentIds).isEmpty()
+
+    online.value = true
+    runCurrent()
+    assertThat(rows.entries().first().single().status).isEqualTo(OutboxStatus.Sent)
+    return sentIds
+  }
+
+  /** The handle on outbox [Rows] over [rows] in a data scope that reads [online], at [START]. */
+  private fun TestScope.outboxOver(
+    rows: OutboxStore<String>,
+    online: MutableStateFlow<Boolean>,
+  ): Outbox<String> =
+    DataScope.Factory(onFailure = TestFailures(), online = online, clock = testClock(START))
+      .create(backgroundScope, setOf(Rows.sender(store = rows, send = send)))
+      .outbox(Rows, revert = send::revert)
 
   /** A rejection that says when to try again, like a 429 with a `Retry-After` header. */
   private class RateLimited(val retryAfter: Duration) : Exception("429 Too Many Requests")

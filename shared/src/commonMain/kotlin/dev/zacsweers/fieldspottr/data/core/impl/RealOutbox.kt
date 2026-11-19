@@ -647,16 +647,21 @@ internal class RealOutbox<E>(
         backOff(key, head.id, retryAt)
         break
       }
-      // Claims the row by moving it to Sending. If the row was discarded or retried between the
-      // read and this write, the compare-and-set fails and the loop reads the head again.
-      if (!store.update(head.copy(status = OutboxStatus.Sending), expected = head.status)) {
+      // Claims the row by moving it to Sending. The compare-and-set checks the status only. It
+      // fails when the row was discarded between the read and this write, and the loop reads the
+      // head again. A retry of a backing-off row leaves it Queued, so the claim still lands. The
+      // claim ends the row's wait, so it clears the deadline, and a deadline the drain read earlier
+      // never comes back.
+      val claimed = head.copy(status = OutboxStatus.Sending, retryAt = null)
+      if (!store.update(claimed, expected = head.status)) {
         continue
       }
       showFollowers(head.id, OperationState.Running)
       // The claim suspends too, so check the network once more. A send started offline would spend
-      // an attempt for nothing, so the row goes back to Queued instead.
+      // an attempt for nothing, so the row goes back to Queued with no deadline, and sends at once
+      // on reconnect.
       if (!online.value) {
-        store.update(head.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
+        store.update(claimed.copy(status = OutboxStatus.Queued), expected = OutboxStatus.Sending)
         showFollowers(head.id, OperationState.Queued)
         continue
       }
