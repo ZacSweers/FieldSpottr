@@ -5,6 +5,7 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.RealActionRunner
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
@@ -19,17 +20,22 @@ import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import java.lang.reflect.Modifier
 import java.util.IdentityHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.hours
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 
 /** What a settled handle keeps reachable, checked by walking the object graph from it. */
 class HandleRetentionTest {
@@ -51,7 +57,7 @@ class HandleRetentionTest {
     val fetch = TestFetch { ByteArray(1) }
     val query =
       testDataScope().query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
-    val collector = backgroundScope.launch { query.data.collect {} }
+    val collector = backgroundScope.launch { query.dataAutoFetch.collect {} }
     testScheduler.runCurrent()
 
     fetch.hold()
@@ -128,7 +134,7 @@ class HandleRetentionTest {
       DataScope.Factory(onFailure = {}, clock = testClock())
         .create(backgroundScope)
         .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
-    val collector = backgroundScope.launch { query.data.collect {} }
+    val collector = backgroundScope.launch { query.dataAutoFetch.collect {} }
     testScheduler.runCurrent()
 
     // Emptied under the collector, whose automatic check then fails
@@ -156,7 +162,7 @@ class HandleRetentionTest {
           .create(backgroundScope)
           .query(store, freshness = Freshness.staleAfter(1.hours), fetch = fetch)
       // Stays subscribed throughout, so its watcher outlives the failed check it started with
-      val collector = backgroundScope.launch { query.data.collect {} }
+      val collector = backgroundScope.launch { query.dataAutoFetch.collect {} }
       testScheduler.runCurrent()
       assertThat(query.status.value).isEqualTo(FetchStatus.Failed(error))
 
@@ -198,6 +204,153 @@ class HandleRetentionTest {
       assertThat(actions.keysHeld).isEqualTo(0)
       owner.cancel()
     }
+
+  @Test
+  fun `a runner keeps none of the commands replaced behind a running one`() = runTest {
+    val owner = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+    val actions = RealActionRunner(owner, onFailure = {})
+    val release = CompletableDeferred<Unit>()
+    val saving = Ordering.Keyed("draft", OnPrevious.Supersede)
+    val running = actions.run(saving) { release.await() }
+    testScheduler.runCurrent()
+
+    // One more than a round number, so a cleanup that runs in batches would leave some behind
+    val saves = List(65) { actions.run(saving) {} }
+    testScheduler.runCurrent()
+
+    val replaced = saves.dropLast(1)
+    replaced.forEach { it.assertCancelled() }
+    // Each replaced command is gone, however many came while the first one runs
+    assertThat(replaced.count { actions.reaches(it) }).isEqualTo(0)
+    assertThat(actions.reaches(saves.last())).isTrue()
+    assertThat(actions.reaches(running)).isTrue()
+
+    release.complete(Unit)
+    testScheduler.runCurrent()
+    saves.last().assertSucceeded()
+    assertThat(actions.keysHeld).isEqualTo(0)
+    owner.cancel()
+  }
+
+  @Test
+  fun `a runner keeps no replaced command when each one arrives after the last one waits`() =
+    runTest {
+      val owner = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+      val actions = RealActionRunner(owner, onFailure = {})
+      val release = CompletableDeferred<Unit>()
+      val saving = Ordering.Keyed("draft", OnPrevious.Supersede)
+      actions.run(saving) { release.await() }
+      testScheduler.runCurrent()
+
+      // Each save already waits for the running command when the next one replaces it
+      val saves =
+        List(65) {
+          actions.run(saving) {}.also { testScheduler.runCurrent() }
+        }
+
+      assertThat(saves.dropLast(1).count { actions.reaches(it) }).isEqualTo(0)
+      release.complete(Unit)
+      testScheduler.runCurrent()
+      saves.last().assertSucceeded()
+      owner.cancel()
+    }
+
+  @Test
+  fun `a runner keeps no replaced command when replacements come from another thread`() {
+    // Commands run on a thread of their own, and this test's thread submits them
+    val executor = Executors.newSingleThreadExecutor()
+    val owner = CoroutineScope(executor.asCoroutineDispatcher() + Job())
+    // Runs everything the runner's thread has queued so far, so each command reached its wait
+    val drain: () -> Unit = { executor.submit(Runnable {}).get(10, SECONDS) }
+    try {
+      val actions = RealActionRunner(owner, onFailure = {})
+      val release = CompletableDeferred<Unit>()
+      val saving = Ordering.Keyed("draft", OnPrevious.Supersede)
+      val running = actions.run(saving) { release.await() }
+      drain()
+
+      // Each save already waits for the running command when the next one replaces it
+      val saves = List(65) { actions.run(saving) {}.also { drain() } }
+
+      running.assertRunning()
+      assertThat(saves.dropLast(1).count { actions.reaches(it) }).isEqualTo(0)
+      assertThat(actions.reaches(saves.last())).isTrue()
+      release.complete(Unit)
+      runBlocking { withTimeout(10_000) { saves.last().await() } }
+      saves.last().assertSucceeded()
+    } finally {
+      owner.cancel()
+      executor.shutdown()
+    }
+  }
+
+  @Test
+  fun `a runner does not keep a cancelled command between a running and a queued one`() = runTest {
+    val owner = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+    val actions = RealActionRunner(owner, onFailure = {})
+    val release = CompletableDeferred<Unit>()
+    val running = actions.run(Ordering.Keyed("k")) { release.await() }
+    testScheduler.runCurrent()
+    val cancelled = List(3) { actions.runCancellable(Ordering.Keyed("k")) {} }
+    val queued = actions.run(Ordering.Keyed("k")) {}
+    testScheduler.runCurrent()
+
+    cancelled.forEach { it.cancel() }
+    testScheduler.runCurrent()
+
+    cancelled.forEach { it.assertCancelled() }
+    // The queued command now waits for the running one alone
+    assertThat(cancelled.count { actions.reaches(it) }).isEqualTo(0)
+    assertThat(actions.reaches(queued)).isTrue()
+    release.complete(Unit)
+    testScheduler.runCurrent()
+    running.assertSucceeded()
+    queued.assertSucceeded()
+    owner.cancel()
+  }
+
+  @Test
+  fun `a waiting cancel command does not keep a cancelled command of another mode ahead of it`() =
+    runTest {
+      val owner = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+      val actions = RealActionRunner(owner, onFailure = {})
+      val release = CompletableDeferred<Unit>()
+      val running = actions.run(Ordering.Keyed("k")) { release.await() }
+      testScheduler.runCurrent()
+      // Wait commands, which a cancel command waits for but never cancels
+      val cancelled = List(3) { actions.runCancellable(Ordering.Keyed("k")) {} }
+      val queued = actions.run(Ordering.Keyed("k", OnPrevious.Cancel)) {}
+      testScheduler.runCurrent()
+
+      cancelled.forEach { it.cancel() }
+      testScheduler.runCurrent()
+
+      cancelled.forEach { it.assertCancelled() }
+      assertThat(cancelled.count { actions.reaches(it) }).isEqualTo(0)
+      assertThat(actions.reaches(queued)).isTrue()
+      release.complete(Unit)
+      testScheduler.runCurrent()
+      running.assertSucceeded()
+      queued.assertSucceeded()
+      owner.cancel()
+    }
+
+  @Test
+  fun `a settled handle does not keep its join key or its conflict key`() = runTest {
+    val joinKey = ByteArray(1 shl 20)
+    val conflictKey = ByteArray(1 shl 20)
+    val actions = testDataScope().newActionRunner()
+    val handle = actions.run(joinKey = joinKey, conflictKey = conflictKey) {}
+    val rejected = actions.run(conflictKey = conflictKey) {}
+    testScheduler.runCurrent()
+
+    handle.assertSucceeded()
+    assertThat(handle.reaches(joinKey)).isFalse()
+    assertThat(handle.reaches(conflictKey)).isFalse()
+    // A rejected handle names the key that rejected it, for the caller to read
+    assertThat(rejected.assertFailed<CommandRejectedException>().conflictKey)
+      .isSameInstanceAs(conflictKey)
+  }
 
   @Test
   fun `a settled handle does not keep its key`() = runTest {

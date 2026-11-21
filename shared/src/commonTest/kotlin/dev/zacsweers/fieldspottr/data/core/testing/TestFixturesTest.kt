@@ -20,7 +20,6 @@ import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
-import dev.zacsweers.fieldspottr.data.core.data
 import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.write
 import dev.zacsweers.fieldspottr.data.core.writeFetched
@@ -258,7 +257,7 @@ class TestFixturesTest {
     assertThat(fetch.callCount("a")).isEqualTo(2)
     assertThat(fetch.callCount("b")).isEqualTo(1)
     assertThat(fetch.maxRunning).isEqualTo(2)
-    assertThat(values.data("a").first()?.value).isEqualTo("a#2")
+    assertThat(values.dataAutoFetch("a").first()?.value).isEqualTo("a#2")
   }
 
   @Test

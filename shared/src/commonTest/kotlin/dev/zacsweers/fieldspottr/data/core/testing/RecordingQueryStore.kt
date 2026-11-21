@@ -11,7 +11,6 @@ import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore.Call.Writ
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlin.time.Instant
 import kotlinx.collections.immutable.persistentListOf
@@ -69,7 +68,7 @@ class RecordingQueryStore<T>(private val delegate: QueryStore<T> = QueryStore.in
     get() = collections.load()
 
   override val data: Flow<Fetched<T>?> = flow {
-    collections.incrementAndFetch()
+    collections.update { it + 1 }
     emitAll(delegate.data)
   }
 

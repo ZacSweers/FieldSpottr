@@ -5,25 +5,38 @@ package dev.zacsweers.fieldspottr.data.core
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 /** What an optimistic store set keeps reachable, checked by walking the object graph from it. */
 class OptimisticQueryStoreRetentionTest {
@@ -90,9 +103,117 @@ class OptimisticQueryStoreRetentionTest {
     assertThat(reopened.data.first()?.value).isEqualTo(Post(bodies.last(), starred = true))
     scopes.assertNoFailures()
   }
+
+  @Test
+  fun `a change with an unknown answer lets go of a body a fetch folded it into`() = runTest {
+    val factory = testDataScopeFactory(clock = testClock(START))
+    // Stored before the set attaches, so the outbox keeps the answer on the row, which fails to
+    // encode, and the commit runs with the answer unknown
+    factory.outboxStore<Star>(UnknownPosts.name).insertNew("", Star(true))
+    val data =
+      factory.create(
+        backgroundScope,
+        setOf(UnknownPosts.exchangingSender { star, _ -> Post("answer", star.starred) }),
+      )
+    runCurrent()
+    assertThat(factory.actionFailures.take().single()).isInstanceOf<SerializationException>()
+    val truth = QueryStore.inMemory(Fetched(Post("old"), START - 1.hours))
+    val post =
+      data.optimisticStore(
+        UnknownPosts,
+        base = truth,
+        apply = { post, star -> post?.copy(starred = star.starred) },
+      )
+    runCurrent()
+
+    // A fetch that read the server before the send folds the change into its large body
+    val body = "b".repeat(1 shl 20)
+    post.writeFetched(Fetched(Post(body), START - 1.seconds)) { _, _ -> false }
+    assertThat(truth.data.first()?.value).isEqualTo(Post(body, starred = true))
+    // A later change's answer replaces the truth, and its commit trims the older record
+    advanceTimeBy(1.seconds)
+    post.mutate(Star(false)).awaitSucceeded()
+    assertThat(truth.data.first()?.value).isEqualTo(Post("answer", starred = false))
+
+    assertThat(post.reaches(body)).isFalse()
+    factory.assertNoFailures()
+  }
+
+  /**
+   * The outbox and the call's watcher follow the handle while the change waits. What the set knows
+   * of the change, which views read, needs only the change itself.
+   */
+  @Test
+  fun `a waiting change's state does not keep its handle`() = runTest {
+    val data =
+      testDataScopeFactory()
+        .create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> awaitCancellation() }))
+    val posts =
+      data.optimisticStores(
+        PostsOutbox,
+        base = QueryStore.inMemoryByKey<String, Post>(),
+        apply = { post, star -> post?.copy(starred = star.starred) },
+      )
+
+    val handle = posts.mutate("p", Star(true))
+    runCurrent()
+
+    assertThat(handle.state.value).isEqualTo(OperationState.Running)
+    assertThat(posts.knownChanges).isEqualTo(1)
+    assertThat(posts.stateValue().reaches(handle)).isFalse()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an idle set does not keep the stored milestone of its last change`() = runTest {
+    val data = testDataScopeFactory().create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> }))
+    val posts =
+      data.optimisticStores(
+        PostsOutbox,
+        base = QueryStore.inMemoryByKey<String, Post>(),
+        apply = { post, star -> post?.copy(starred = star.starred) },
+      )
+
+    val handle = posts.mutate("p", Star(true))
+    handle.awaitSucceeded()
+    runCurrent()
+
+    assertThat(posts.reaches(handle.stored)).isFalse()
+    data.assertNoFailures()
+  }
+}
+
+/**
+ * The set's current state, which every view reads. It is private to the set, so a test reads it by
+ * reflection to tell what the state itself keeps from what the outbox keeps.
+ */
+private fun OptimisticQueryStores<*, *, *>.stateValue(): Any {
+  val field = javaClass.getDeclaredField("state")
+  field.isAccessible = true
+  return (field.get(this) as StateFlow<*>).value!!
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
+
+/** Posts whose answers fail to encode, so an answer kept on a row is unknown to its commit. */
+private val UnknownPosts =
+  OutboxKey.replying(
+    "unknownPosts",
+    OptimisticQueryStoreRetentionTest.Star.serializer(),
+    UnencodablePost,
+  )
+
+/** A reply serializer whose encoding always throws, like a value the format cannot hold. */
+private object UnencodablePost : KSerializer<OptimisticQueryStoreRetentionTest.Post> {
+  override val descriptor = PrimitiveSerialDescriptor("UnencodablePost", PrimitiveKind.STRING)
+
+  override fun serialize(encoder: Encoder, value: OptimisticQueryStoreRetentionTest.Post) {
+    throw SerializationException("Cannot encode a post")
+  }
+
+  override fun deserialize(decoder: Decoder): OptimisticQueryStoreRetentionTest.Post =
+    throw SerializationException("Cannot decode a post")
+}
 
 private val PostsOutbox =
   OutboxKey<KeyedMutation<String, OptimisticQueryStoreRetentionTest.Star>>("posts")

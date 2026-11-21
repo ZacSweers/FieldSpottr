@@ -19,6 +19,7 @@ import dev.zacsweers.fieldspottr.data.core.impl.IDEMPOTENCE_CHECKS
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.impl.committedValues
 import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScopeFactory
@@ -26,6 +27,8 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestKeyedFetch
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
+import dev.zacsweers.fieldspottr.data.core.testing.append
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
@@ -66,9 +69,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 
 class OptimisticQueryStoreTest {
-  /** Adds one tag. */
-  @Serializable data class Add(val tag: String)
-
   /** Sets a note's text, or deletes the note when [text] is null. */
   @Serializable data class SetText(val text: String?)
 
@@ -130,7 +130,7 @@ class OptimisticQueryStoreTest {
   @Test
   fun `a change shows at once and stays once sent`() = runTest {
     val (store, query) = tags()
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       val handle = store.mutate(Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -141,7 +141,7 @@ class OptimisticQueryStoreTest {
     assertThat(send.sent).containsExactly(Add("b"))
     assertThat(store.pending.first()).isEmpty()
     // The truth keeps its fetch time, since the server never said the rest is current
-    assertThat(query.stored.first()).isEqualTo(Fetched(listOf("a", "b"), START))
+    assertThat(query.data.first()).isEqualTo(Fetched(listOf("a", "b"), START))
     data.assertNoFailures()
   }
 
@@ -149,7 +149,7 @@ class OptimisticQueryStoreTest {
   fun `a fetch that lands while a change waits keeps the change on top`() = runTest {
     send.hold(Add("b"))
     val (store, query) = tags(idempotent = false)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       val handle = store.mutate(Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -162,14 +162,14 @@ class OptimisticQueryStoreTest {
       handle.awaitSucceeded()
       expectNoEvents()
     }
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "z", "b"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "z", "b"))
     assertOnlyIdempotencyReport()
   }
 
   @Test
   fun `a fetch that read the server before a send finished does not hide the change`() = runTest {
     val (store, query) = tags(idempotent = false)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       // The refresh reads the server before the change reaches it, and lands after the send
       fetch.respond = { listOf("a", "z") }
@@ -204,13 +204,13 @@ class OptimisticQueryStoreTest {
     store.mutate(Add("b")).awaitSucceeded()
     fetch.release()
     refresh.awaitSucceeded()
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "z", "b"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "z", "b"))
 
     store.mutate(Add("c")).awaitSucceeded()
 
     // The commit folded onto the view, so the truth now holds both changes
     assertThat(truth.data.value?.value).isEqualTo(listOf("a", "z", "b", "c"))
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "z", "b", "c"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "z", "b", "c"))
     assertOnlyIdempotencyReport()
   }
 
@@ -218,7 +218,7 @@ class OptimisticQueryStoreTest {
   fun `a rejected change drops out and comes back on retry`() = runTest {
     send.failPermanently()
     val (store, query) = tags()
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       val handle = store.mutate(Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -239,7 +239,7 @@ class OptimisticQueryStoreTest {
   @Test
   fun `a discarded change drops out for good`() = runTest {
     val (store, query) = tags(online = false)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       val handle = store.mutate(Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -255,7 +255,7 @@ class OptimisticQueryStoreTest {
   @Test
   fun `clear drops the waiting changes with the truth`() = runTest {
     val (store, query) = tags(online = false)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       val handle = store.mutate(Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -283,7 +283,7 @@ class OptimisticQueryStoreTest {
   @Test
   fun `changes made offline wait and send in order on reconnect`() = runTest {
     val (store, query) = tags(online = false, idempotent = false)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       store.mutate(Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -300,7 +300,7 @@ class OptimisticQueryStoreTest {
       assertThat(sentIds).isEqualTo(waiting.map { it.id })
     }
     assertThat(send.sent).containsExactly(Add("b"), Add("c"))
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "b", "c"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
     assertOnlyIdempotencyReport()
   }
 
@@ -322,7 +322,7 @@ class OptimisticQueryStoreTest {
         apply = ::addOnce,
       )
     val query = data.query(store, Freshness.staleAfter(2.hours), fetch = fetch)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       store.mutate(Add("b")).awaitSucceeded()
       assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -348,7 +348,7 @@ class OptimisticQueryStoreTest {
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
 
-    queries.data("x").test {
+    queries.dataAutoFetch("x").test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("x"))
       stores.mutate("x", Add("b")).awaitSucceeded()
       // The commit wrote the instance the view reads, so the change stays once the row leaves
@@ -359,26 +359,33 @@ class OptimisticQueryStoreTest {
   }
 
   @Test
-  fun `a fetch from after a send drops the change's record`() = runTest {
-    data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
-    val stores =
-      data.optimisticStores<String, List<String>, Add>(
-        TagsByItem,
-        base = QueryStore.inMemoryByKey(),
-        apply = ::addOnce,
-      )
-    val queries =
-      data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
-    queries.data("x").first { it != null }
+  fun `a fetch from after a send leaves the change's record without a value until it expires`() =
+    runTest {
+      data = testDataScope(clock = testClock(START), senders = setOf(tagsByItemSender()))
+      val stores =
+        data.optimisticStores<String, List<String>, Add>(
+          TagsByItem,
+          base = QueryStore.inMemoryByKey(),
+          apply = ::addOnce,
+        )
+      val queries =
+        data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
+      queries.dataAutoFetch("x").first { it != null }
 
-    stores.mutate("x", Add("b")).awaitSucceeded()
-    // Until a fetch from after the send confirms the change, its record stays
-    assertThat(stores.committedRecords).isEqualTo(1)
+      stores.mutate("x", Add("b")).awaitSucceeded()
+      // Until a fetch from after the send confirms the change, its record stays
+      assertThat(stores.committedRecords).isEqualTo(1)
 
-    data.clock.shift(1.minutes)
-    queries.requestFetch("x", force = true).awaitSucceeded()
-    assertThat(stores.committedRecords).isEqualTo(0)
-  }
+      data.clock.shift(1.minutes)
+      queries.requestFetch("x", force = true).awaitSucceeded()
+      // A reader of the base that runs late may still need the change, but no longer its value
+      assertThat(stores.committedRecords).isEqualTo(1)
+      assertThat(stores.committedValues).isEqualTo(0)
+
+      data.clock.shift(10.minutes)
+      queries.requestFetch("x", force = true).awaitSucceeded()
+      assertThat(stores.committedRecords).isEqualTo(0)
+    }
 
   @Test
   fun `a key keeps one value on record however many changes it sends`() = runTest {
@@ -530,7 +537,7 @@ class OptimisticQueryStoreTest {
     queries.requestFetch("x", force = false).awaitSucceeded()
     send.hold(Add("b"))
 
-    queries.data("x").test {
+    queries.dataAutoFetch("x").test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("x"))
       stores.mutate("x", Add("b"))
       assertThat(awaitItem()?.value).isEqualTo(listOf("x", "b"))
@@ -560,14 +567,14 @@ class OptimisticQueryStoreTest {
     val queries =
       data.keyed(store = stores, freshness = Freshness.staleAfter(1.hours)) { key -> listOf(key) }
 
-    queries.data("x").test {
+    queries.dataAutoFetch("x").test {
       assertThat(awaitItem()).isNull()
       assertThat(awaitItem()?.value).isEqualTo(listOf("x"))
       stores.mutate("x", Add("b")).awaitSucceeded()
       assertThat(awaitItem()?.value).isEqualTo(listOf("x", "b"))
       expectNoEvents()
     }
-    assertThat(queries.data("y").first { it != null }?.value).isEqualTo(listOf("y"))
+    assertThat(queries.dataAutoFetch("y").first { it != null }?.value).isEqualTo(listOf("y"))
     assertThat(stores.pendingCount.first()).isEqualTo(0)
     assertThat(send.sent).containsExactly(Add("b"))
     data.assertNoFailures()
@@ -578,7 +585,7 @@ class OptimisticQueryStoreTest {
     runTest {
       send.hold(Add("b"))
       val (store, query) = tags()
-      query.data.test {
+      query.dataAutoFetch.test {
         assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
         val handle = store.mutate(Add("b"))
         assertThat(awaitItem()?.value).isEqualTo(listOf("a", "b"))
@@ -603,7 +610,7 @@ class OptimisticQueryStoreTest {
   fun `a fetch that read the server after the change lands after the commit without doubling it`() =
     runTest {
       val (store, query) = tags()
-      query.data.test {
+      query.dataAutoFetch.test {
         assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
         // The refresh starts before the send and answers after it, with the change already in it
         fetch.respond = { listOf("a", "z", "b") }
@@ -626,13 +633,14 @@ class OptimisticQueryStoreTest {
   @Test
   fun `an apply that is not idempotent is reported once and its changes still land`() = runTest {
     val (store, query) = tags(idempotent = false)
-    store.mutate(Add("b")).awaitSucceeded()
+    val first = store.mutate(Add("b"))
+    first.awaitSucceeded()
     store.mutate(Add("c")).awaitSucceeded()
 
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "b", "c"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
     assertOnlyIdempotencyReport()
-    // The first commit told the owner which change to look at
-    assertThat(data.actionFailures.all.single()).messageContains("Add(tag=b)")
+    // The first commit told the owner which change to look at, by its row id
+    assertThat(data.actionFailures.all.single()).messageContains(first.id.value)
   }
 
   @Test
@@ -678,7 +686,7 @@ class OptimisticQueryStoreTest {
     handle.stored.awaitSucceeded()
 
     // The change is kept and shows, and the server has not answered yet
-    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "b"))
+    assertThat(query.dataAutoFetch.first()?.value).isEqualTo(listOf("a", "b"))
     assertThat(handle.state.value is OperationState.Terminal).isFalse()
     assertThat(send.sent).isEmpty()
     send.release(Add("b"))
@@ -703,7 +711,7 @@ class OptimisticQueryStoreTest {
     // Never stale, so collecting the seeded value starts no fetch of its own
     val query = scope.query(store, Freshness.NeverStale, fetch = fetch)
     val seen = mutableListOf<List<String>?>()
-    backgroundScope.launch { query.data.collect { seen += it?.value } }
+    backgroundScope.launch { query.dataAutoFetch.collect { seen += it?.value } }
     runCurrent()
     assertThat(seen).containsExactly(listOf("old"))
 
@@ -774,7 +782,7 @@ class OptimisticQueryStoreTest {
 
     // The older fetch landed first, and the commit from after it replaced it
     assertThat(truth.data.value).isEqualTo(Fetched(listOf("confirmed"), START + 1.seconds))
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("confirmed"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("confirmed"))
     data.assertNoFailures()
   }
 
@@ -793,17 +801,17 @@ class OptimisticQueryStoreTest {
     val store = data.optimisticStore(ReplyingTags, base = truth, apply = ::addOnce)
     val query = data.query(store, Freshness.staleAfter(2.hours), fetch = fetch)
     store.mutate(Add("b")).awaitSucceeded()
-    assertThat(query.stored.first()).isEqualTo(Fetched(listOf("a", "B"), START))
+    assertThat(query.data.first()).isEqualTo(Fetched(listOf("a", "B"), START))
 
     // A fetch from before the send that lands through the store is dropped
     store.write(listOf("a"), START - 1.minutes)
     assertThat(truth.data.value).isEqualTo(Fetched(listOf("a", "B"), START))
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "B"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "B"))
 
     // One that reaches the truth itself, as the store holds it between a commit's record and its
     // write, shows the answer put back, which applying the change again could not rebuild
     truth.write(listOf("a"), START - 1.minutes)
-    assertThat(query.stored.first()?.value).isEqualTo(listOf("a", "B"))
+    assertThat(query.data.first()?.value).isEqualTo(listOf("a", "B"))
     data.assertNoFailures()
   }
 
@@ -1042,7 +1050,7 @@ class OptimisticQueryStoreTest {
       val store = data.counterStore(QueryStore.inMemory(Fetched(0, START)))
       val query = data.query(store, Freshness.staleAfter(1.hours)) { server.count }
 
-      query.data.test {
+      query.dataAutoFetch.test {
         assertThat(awaitItem()?.value).isEqualTo(0)
         val handle = store.mutate(1)
         assertThat(awaitItem()?.value).isEqualTo(1)
@@ -1291,7 +1299,7 @@ class OptimisticQueryStoreTest {
         },
       )
     val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
-    query.data.test {
+    query.dataAutoFetch.test {
       assertThat(awaitItem()?.value).isEqualTo(listOf("a"))
       store.mutate(Add("boom"))
       store.pending.first { it.isNotEmpty() }
@@ -1579,14 +1587,7 @@ class OptimisticQueryStoreTest {
       data.optimisticStore<List<String>, Add>(
         Tags,
         base = QueryStore.inMemory(Fetched(listOf("a"), START)),
-        apply = { current, add ->
-          val list = current.orEmpty()
-          if (add.tag in list) {
-            list
-          } else {
-            list + add.tag
-          }
-        },
+        apply = ::addOnce,
       )
     val seen = mutableListOf<List<String>?>()
     backgroundScope.launch { tags.data.collect { seen += it?.value } }
@@ -1730,77 +1731,6 @@ class OptimisticQueryStoreTest {
     }
     val reports = failures.take().filter { it.message.orEmpty().startsWith("apply threw") }
     assertThat(reports.size).isEqualTo(1)
-  }
-
-  /** Tags over a store whose row list arrives a second late, offline, in [scope]. */
-  private fun TestScope.laggingTags(
-    scope: CoroutineScope
-  ): OptimisticQueryStore<List<String>, Add> =
-    DataScope.Factory(
-        onFailure = TestFailures(),
-        // Offline, so rows stay queued
-        online = MutableStateFlow(false),
-        stores = LaggingOutboxStores(rowsLag = 1.seconds),
-        clock = testClock(START),
-      )
-      .create(scope, setOf(Tags.sender { _, _ -> }))
-      .optimisticStore<List<String>, Add>(
-        Tags,
-        base = QueryStore.inMemory(Fetched(listOf("a"), START)),
-        apply = { current, add ->
-          val list = current.orEmpty()
-          if (add.tag in list) {
-            list
-          } else {
-            list + add.tag
-          }
-        },
-      )
-
-  /**
-   * The outbox's scope stops after the row is stored and before the lagging list shows it. The
-   * handle settles Cancelled while the row waits for the next owner, so the change stays in view.
-   */
-  @Test
-  fun `a stored change stays in view when the outbox stops before the list shows it`() = runTest {
-    val owner = Job(backgroundScope.coroutineContext[Job])
-    val tags = laggingTags(CoroutineScope(backgroundScope.coroutineContext + owner))
-    val seen = mutableListOf<List<String>?>()
-    backgroundScope.launch { tags.data.collect { seen += it?.value } }
-    advanceTimeBy(2.seconds)
-    runCurrent()
-    tags.mutate(Add("b")).stored.await()
-    runCurrent()
-    owner.cancel()
-    runCurrent()
-    advanceTimeBy(3.seconds)
-    runCurrent()
-    val firstB = seen.indexOfFirst { it != null && "b" in it }
-    assertThat(seen.drop(firstB).filter { it == null || "b" !in it }).isEmpty()
-  }
-
-  /**
-   * After clear() returns, the lagging list still lists the row as Queued. The set dropped the
-   * change itself, so no view shows it.
-   */
-  @Test
-  fun `a cleared change does not show after clear returns`() = runTest {
-    val tags = laggingTags(backgroundScope)
-    val seen = mutableListOf<List<String>?>()
-    backgroundScope.launch { tags.data.collect { seen += it?.value } }
-    advanceTimeBy(2.seconds)
-    runCurrent()
-    tags.mutate(Add("b")).stored.await()
-    // The list shows the row, so its local change is gone
-    advanceTimeBy(2.seconds)
-    runCurrent()
-    tags.clear()
-    runCurrent()
-    val afterClear = seen.size
-    advanceTimeBy(100.milliseconds)
-    runCurrent()
-    assertThat(seen.drop(afterClear - 1).filter { it != null && "b" in it }).isEmpty()
-    assertThat(listOfNotNull(tags.data.first()).filter { "b" in it.value }).isEmpty()
   }
 
   /**
@@ -2233,36 +2163,29 @@ private class SlowEntryOutboxStores : OutboxStores {
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag list's outbox, whose server answers nothing. */
-private val Tags = OutboxKey<OptimisticQueryStoreTest.Add>("tags")
+private val Tags = OutboxKey<Add>("tags")
 
 /** The tag list's outbox, whose server answers with the list it holds. */
-private val ReplyingTags = OutboxKey.replying<OptimisticQueryStoreTest.Add, List<String>>("tags")
+private val ReplyingTags = OutboxKey.replying<Add, List<String>>("tags")
 
 /** The tag lists' outbox, one list per item name. */
-private val TagsByItem =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreTest.Add>>("tagsByItem")
+private val TagsByItem = OutboxKey<KeyedMutation<String, Add>>("tagsByItem")
 
 /** [TagsByItem] whose server answers with the list it holds. */
 private val ReplyingTagsByItem =
-  OutboxKey.replying<KeyedMutation<String, OptimisticQueryStoreTest.Add>, List<String>>(
-    "tagsByItem"
-  )
+  OutboxKey.replying<KeyedMutation<String, Add>, List<String>>("tagsByItem")
 
 /** The tag lists' outbox, one list per name, beside [TagsByItem]. */
-private val TagsByName =
-  OutboxKey<KeyedMutation<String, OptimisticQueryStoreTest.Add>>("tagsByName")
+private val TagsByName = OutboxKey<KeyedMutation<String, Add>>("tagsByName")
 
 /**
  * A new key for the tag lists' outbox, one list per [OptimisticQueryStoreTest.Item]. Each call
  * builds a new key with a new serializer object.
  */
-private fun itemTags() =
-  OutboxKey<KeyedMutation<OptimisticQueryStoreTest.Item, OptimisticQueryStoreTest.Add>>(
-    "tagsByItem"
-  )
+private fun itemTags() = OutboxKey<KeyedMutation<OptimisticQueryStoreTest.Item, Add>>("tagsByItem")
 
 /** A tag list set keyed by [Unit], so its one key still orders its rows by a serialized form. */
-private val UnitTags = OutboxKey<KeyedMutation<Unit, OptimisticQueryStoreTest.Add>>("tags")
+private val UnitTags = OutboxKey<KeyedMutation<Unit, Add>>("tags")
 
 /** The note's outbox, whose server answers nothing. */
 private val Note = OutboxKey<OptimisticQueryStoreTest.SetText>("note")
@@ -2282,20 +2205,3 @@ private val Tallies =
 
 /** The ops' outbox, whose server answers nothing. */
 private val Ops = OutboxKey<OptimisticQueryStoreTest.Op>("ops")
-
-/** Adds the tag once, as the store requires: a tag already there leaves the list as it is. */
-private fun addOnce(current: List<String>?, add: OptimisticQueryStoreTest.Add): List<String> {
-  val tags = current.orEmpty()
-  return if (add.tag in tags) {
-    tags
-  } else {
-    tags + add.tag
-  }
-}
-
-/**
- * Appends the tag, which is not idempotent, so a change the overlay applied twice would show. The
- * store reports it once per set, which the tests that use it expect.
- */
-private fun append(current: List<String>?, add: OptimisticQueryStoreTest.Add): List<String> =
-  current.orEmpty() + add.tag

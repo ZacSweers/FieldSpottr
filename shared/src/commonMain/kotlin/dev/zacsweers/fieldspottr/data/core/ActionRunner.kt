@@ -14,7 +14,7 @@ package dev.zacsweers.fieldspottr.data.core
  *
  *   C is Wait       runs once A and B finish
  *   C is Supersede  drops B if B is Supersede too, then runs once A finishes
- *   C is Cancel     cancels A and B where they are Cancel too, then runs
+ *   C is Cancel     cancels A and B where they are Cancel too, then runs once A and B finish
  * ```
  *
  * A command replaces or cancels only predecessors in its own mode, and waits for the rest. This
@@ -36,20 +36,66 @@ interface ActionRunner {
    * Runs [block] as one command with [ordering]. The handle follows that command, and no holder of
    * it can cancel the command. The command still stops when the runner's scope stops, or when a
    * newer command replaces it through [OnPrevious.Cancel] or [OnPrevious.Supersede].
+   *
+   * A [joinKey] lets callers that ask for the same work one after another share one run of it. The
+   * call looks at the newest command on [ordering]'s key that has not settled. When that command
+   * was run with an equal join key, the call starts nothing and returns that command's handle,
+   * whatever [OnPrevious] it asked for. Any other command in that place ends the search, so a join
+   * never crosses a command in between:
+   * ```
+   * k:  [read A, "fetch"] <-- [write B] <-- [read C, "fetch"]
+   *
+   *   C runs after B and reads again. Without B, C returns A's handle.
+   * ```
+   *
+   * So put a read and the writes it must follow on one key. A caller that stops waiting on a shared
+   * handle changes nothing for the others, since no holder can cancel the command. A command from
+   * [runCancellable] is never joined. A join key needs a key to look on, so [Ordering.Concurrent]
+   * with one throws [IllegalArgumentException].
+   *
+   * A [conflictKey] rejects the call while a command run with an equal conflict key on this runner
+   * has not settled, whatever the ordering of either. A rejected call starts nothing and leaves
+   * every accepted command in its place. Its handle is already [OperationState.Failed] with a
+   * [CommandRejectedException], and no failure handler hears of it. Commands that must never be
+   * pending together share one conflict key. The key is free again once its command settles,
+   * cancelled or not. With both keys, the join is tried first.
+   *
+   * A join key is compared with `equals` to the newest command's join key alone. A conflict key is
+   * looked up by `hashCode` and `equals`, like a map key. So a call costs the same however many
+   * commands wait.
    */
-  fun run(ordering: Ordering = Ordering.Serial, block: suspend () -> Unit): Operation
+  fun run(
+    ordering: Ordering = Ordering.Serial,
+    joinKey: Any? = null,
+    conflictKey: Any? = null,
+    block: suspend () -> Unit,
+  ): Operation
 
   /**
    * [run], with a handle that can also cancel the command, as [CancellableOperation.cancel]
    * describes. An owner that returns this handle to its callers lets them cancel the command.
+   *
+   * It takes a [conflictKey] as [run] does. A rejected call's handle is already Failed, and its
+   * `cancel` does nothing. It takes no join key, since one holder's cancel would stop the command
+   * for every caller that shares it.
    */
   fun runCancellable(
     ordering: Ordering = Ordering.Serial,
+    conflictKey: Any? = null,
     block: suspend () -> Unit,
   ): CancellableOperation
 
   companion object
 }
+
+/**
+ * Why a command never ran: when it was submitted, another command with an equal [conflictKey] had
+ * not settled on its runner. It is the cause of the Failed handle that [ActionRunner.run] and
+ * [ActionRunner.runCancellable] return for a rejected call, so a caller can tell a rejection from a
+ * command that ran and failed.
+ */
+class CommandRejectedException(val conflictKey: Any) :
+  IllegalStateException("A command with conflict key $conflictKey has not settled yet")
 
 /**
  * Runs commands where each new one cancels the one before it, like a search field's queries. Every
@@ -82,9 +128,9 @@ fun DataScope.newConflatedActionRunner(
   val actions = newActionRunner(onFailure)
   val ordering = Ordering.Keyed(Unit, OnPrevious.Cancel)
   return object : ConflatedActionRunner {
-    override fun run(block: suspend () -> Unit): Operation = actions.run(ordering, block)
+    override fun run(block: suspend () -> Unit): Operation = actions.run(ordering, block = block)
 
     override fun runCancellable(block: suspend () -> Unit): CancellableOperation =
-      actions.runCancellable(ordering, block)
+      actions.runCancellable(ordering, block = block)
   }
 }

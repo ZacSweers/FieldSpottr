@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
  * Whether the device can reach the internet, for the data scope factory's online state. True while
  * a network is up and validated, so a captive portal counts as offline. Outboxes drain only while
  * it is true, and a reconnect sends what waited at once. Each platform binds one into the graph.
+ * Its value must stay current while nothing collects it, so a platform monitor shares it eagerly.
  */
 interface NetworkMonitor {
   val online: StateFlow<Boolean>

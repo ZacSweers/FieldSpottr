@@ -54,7 +54,7 @@ interface DataScope {
    * moves that part to an I/O dispatcher with `withContext`.
    *
    * @param retry sets how long the fetches the query starts on its own hold off after failures, as
-   *   [DataQuery.state] describes. Null uses the factory's `fetchRetry` policy.
+   *   [DataQuery.stateAutoFetch] describes. Null uses the factory's `fetchRetry` policy.
    * @param onFailure hears every failure this query reports, failed fetches included. Null uses the
    *   factory's handlers.
    */
@@ -121,7 +121,9 @@ interface DataScope {
    * data scope of its own with [Factory.create] and its senders, and builds the handle there.
    *
    * @param apply makes the optimistic change of each payload [Outbox.enqueue] takes, before its row
-   *   is inserted. A throw inserts nothing and fails the handle.
+   *   is inserted. A throw inserts nothing and fails the handle. Once admitted, [apply] and the row
+   *   insert finish together even when the owner stops, so [apply] must be able to finish after the
+   *   scope's other jobs are cancelled.
    * @param revert undoes the optimistic change when a row fails for good or is discarded, at most
    *   once per row. It reads only the payload and the row's id, so it works after a restart too. A
    *   row that failed while no handle was attached reverts once a handle attaches.
@@ -195,7 +197,7 @@ interface DataScope {
    *   sender's handler hears the drain's failures. Null uses the factory's handler.
    */
   fun <T, M> optimisticStore(
-    key: OutboxKey<M, T>,
+    key: OutboxKey<M, out T>,
     base: QueryStore<T>,
     apply: (current: T?, mutation: M) -> T?,
     onFailure: ((Throwable) -> Unit)? = null,
@@ -220,11 +222,14 @@ interface DataScope {
    * small views over one bounded source, like [QueryStore.inMemoryByKey] or a database table.
    *
    * [keySerializer] encodes each key, and each key's encoded form orders its rows. Keys that are
-   * equal must encode to the same form, so they share one order. [apply] and [onFailure] work as in
-   * [optimisticStore].
+   * equal must encode to the same form, so they share one order. When equal keys can serialize
+   * differently, like a key with a `Set` field, pass a serializer that writes them the same way.
+   * [apply] and [onFailure] work as in [optimisticStore]. So an acknowledged change must give the
+   * same value when [apply] runs it twice, like setting a star, or adding an item only when its id
+   * is absent.
    */
   fun <K : Any, T, M> optimisticStores(
-    key: OutboxKey<KeyedMutation<K, M>, T>,
+    key: OutboxKey<KeyedMutation<K, M>, out T>,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
     apply: (current: T?, mutation: M) -> T?,
@@ -288,16 +293,24 @@ interface DataScope {
        * when rows wait. Create scopes on `Dispatchers.Default`, not Main, as [ActionRunner]
        * explains.
        *
+       * Each outbox collects [online] for as long as its data scope lives. A query collects it only
+       * while its `stateAutoFetch` has a collector, and checks again on each reconnect. Queries
+       * also read its value while nothing collects it, such as when one records whether a failed
+       * fetch ran offline. So its value must stay current with no collector, as a flow from
+       * `stateIn` with `SharingStarted.Eagerly` does. A flow shared with
+       * `SharingStarted.WhileSubscribed` keeps a stale value between subscribers, so a query can
+       * record a failure made offline as one made online and hold off after it.
+       *
        * [retry] decides for every sender built without a policy of its own whether a failed send
        * may succeed later, like after a timeout, and how long its row waits first. When the policy
        * declines, or send throws [PermanentFailure], the row fails at once: its undo runs, and the
        * next row on its key sends. The default retries every failure with no attempt limit.
        *
        * [fetchRetry] sets for every query built without a policy of its own how long the fetches it
-       * starts on its own hold off after failures, as [DataQuery.state] describes. When it declines
-       * a failure, the query fetches on its own again only after a requested fetch succeeds. The
-       * default waits 1 second after the first failure in a row, doubles the wait up to 1 minute,
-       * and never declines.
+       * starts on its own hold off after failures, as [DataQuery.stateAutoFetch] describes. When it
+       * declines a failure, the query fetches on its own again only after a requested fetch
+       * succeeds. The default waits 1 second after the first failure in a row, doubles the wait up
+       * to 1 minute, and never declines.
        */
       operator fun invoke(
         onFailure: (Throwable) -> Unit,
@@ -327,7 +340,7 @@ interface DataScope {
 
 /** [DataScope.optimisticStores] with the serializer for a `@Serializable` key. */
 inline fun <reified K : Any, T, M> DataScope.optimisticStores(
-  key: OutboxKey<KeyedMutation<K, M>, T>,
+  key: OutboxKey<KeyedMutation<K, M>, out T>,
   noinline base: (key: K) -> QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
   noinline onFailure: ((Throwable) -> Unit)? = null,

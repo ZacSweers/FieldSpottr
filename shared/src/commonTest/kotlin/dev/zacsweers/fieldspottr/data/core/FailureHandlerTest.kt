@@ -116,7 +116,7 @@ class FailureHandlerTest {
         .create(owner())
         .query(store, Freshness.staleAfter(1.hours), onFailure = throwing, fetch = fetch)
 
-    backgroundScope.launch { query.data.collect {} }
+    backgroundScope.launch { query.dataAutoFetch.collect {} }
     testScheduler.runCurrent()
     assertThat(thrown.map { it.cause }).containsExactly(broken)
 

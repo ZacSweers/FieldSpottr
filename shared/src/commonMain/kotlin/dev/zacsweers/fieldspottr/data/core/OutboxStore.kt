@@ -20,8 +20,8 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 @JvmInline value class EntryId(val value: String)
 
 /**
- * Where an outbox row stands. [Sent] and [Discarded] are final. The store prunes a Discarded row,
- * and a Sent row once its handle has committed it, as [OutboxEntry.committed] describes.
+ * Where an outbox row stands. [Sent] and [Discarded] are final. The store prunes a row some time
+ * after [isDone] becomes true for it.
  */
 sealed interface OutboxStatus {
   /** Waiting for its turn, the network or a backoff. */
@@ -69,13 +69,19 @@ data class OutboxEntry<E>(
    * the outbox stays uncommitted until a handle attaches, so the store keeps it until then.
    */
   val committed: Boolean = false,
-  /** When the send finished. Set on Sent rows only. A commit reads it to tell older fetches. */
+  /**
+   * When the send finished. Set on Sent rows only. A commit reads it to tell older fetches. A row
+   * whose commit is owed gets a time later than every owed Sent row on its key, so owed rows commit
+   * in the order they sent.
+   */
   val sentAt: Instant? = null,
   /**
    * The server's answer to a Sent row that is not committed yet, encoded by the outbox's reply
-   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does. The write
-   * that marks the row committed also clears it, so a committed row keeps no answer, and a row
-   * whose commit write failed keeps it for the next commit.
+   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does. An answer
+   * that failed to encode leaves a marker that the JSON and Base64 codecs never write, and the
+   * commit then runs with the answer unknown. The write that marks the row committed also clears
+   * it, so a committed row keeps no answer, and a row whose commit write failed keeps it for the
+   * next commit.
    */
   val reply: String? = null,
 )
@@ -118,7 +124,8 @@ interface OutboxStore<E> {
 
   /**
    * Compare-and-set. Writes status, attempts, lastError, reverted, retryAt, committed, sentAt and
-   * reply only if the row's status is still [expected]. Returns whether it wrote.
+   * reply only if the row's status is still [expected]. Returns whether it wrote. A row that is
+   * gone, or that expired as [entry] describes, is never written, so the update returns false.
    */
   suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean
 
@@ -341,7 +348,9 @@ interface OutboxStores {
 
   /**
    * Encodes the server's answers for [OutboxEntry.reply], for a row sent while no handle could
-   * commit it. A durable set encodes answers in its payload format. The default uses JSON.
+   * commit it. A durable set encodes answers in its payload format. The default uses JSON. A codec
+   * must never encode an answer as the text `} unknown reply`, since the outbox reads that back as
+   * an unknown answer.
    */
   fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
     serializer.asCodec(DefaultPayloadFormat)

@@ -17,13 +17,13 @@ import kotlinx.coroutines.flow.Flow
  * pause, so a broken policy never drops a change. A throw from [maxDelay] is reported too, and the
  * outbox then sets no bound on its waits.
  *
- * A policy also sets how long a query's own fetches hold off after they fail, as [DataQuery.state]
- * describes. There `attempt` counts the failures in a row. A null wait stops the query's own
- * fetches until a fetch the caller requests succeeds. An [Exception] from either member goes to the
- * query's failure handler, and the query holds off for [maxDelay], or for 1 hour when that has no
- * bound or throws. An [Error] from either member records no hold-off. The fetch's own failure is
- * still reported as a failed fetch, and then the Error fails the fetch's handle and goes to the
- * failure handler.
+ * A policy also sets how long a query's own fetches hold off after they fail, as
+ * [DataQuery.stateAutoFetch] describes. There `attempt` counts the failures in a row. A null wait
+ * stops the query's own fetches until a fetch the caller requests succeeds. An [Exception] from
+ * either member goes to the query's failure handler, and the query holds off for [maxDelay], or for
+ * 1 hour when that has no bound or throws. An [Error] from either member records no hold-off. The
+ * fetch's own failure is still reported as a failed fetch, and then the Error fails the fetch's
+ * handle and goes to the failure handler.
  */
 interface RetryPolicy {
   /**
@@ -156,7 +156,7 @@ class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throw
  * ```
  * enqueue(payload, key) --> id --> apply(payload, id) --> store.insert(id) --> drain(key)
  *
- * attach --> read the owed rows once --> drain(key) for each key with owed rows --> ready
+ * attach --> read the owed rows once --> ready --> drain(key) for each key with owed rows
  *
  * a drain of a key with owed rows settles them, oldest first, online or not:
  *   Sent, not committed: commit with the stored answer, then mark committed
@@ -168,10 +168,12 @@ class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throw
  * Until a handle is ready, after its first read of the owed rows, a sent row is written owed and
  * settled at once, so a commit never overtakes an older owed row on its key.
  *
- * The write that marks a row Sent after its send can fail, like on a store error. The row then
- * stays Sending, the sender's handler hears the failure, and the drain sends the row again with the
- * same id after a pause that doubles up to 1 minute while the write keeps failing. So the server
- * must take the id as an idempotency key.
+ * A write that records the end of an attempt, such as the one that marks a row Sent, can fail on a
+ * store error. The row then stays Sending, the sender's handler hears the failure, and the drain
+ * sends the row again with the same id after a pause that doubles up to 1 minute while the write
+ * keeps failing. That send can come before the retry policy's delay. So the server must take the id
+ * as an idempotency key. Once a send has returned, that write still runs when the data scope's
+ * scope stops.
  *
  * A sent row that waits for its commit stays in the store, and an optimistic store's data keeps
  * showing its change until the commit lands. A failed row that waits for its revert stays too. Both
@@ -199,15 +201,17 @@ interface Outbox<E> {
    * will have. Without a [key], every row shares one order.
    *
    * If apply throws, nothing is inserted and the handle fails. If the insert throws, the handle's
-   * `revert` undoes the change and the handle fails. Once apply returns, the insert finishes even
-   * if the outbox's scope stops. [OutboxOperation.stored] settles once the row is in, before any
-   * send.
+   * `revert` undoes the change and the handle fails. Once apply starts, it and the insert finish
+   * even if the outbox's scope stops. [OutboxOperation.stored] settles once the row is in, before
+   * any send.
    */
   fun enqueue(payload: E, key: String? = null): OutboxOperation
 
   /**
    * Requeues a failed row with its attempts reset, or ends a backoff early. The handle follows the
-   * row from here.
+   * row from here. A retried row sends before later rows on its key, except a row the drain has
+   * already read as the next to send. That row goes first, also while it is still stored as Queued,
+   * so a retried older change can reach the server after a newer one.
    */
   fun retry(id: EntryId): Operation
 

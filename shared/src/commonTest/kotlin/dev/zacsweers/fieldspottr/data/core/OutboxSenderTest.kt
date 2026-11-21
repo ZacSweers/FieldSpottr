@@ -17,9 +17,11 @@ import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import assertk.assertions.messageContains
 import dev.zacsweers.fieldspottr.data.core.impl.landedCommits
+import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
@@ -36,15 +38,17 @@ import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 
 /**
@@ -52,8 +56,6 @@ import kotlinx.serialization.builtins.serializer
  * handle that a repository builds later and that commits or reverts what the sender left it.
  */
 class OutboxSenderTest {
-  @Serializable data class Add(val tag: String)
-
   @Test
   fun `a handle whose key holds another payload type throws`() = runTest {
     val data = testDataScope(senders = setOf(Tags.sender { _, _ -> }))
@@ -66,11 +68,13 @@ class OutboxSenderTest {
   fun `the reply builders throw for a plain key`() {
     val plain = OutboxKey<Add>("plain")
 
+    // A plain key's answer type is Nothing, so these lambdas compile only because they give no
+    // answer
     assertFailsWith<IllegalArgumentException> {
-      plain.exchangingSender<Add, List<String>> { _, _ -> emptyList() }
+      plain.exchangingSender { _, _ -> error("never sent") }
     }
     assertFailsWith<IllegalArgumentException> {
-      plain.deliveringSender<Add, List<String>> { _, _ -> Delivery.Acknowledged }
+      plain.deliveringSender { _, _ -> Delivery.Acknowledged }
     }
   }
 
@@ -116,7 +120,9 @@ class OutboxSenderTest {
       )
     val sent = rows.entries().first { list -> list.all { it.status == OutboxStatus.Sent } }
     assertThat(sent.map { it.reply }).containsExactly(null, """["a","b","C"]""", null)
-    assertThat(sent.map { it.sentAt }).containsExactly(START, START, START)
+    // The clock stands still, so each row records 1 ms after the owed rows that sent before it
+    assertThat(sent.map { it.sentAt })
+      .containsExactly(START, START + 1.milliseconds, START + 2.milliseconds)
 
     val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
     val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
@@ -369,6 +375,89 @@ class OutboxSenderTest {
       // One write per commit, the owed row first
       assertThat(writes).containsExactly(listOf("a", "x"), listOf("a", "x", "y"))
       factory.assertNoFailures()
+    }
+
+  @Test
+  fun `a ready handle commits an owed row before its key sends the next row`() = runTest {
+    val inner = InMemoryOutboxStores().open(Tags.name, Add.serializer())
+    // The watcher hears of no heads, so only the drain that the attach starts sends
+    val quiet =
+      object : OutboxStore<Add> by inner {
+        override fun heads(): Flow<List<OutboxEntry<Add>>> = flow { awaitCancellation() }
+      }
+    val x = sentRow(quiet, Add("x"))
+    quiet.insertNew("", Add("y"))
+    val send = TestSend<Add>()
+    send.hold(Add("y"))
+    val data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(Tags.sender(store = quiet, send = send)),
+      )
+    val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+    val writes = mutableListOf<List<String>>()
+    val counted =
+      QueryStore.of(
+        truth.data,
+        write = { fetched, keepsStored ->
+          writes += fetched.value
+          truth.writeFetched(fetched, keepsStored)
+        },
+        clear = truth::clearFetched,
+      )
+
+    data.optimisticStore(Tags, base = counted, apply = ::addOnce)
+    runCurrent()
+
+    // y waits in its send, and x has already committed
+    assertThat(send.attempts).containsExactly(Add("y"))
+    assertThat(inner.entry(x).first()?.committed).isEqualTo(true)
+    assertThat(writes).containsExactly(listOf("a", "x"))
+    send.release(Add("y"))
+    runCurrent()
+
+    // One write per commit, the owed row first
+    assertThat(writes).containsExactly(listOf("a", "x"), listOf("a", "x", "y"))
+    assertThat(inner.entries().first()).isEmpty()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a later change settles no owed row while its key waits to retry a failed commit`() =
+    runTest {
+      val data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender { _, _ -> }))
+      val truth = QueryStore.inMemory(Fetched(listOf("a"), START - 1.hours))
+      var writes = 0
+      val diskFull =
+        QueryStore.of(
+          truth.data,
+          write = { fetched, keepsStored ->
+            if (++writes == 1) {
+              error("Disk full")
+            }
+            truth.writeFetched(fetched, keepsStored)
+          },
+          clear = truth::clearFetched,
+        )
+      val own = TestFailures()
+      val store = data.optimisticStore(Tags, base = diskFull, apply = ::addOnce, onFailure = own)
+      runCurrent()
+      store.mutate(Add("b")).awaitSucceeded()
+      runCurrent()
+      assertThat(writes).isEqualTo(1)
+
+      // The drain of the later change finds the key's commit retry pending
+      store.mutate(Add("c")).awaitSucceeded()
+      runCurrent()
+      assertThat(writes).isEqualTo(1)
+      advanceTimeBy(2.seconds)
+      runCurrent()
+
+      // The retry commits both rows in order
+      assertThat(writes).isEqualTo(3)
+      assertThat(truth.data.first()?.value).isEqualTo(listOf("a", "b", "c"))
+      assertThat(own.take().map { it.message }).containsExactly("Disk full")
+      data.assertNoFailures()
     }
 
   @Test
@@ -925,13 +1014,5 @@ class OutboxSenderTest {
      * doubles from 1 second to 1 minute, then one a minute, with room for the first attempt.
      */
     const val RETRY_BOUND = 40
-
-    /** Adds the tag once, so a change applied again changes nothing. */
-    fun addOnce(current: List<String>?, add: Add): List<String> =
-      if (add.tag in current.orEmpty()) {
-        current.orEmpty()
-      } else {
-        current.orEmpty() + add.tag
-      }
   }
 }

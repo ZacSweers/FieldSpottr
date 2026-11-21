@@ -12,19 +12,29 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
+import kotlin.concurrent.Volatile
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
@@ -169,6 +179,36 @@ class UnreadableRowTest {
     assertThat(reported.await().outbox).isEqualTo("labelled")
   }
 
+  /**
+   * A [CancellationException] thrown by a payload serializer fails the read that met it, and leaves
+   * the row readable by the next read, since it says nothing about the stored payload. A payload
+   * that fails to decode is still recorded and reported.
+   */
+  @Test
+  fun `a cancellation thrown inside a decode in a file outbox leaves the row readable`() = runTest {
+    val failing = FailOnceSerializer()
+    val store =
+      DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+        .open("plain", failing)
+    val reports = mutableListOf<Pair<EntryId, Throwable>>()
+    store.onUndecodable { id, cause -> reports += id to cause }
+    val id = store.insertNew("k", "a")
+
+    failing.next = CancellationException("Cancelled inside a decode")
+    val thrown = runCatching { store.head("k") }.exceptionOrNull()
+
+    assertThat(thrown).isNotNull().isInstanceOf<CancellationException>()
+    assertThat(thrown?.message).isEqualTo("Cancelled inside a decode")
+    assertThat(reports).isEmpty()
+    assertThat(store.head("k")?.payload).isEqualTo("a")
+
+    // A payload that fails to decode is still recorded and reported
+    failing.next = SerializationException("Corrupt payload")
+    assertThat(store.head("k")).isNull()
+    assertThat(reports.map { it.first }).containsExactly(id)
+    assertThat(reports.single().second.message).isEqualTo("Corrupt payload")
+  }
+
   private fun writeLog(name: String, vararg rows: OutboxLog.Row) {
     fileSystem.createDirectories(directory)
     fileSystem.write(directory / "$name.outbox") {
@@ -242,4 +282,23 @@ internal suspend fun TestScope.assertUnreadableRowIsHandled(stores: OutboxStores
   assertThat(send.reverted).isEmpty()
   // Only the readable rows were ever attempted
   assertThat(send.attempts).hasSize(2)
+}
+
+/** Decodes a string, and throws [next] instead from the next decode after it is set. */
+private class FailOnceSerializer : KSerializer<String> {
+  @Volatile var next: Throwable? = null
+
+  override val descriptor = PrimitiveSerialDescriptor("FailOnce", PrimitiveKind.STRING)
+
+  override fun serialize(encoder: Encoder, value: String) {
+    encoder.encodeString(value)
+  }
+
+  override fun deserialize(decoder: Decoder): String {
+    next?.let {
+      next = null
+      throw it
+    }
+    return decoder.decodeString()
+  }
 }

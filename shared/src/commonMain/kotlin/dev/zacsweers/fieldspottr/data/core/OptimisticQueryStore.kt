@@ -12,7 +12,8 @@ import kotlinx.serialization.Serializable
  * The store keeps the truth, which is the last value the server sent, and a durable row for each
  * change that waits. It shows the truth with the waiting changes applied on top. A change shows at
  * once, stays on top of a fetch that lands while it waits, and drops out when the server rejects
- * it. A query over this store sees a plain [QueryStore].
+ * it. A query over this store sees a plain [QueryStore]. [data] emits its first value once the
+ * outbox's rows have been read, and a failed read is reported and retried.
  *
  * ```
  * mutate(m2)                 data = apply(apply(truth, m1), m2)
@@ -29,7 +30,7 @@ import kotlinx.serialization.Serializable
  * fetch lands or a sent change is committed, so it always holds something the server said. After a
  * restart, the store shows the truth plus the rows that still wait. A row that the sender sent
  * before this store existed, like in a background drain, keeps showing until the store commits it,
- * which happens once the store is built.
+ * which happens once the store is built and a send in flight on the same key has finished.
  *
  * `apply` runs on the data scope's dispatcher each time the truth or the rows change. Keep it cheap
  * and pure, and idempotent where [DataScope.optimisticStore] asks. The first commits check
@@ -42,14 +43,14 @@ import kotlinx.serialization.Serializable
  * A commit that fails on a store error, like a base store write on a full disk, is reported there
  * too, once per attempt. The change still counts as sent, since the server has it, so its row stays
  * sent and waits, and the commit runs again after a pause that doubles from 1 second to 1 minute
- * and resets once the key's commits all land. The change keeps showing meanwhile. Within one
- * process, a commit whose truth write landed never applies the change again: when only the write
- * that marks the row committed fails, it is reported to the sender's handler, and a retry repeats
- * that write alone, after the same doubling pause.
+ * and resets once the key's commits all land. The change keeps showing meanwhile. When the base
+ * write of a server answer keeps failing for more than ten minutes, [data] shows the `apply`
+ * estimate between commit retries. Within one process, a commit whose truth write landed never
+ * applies the change again: when only the write that marks the row committed fails, it is reported
+ * to the sender's handler, and a retry repeats that write alone, after the same doubling pause.
  *
  * On the live path, right after the send, the row is still Sending when that write runs. If it
- * fails there, the row stays Sending, and the outbox sends it again with the same id, as [Outbox]
- * describes. The commit that follows does not apply the change again in this process.
+ * fails there, the row stays Sending, and [Outbox] sends it again with the same id.
  *
  * Across a restart that guarantee cannot hold. A process that dies after a commit wrote the truth
  * and before the row was marked committed leaves the row owed, and the next process commits it
@@ -65,9 +66,8 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * Shows [mutation] in [data] now, stores it as a row, and sends it after the rows before it.
    *
    * From the moment this returns, each value [data] computes holds the change until it is sent,
-   * fails or is dropped, also before its row is stored. An `apply` that throws for it leaves it
-   * out. A value computed before this call can still arrive after it. If the row cannot be stored,
-   * the change leaves [data] and the handle fails.
+   * fails or is dropped, also before its row is stored. A value computed before this call can still
+   * arrive after it. If the row cannot be stored, the change leaves [data] and the handle fails.
    *
    * The handle follows the row, and a restart keeps it. It succeeds once sent, fails once rejected
    * for good or out of attempts, and settles Cancelled once discarded. Its [OutboxOperation.stored]
@@ -87,14 +87,16 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * this returns, each value [data] computes holds the change while the new attempt runs. If the
    * requeue itself fails, like on a store error, [data] shows the change as it stood without this
    * call. A change the server already has, whose commit waits, sends nothing again: the handle
-   * succeeds, and [data] keeps showing the change until its commit lands.
+   * succeeds, and [data] keeps showing the change until its commit lands. The handle fails, and
+   * nothing changes, for a row this store knows is another key's.
    */
   fun retry(id: EntryId): Operation
 
   /**
-   * Drops a waiting or failed change. From the moment this returns, each value [data] computes
-   * lacks it. If the row cannot be discarded, as when it already sends, the change shows again and
-   * the handle fails.
+   * Drops a waiting or failed change. For a change this store made or a row it has listed, each
+   * value [data] computes from the moment this returns lacks it. If the row cannot be discarded, as
+   * when it already sends, the change shows again and the handle fails. The handle fails, and
+   * nothing changes, for a row this store knows is another key's.
    */
   fun discard(id: EntryId): Operation
 

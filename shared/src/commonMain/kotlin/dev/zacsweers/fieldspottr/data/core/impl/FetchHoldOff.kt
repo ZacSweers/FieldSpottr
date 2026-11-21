@@ -14,7 +14,8 @@ import kotlin.time.Instant
  * when the next fetch may start, and whether the last failure happened while offline. [keep] is the
  * policy's longest wait, as [HoldOffWindow.keep] describes. A [declined] record is one whose policy
  * declined the last failure. It holds off until a success clears it, so its [window], [keep] and
- * [until] mean nothing.
+ * [until] mean nothing. [cause] is what the last failure it counted threw, for a query built while
+ * the record still holds off, which has no status of its own to show yet.
  */
 internal class HoldOff(
   val failures: Int,
@@ -22,6 +23,7 @@ internal class HoldOff(
   val keep: Duration,
   val until: Instant,
   val offline: Boolean,
+  val cause: Throwable,
   val declined: Boolean = false,
 ) {
   /**
@@ -48,8 +50,9 @@ internal class HoldOffWindow(val length: Duration, val keep: Duration)
  * the record holds off until a success clears it. A spent record, as [HoldOff.isSpent] describes,
  * counts as cleared, and subclasses drop such records when they read or write.
  *
- * A query reads and writes it only from commands on its own key, so one call at a time. Subclasses
- * decide where the record lives, like a keyed set's map that outlives each key's query.
+ * A query writes it only from commands on its own key, so one call at a time. It also reads it once
+ * when it is built, for its first status, which a keyed set's records allow from any thread.
+ * Subclasses decide where the record lives, like a keyed set's map that outlives each key's query.
  */
 internal abstract class FetchHoldOff {
   /** The record that is not spent at [now], or null. */
@@ -63,40 +66,54 @@ internal abstract class FetchHoldOff {
    * holds once the device is [online] again, so a screen that returns after a reconnect it missed
    * fetches at once. That includes a failure the policy declined.
    */
-  fun holdsOff(now: Instant, online: Boolean): Boolean {
-    val current = load(now) ?: return false
-    if (current.offline && online) {
-      return false
-    }
-    return current.declined || now < current.until
-  }
+  fun holdsOff(now: Instant, online: Boolean): Boolean = load(now)?.holds(now, online) == true
 
   /**
    * Whether the policy declined the last failure, so even the check after a reconnect must wait.
    * The offline rule of [holdsOff] applies here too.
    */
-  fun declines(now: Instant, online: Boolean): Boolean {
-    val current = load(now) ?: return false
-    if (current.offline && online) {
+  fun declines(now: Instant, online: Boolean): Boolean =
+    load(now)?.let { it.declined && it.holds(now, online) } == true
+
+  /**
+   * What the last failure the record counted threw, while the record still makes a fetch the query
+   * starts on its own wait at [now], as [holdsOff] decides. Null once nothing holds off, since the
+   * next check fetches then and shows its own outcome. It loads the record once, so the decision
+   * and the cause come from one record, also when another key's eviction drops it in a keyed set.
+   */
+  fun heldFailure(now: Instant, online: Boolean): Throwable? =
+    load(now)?.takeIf { it.holds(now, online) }?.cause
+
+  /**
+   * Whether this record makes a fetch the query starts on its own wait, as [holdsOff] describes.
+   */
+  private fun HoldOff.holds(now: Instant, online: Boolean): Boolean {
+    if (offline && online) {
       return false
     }
-    return current.declined
+    return declined || now < until
   }
 
   /**
-   * Records a failure at [now], made while [offline] or not. [window] gives the hold-off for the
-   * count of failures in a row, this one included, or null when the policy declines it. The count
-   * goes on from a declined record, which only a failure made offline or a dropped keyed record
-   * lets a fetch the query starts on its own reach. When [window] throws, nothing is recorded.
+   * Records a failure at [now] that threw [cause], made while [offline] or not. [window] gives the
+   * hold-off for the count of failures in a row, this one included, or null when the policy
+   * declines it. The count goes on from a declined record, which only a failure made offline or a
+   * dropped keyed record lets a fetch the query starts on its own reach. When [window] throws,
+   * nothing is recorded.
    */
-  fun failed(now: Instant, offline: Boolean, window: (failures: Int) -> HoldOffWindow?) {
+  fun failed(
+    now: Instant,
+    offline: Boolean,
+    cause: Throwable,
+    window: (failures: Int) -> HoldOffWindow?,
+  ) {
     val failures = (load(now)?.failures ?: 0) + 1
     val next = window(failures)
     val record =
       if (next == null) {
-        HoldOff(failures, Duration.ZERO, Duration.ZERO, now, offline, declined = true)
+        HoldOff(failures, Duration.ZERO, Duration.ZERO, now, offline, cause, declined = true)
       } else {
-        HoldOff(failures, next.length, next.keep, now + next.length, offline)
+        HoldOff(failures, next.length, next.keep, now + next.length, offline, cause)
       }
     store(record, now)
   }

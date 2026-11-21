@@ -8,6 +8,7 @@ import app.cash.sqldelight.db.SqlSchema
 import dev.zacsweers.fieldspottr.FSDatabase
 import dev.zacsweers.fieldspottr.createFSDatabase
 import dev.zacsweers.fieldspottr.fileSqliteDriver
+import dev.zacsweers.fieldspottr.sqliteDriverProperties
 import dev.zacsweers.metro.suspendLazy
 import java.nio.file.Files
 import java.nio.file.Path
@@ -17,23 +18,24 @@ import org.junit.rules.ExternalResource
 
 /**
  * A database in a temp file, with the desktop driver. A file database gets a connection per thread,
- * so concurrent writes behave as they do in the app.
+ * so concurrent writes behave as they do in the app. [reopen] closes the driver and opens the same
+ * file again, like a process restart.
+ *
+ * A connection waits up to one minute for a lock, longer than the app's connections. When a write
+ * holds the lock past the timeout, a concurrent read fails as busy. An outbox reports that read and
+ * reads again, which fails a test that expects no reported failure.
  */
 class TemporaryDatabase<T>(
   val databaseConstructor: (SqlDriver) -> T,
   val schema: SqlSchema<QueryResult.AsyncValue<Unit>>,
 ) : ExternalResource() {
-  private var driver: SqlDriver? = null
-  private var dbBacker: T? = null
+  @Volatile private var driver: SqlDriver? = null
+  @Volatile private var dbBacker: T? = null
   private var file: Path? = null
 
   private val lazyDb = suspendLazy {
-    dbBacker?.let {
-      return@suspendLazy it
-    }
-
     val file = Files.createTempFile("fs-test", ".db")
-    val driver = fileSqliteDriver(file.absolutePathString())
+    val driver = openDriver(file)
     schema.create(driver).await()
     val instance = databaseConstructor(driver)
     this.dbBacker = instance
@@ -42,11 +44,33 @@ class TemporaryDatabase<T>(
     instance
   }
 
-  suspend fun db(): T = lazyDb.await()
+  /** The database over the current driver. After [reopen], this is the reopened one. */
+  suspend fun db(): T {
+    lazyDb.await()
+    return checkNotNull(dbBacker)
+  }
+
+  /**
+   * Closes the current driver and opens a new one over the same file, then returns the database
+   * over it. Everything the new driver reads comes from the file. It does not run the schema again,
+   * so the tables and rows stay as the last driver left them. Stop all work on the old database
+   * first, since its driver is closed.
+   */
+  suspend fun reopen(): T {
+    lazyDb.await()
+    val path = checkNotNull(file)
+    checkNotNull(driver).close()
+    val driver = openDriver(path)
+    val instance = databaseConstructor(driver)
+    this.driver = driver
+    this.dbBacker = instance
+    return instance
+  }
 
   override fun after() {
     driver?.close()
     driver = null
+    dbBacker = null
     file?.let { path ->
       path.deleteIfExists()
       path.resolveSibling("${path.fileName}-journal").deleteIfExists()
@@ -54,6 +78,15 @@ class TemporaryDatabase<T>(
     file = null
   }
 }
+
+/** The desktop driver over the database file at [path], with the busy timeout for tests. */
+private fun openDriver(path: Path): SqlDriver =
+  fileSqliteDriver(
+    path.absolutePathString(),
+    sqliteDriverProperties().apply { setProperty("busy_timeout", BUSY_TIMEOUT_MILLIS) },
+  )
+
+private const val BUSY_TIMEOUT_MILLIS = "60000"
 
 @JvmName("create")
 fun TemporaryDatabase(): TemporaryDatabase<FSDatabase> {

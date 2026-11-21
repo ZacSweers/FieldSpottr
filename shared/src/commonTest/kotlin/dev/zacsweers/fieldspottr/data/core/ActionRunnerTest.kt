@@ -302,6 +302,57 @@ class ActionRunnerTest {
   }
 
   @Test
+  fun `a cancel command waits for commands of other modes between the ones it cancels`() = runTest {
+    val actions = actions()
+    val ran = mutableListOf<String>()
+    val cleanup = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val cancelling = Ordering.Keyed("note", OnPrevious.Cancel)
+    val waiting = Ordering.Keyed("note")
+
+    val running =
+      actions.run(cancelling) {
+        ran += "running"
+        try {
+          awaitCancellation()
+        } finally {
+          withContext(NonCancellable) { cleanup.await() }
+          ran += "cleaned up"
+        }
+      }
+    testScheduler.runCurrent()
+    val write =
+      actions.run(waiting) {
+        ran += "write"
+        release.await()
+      }
+    val dropped = actions.runCancellable(waiting) { ran += "dropped" }
+    val replaced = actions.run(cancelling) { ran += "replaced" }
+    val save = actions.run(waiting) { ran += "save" }
+    dropped.cancel()
+    val newest = actions.run(cancelling) { ran += "newest" }
+    testScheduler.runCurrent()
+
+    // Both cancel commands ahead are stopped at once, and the waits behind the running one hold
+    replaced.assertCancelled()
+    dropped.assertCancelled()
+    running.assertRunning()
+    assertThat(ran).containsExactly("running")
+    cleanup.complete(Unit)
+    testScheduler.runCurrent()
+    assertThat(ran).containsExactly("running", "cleaned up", "write")
+    newest.assertPending()
+
+    release.complete(Unit)
+    testScheduler.runCurrent()
+    assertThat(ran).containsExactly("running", "cleaned up", "write", "save", "newest")
+    running.assertCancelled()
+    write.assertSucceeded()
+    save.assertSucceeded()
+    newest.assertSucceeded()
+  }
+
+  @Test
   fun `a combined handle over a queued command on the caller's key fails at once`() = runTest {
     val actions = actions()
 
