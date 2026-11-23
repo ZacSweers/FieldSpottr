@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "bbp-pier5-turf-2026-09-08-to-2026-12-04",
   "sourcePageUrl": "https://brooklynbridgepark.org/places-to-see/pier-5/",
-  "imageUrl": "https://brooklynbridgepark.org/wp-content/uploads/2020/09/PIer-5-Turf-Schedule-for-Website-Fall-2026-10.20.png",
-  "imagePath": "data/bbp/pier5-dfd0f30efc4427b3019847a127cdb93f652aa4d49c8735735c0b3c6be5c9668b.png",
-  "imageSha256": "dfd0f30efc4427b3019847a127cdb93f652aa4d49c8735735c0b3c6be5c9668b",
+  "imageUrl": "https://brooklynbridgepark.org/wp-content/uploads/2023/07/Pier-5Turf-Schedule-web-11.3.26-e1793721443866.png",
+  "imagePath": "data/bbp/pier5-32f6107fbff5ae9999dcd84e609af169d8a8c6bc9261549458143256beeec99e.png",
+  "imageSha256": "32f6107fbff5ae9999dcd84e609af169d8a8c6bc9261549458143256beeec99e",
   "scheduleYear": 2026,
   "validFrom": "2026-09-08",
   "validTo": "2026-12-04",
@@ -13,20 +13,12 @@
     "model": "gpt-5.6-sol",
     "promptVersion": "bbp-pier5-v1",
     "responseIds": [
-      "resp_0fb707a8ac80d6cd016ae869dc07fc87d08e8079c7331f7746",
-      "resp_06ca13152e8ee1ad016ae869e2470487d08afdceac71dbd529"
+      "resp_034ad8eddc6bda7f016b04193bb7c087d08c372d4933a9d8b4",
+      "resp_042a974ca8a5e783016b041941571087d0906a8507041210ba"
     ],
-    "extractedAt": "2026-11-02T10:45:45.135435Z"
+    "extractedAt": "2026-11-23T10:45:12.828157201Z"
   },
   "blocks": [
-    {
-      "day": "SUNDAY",
-      "fieldIds": [
-        "pier5-field-1"
-      ],
-      "start": "08:00",
-      "end": "09:00"
-    },
     {
       "day": "SUNDAY",
       "fieldIds": [
