@@ -194,7 +194,7 @@ class OutboxTest {
   }
 
   @Test
-  fun `a reject key refuses a call while its entry is queued, sending or failed`() = runTest {
+  fun `a reject key refuses a call while its entry is queued or sending or failed`() = runTest {
     var applied = 0
     val outbox = outbox(online = false, apply = { _, _ -> applied++ })
     val holder = outbox.enqueue("a", admission = Admission.Reject("k"))
