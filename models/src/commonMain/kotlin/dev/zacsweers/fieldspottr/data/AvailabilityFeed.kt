@@ -55,9 +55,12 @@ data class AvailabilityFeedRow(
   @SerialName("advisory") val advisoryText: String? = null,
 )
 
-/** Daily markers distinguish a verified empty schedule from missing source data. */
+/** Pier 5 schedule rows describe advertised open play, not booked permits. */
 object BbpAvailability {
-  const val COVERAGE_KIND = "BBP schedule coverage"
+  const val LEGACY_COVERAGE_KIND = "BBP schedule coverage"
+  const val LEGACY_BUSY_KIND = "BBP active permits"
+  const val COVERAGE_KIND = "BBP open play coverage"
+  const val OPEN_PLAY_KIND = "BBP open play"
   const val UNAVAILABLE_KIND = "BBP unavailable"
 }
 
