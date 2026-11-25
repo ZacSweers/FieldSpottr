@@ -27,11 +27,11 @@ class OptimisticQueryStoreDispatcherTest {
     try {
       // Offline, so the row stays and every value the collector sees is an overlay
       val data =
-        testDataScopeFactory(online = false).create(scope, setOf(TagsOutbox.sender { _, _ -> }))
+        testDataScopeFactory(online = false).create(scope, setOf(TagsOutboxKey.sender { _, _ -> }))
       val threads = CopyOnWriteArraySet<String>()
       val store =
         data.optimisticStore(
-          TagsOutbox,
+          TagsOutboxKey,
           base = QueryStore.inMemory(Fetched(listOf("a"), START)),
           apply = { current, add ->
             // Coroutine debug mode appends the coroutine's name to the thread's
@@ -54,4 +54,4 @@ class OptimisticQueryStoreDispatcherTest {
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)
 
-private val TagsOutbox = OutboxKey<Add>("tags")
+private val TagsOutboxKey = OutboxKey<Add>("tags")

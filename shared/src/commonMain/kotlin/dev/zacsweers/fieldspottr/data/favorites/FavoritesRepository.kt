@@ -26,7 +26,7 @@ import kotlinx.serialization.json.Json
 /**
  * The user's favorite field groups, changed locally first and sent to [FavoritesApi] after. The
  * truth is the last set fetched from the server, in a DataStore file, and each change is an entry
- * of the [FavoritesOutbox] beside it until the server takes it. [favorites] shows the truth with
+ * of the [FavoritesOutboxKey] beside it until the server takes it. [favorites] shows the truth with
  * the waiting changes on top, so a tap shows at once, offline too, and a restart shows the same.
  *
  * This repository holds the handle on the outbox. Its sender, [favoritesSender], belongs to the app
@@ -66,7 +66,7 @@ internal constructor(
 
   private val store =
     data.optimisticStore(
-      FavoritesOutbox,
+      FavoritesOutboxKey,
       base = base,
       // Idempotent: a group set on twice is on once, so a resend or an overlapping fetch is safe
       apply = { current, change ->

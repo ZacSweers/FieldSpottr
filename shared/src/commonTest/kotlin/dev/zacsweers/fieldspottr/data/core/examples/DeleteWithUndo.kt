@@ -51,7 +51,7 @@ sealed interface NoteCommand {
   @Serializable data class Delete(val noteId: NoteId) : NoteCommand
 }
 
-internal val NoteOutbox = OutboxKey<NoteCommand>("notes")
+internal val NoteOutboxKey = OutboxKey<NoteCommand>("notes")
 
 private val UNDO_WINDOW = 5.seconds
 
@@ -61,7 +61,7 @@ internal fun notesSender(
   api: NoteApi,
   db: NoteQueries,
   io: CoroutineDispatcher,
-): OutboxSender<*> = NoteOutbox.sender { command, id ->
+): OutboxSender<*> = NoteOutboxKey.sender { command, id ->
   when (command) {
     is NoteCommand.Delete -> {
       api.delete(command.noteId, idempotencyKey = id.value)
@@ -78,7 +78,7 @@ class NoteRepository(
 ) {
   private val actions = data.newActionRunner()
   // A failed insert, or a delete the server rejects for good, brings the note back
-  private val outbox = data.outbox(NoteOutbox, revert = { command, _ -> revert(command) })
+  private val outbox = data.outbox(NoteOutboxKey, revert = { command, _ -> revert(command) })
 
   /**
    * Hides the note now and queues the server delete once the window passes. The handle settles
@@ -173,7 +173,7 @@ class DeleteWithUndoTest {
       if (rows == null) {
         notesSender(api, db, io)
       } else {
-        NoteOutbox.sender(store = rows) { _, _ -> }
+        NoteOutboxKey.sender(store = rows) { _, _ -> }
       }
     data = testDataScope(online = online, senders = setOf(sender))
     return NoteRepository(data, db, io)
@@ -193,7 +193,7 @@ class DeleteWithUndoTest {
     delete.awaitCancelled()
     assertThat(db.visible).isEqualTo(setOf(NOTE))
     advanceTimeBy(UNDO_WINDOW * 2)
-    assertThat(data.outboxStore<NoteCommand>(NoteOutbox.name).entries().first()).isEmpty()
+    assertThat(data.outboxStore<NoteCommand>(NoteOutboxKey.name).entries().first()).isEmpty()
     assertThat(api.deleted).isEmpty()
   }
 

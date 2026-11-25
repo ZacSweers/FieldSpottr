@@ -80,10 +80,10 @@ class UnreadableRowTest {
           stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem),
           clock = testClock(),
         )
-        .create(backgroundScope, setOf(ChangesOutbox.sender { _, _ -> }))
+        .create(backgroundScope, setOf(ChangesOutboxKey.sender { _, _ -> }))
 
     // Nothing collects the outbox's entries
-    data.outbox(ChangesOutbox)
+    data.outbox(ChangesOutboxKey)
     bothReported.await()
 
     assertThat(failures.all.filterIsInstance<UnreadableEntryException>().map { it.id })
@@ -260,7 +260,7 @@ class UnreadableRowTest {
 internal const val OLD_CHANGE = """{"group":"a","enabled":true}"""
 
 /** The outbox called `changes`, whose stored rows hold [Change]s. */
-private val ChangesOutbox = OutboxKey<Change>("changes")
+private val ChangesOutboxKey = OutboxKey<Change>("changes")
 
 /**
  * Checks an outbox called `changes` over [stores], which hold row [old] on key `k` in a format the
@@ -283,8 +283,8 @@ internal suspend fun TestScope.assertUnreadableRowIsHandled(stores: OutboxStores
         stores = stores,
         clock = testClock(),
       )
-      .create(backgroundScope, setOf(ChangesOutbox.sender(send = send)))
-  val outbox = data.outbox(ChangesOutbox, revert = send::revert)
+      .create(backgroundScope, setOf(ChangesOutboxKey.sender(send = send)))
+  val outbox = data.outbox(ChangesOutboxKey, revert = send::revert)
 
   val sameKey = outbox.enqueue(Change("b", on = true), key = "k")
   val otherKey = outbox.enqueue(Change("c", on = false), key = "other")

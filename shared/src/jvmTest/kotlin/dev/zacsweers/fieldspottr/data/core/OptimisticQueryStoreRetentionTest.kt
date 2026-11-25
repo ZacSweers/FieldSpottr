@@ -62,11 +62,11 @@ class OptimisticQueryStoreRetentionTest {
       )
     fun DataScope.posts() =
       optimisticStores(
-        PostsOutbox,
+        PostsOutboxKey,
         base = { base },
         apply = { post, star -> post?.copy(starred = star.starred) },
       )
-    val posts = scopes.create(owner, setOf(PostsOutbox.sender { _, _ -> })).posts()
+    val posts = scopes.create(owner, setOf(PostsOutboxKey.sender { _, _ -> })).posts()
     val post = posts("p")
 
     // Eight refreshes read the server before the edit reached it, and land after its send in the
@@ -99,7 +99,7 @@ class OptimisticQueryStoreRetentionTest {
     owner.cancel()
     owner.coroutineContext.job.join()
     val reopened =
-      scopes.create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> })).posts()("p")
+      scopes.create(backgroundScope, setOf(PostsOutboxKey.sender { _, _ -> })).posts()("p")
     assertThat(reopened.data.first()?.value).isEqualTo(Post(bodies.last(), starred = true))
     scopes.assertNoFailures()
   }
@@ -147,10 +147,10 @@ class OptimisticQueryStoreRetentionTest {
   fun `a waiting change's state does not keep its handle`() = runTest {
     val data =
       testDataScopeFactory()
-        .create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> awaitCancellation() }))
+        .create(backgroundScope, setOf(PostsOutboxKey.sender { _, _ -> awaitCancellation() }))
     val posts =
       data.optimisticStores(
-        PostsOutbox,
+        PostsOutboxKey,
         base = QueryStore.inMemoryByKey<String, Post>(),
         apply = { post, star -> post?.copy(starred = star.starred) },
       )
@@ -166,10 +166,11 @@ class OptimisticQueryStoreRetentionTest {
 
   @Test
   fun `an idle set does not keep the stored milestone of its last change`() = runTest {
-    val data = testDataScopeFactory().create(backgroundScope, setOf(PostsOutbox.sender { _, _ -> }))
+    val data =
+      testDataScopeFactory().create(backgroundScope, setOf(PostsOutboxKey.sender { _, _ -> }))
     val posts =
       data.optimisticStores(
-        PostsOutbox,
+        PostsOutboxKey,
         base = QueryStore.inMemoryByKey<String, Post>(),
         apply = { post, star -> post?.copy(starred = star.starred) },
       )
@@ -215,5 +216,5 @@ private object UnencodablePost : KSerializer<OptimisticQueryStoreRetentionTest.P
     throw SerializationException("Cannot decode a post")
 }
 
-private val PostsOutbox =
+private val PostsOutboxKey =
   OutboxKey<KeyedMutation<String, OptimisticQueryStoreRetentionTest.Star>>("posts")
