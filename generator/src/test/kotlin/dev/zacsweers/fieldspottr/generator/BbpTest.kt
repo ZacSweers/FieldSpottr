@@ -52,13 +52,15 @@ class BbpTest {
       row.fieldId == "pier5-field-1" && row.start == nyMillis("2026-06-01T09:00")
     }
     val mondayField1 = rows.filter { row ->
-      row.kind == "BBP active permits" &&
+      row.kind == BbpAvailability.OPEN_PLAY_KIND &&
         row.fieldId == "pier5-field-1" &&
         row.start in nyMillis("2026-06-01T00:00")..nyMillis("2026-06-01T23:59")
     }
 
     assertThat(juneFirst).hasSize(1)
     assertThat(juneFirst.single().groupName).isEqualTo("Pier 5")
+    assertThat(juneFirst.single().kind).isEqualTo(BbpAvailability.OPEN_PLAY_KIND)
+    assertThat(juneFirst.single().title).isEqualTo("Advertised open play")
     assertThat(mondayField1.map { it.start to it.end })
       .containsExactly(
         nyMillis("2026-06-01T09:00") to nyMillis("2026-06-01T10:00"),
@@ -770,12 +772,37 @@ class BbpTest {
       .isEqualTo(setOf(nyMillis("2026-05-31T00:00"), nyMillis("2026-06-03T00:00")))
     assertThat(
         rows
-          .filter { it.kind == "BBP active permits" }
+          .filter { it.kind == BbpAvailability.OPEN_PLAY_KIND }
           .all {
             it.start >= nyMillis("2026-06-01T00:00") && it.end <= nyMillis("2026-06-03T00:00")
           }
       )
       .isTrue()
+  }
+
+  @Test
+  fun `updated fall chart emits the November 29 Sunday opening and expires December 4`() {
+    val fixture =
+      sourceFixture(
+        validFrom = "2026-09-08",
+        validTo = "2026-12-04",
+        blocks =
+          listOf(
+            BbpRecurringBlock("SUNDAY", listOf("pier5-field-1"), "11:00", "16:00"),
+            BbpRecurringBlock("SUNDAY", listOf("pier5-field-3"), "20:00", "23:00"),
+          ),
+      )
+    val rows = generateBbpPier5Rows(fixture.sourceFile, today = LocalDate.parse("2026-11-29"))
+    val sundayOpenings = rows.filter {
+      it.kind == BbpAvailability.OPEN_PLAY_KIND &&
+        it.start in nyMillis("2026-11-29T00:00") until nyMillis("2026-11-30T00:00")
+    }
+    assertThat(sundayOpenings.map { it.fieldId to (it.start to it.end) })
+      .containsExactly(
+        "pier5-field-1" to (nyMillis("2026-11-29T11:00") to nyMillis("2026-11-29T16:00")),
+        "pier5-field-3" to (nyMillis("2026-11-29T20:00") to nyMillis("2026-11-29T23:00")),
+      )
+    assertThat(rows.none { it.start >= nyMillis("2026-12-05T00:00") }).isTrue()
   }
 
   @Test

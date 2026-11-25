@@ -25,6 +25,13 @@ internal data class PermitData(
 internal val DbPermit.isAvailabilityOverlay: Boolean
   get() = isOverlap != 0L || advisory != null || type == "advisory"
 
+/** Pier 5 data rows are not booked permits and should not appear in permit details. */
+internal val DbPermit.isBbpScheduleRow: Boolean
+  get() =
+    type == BbpAvailability.OPEN_PLAY_KIND ||
+      type == BbpAvailability.LEGACY_BUSY_KIND ||
+      type == BbpAvailability.UNAVAILABLE_KIND
+
 /** Daily rows that record source coverage. They never book a field or show in the grid. */
 internal val DbPermit.isCoverageMarker: Boolean
   get() = type == BbpAvailability.COVERAGE_KIND || type == NycLiveAvailability.COVERAGE_KIND
