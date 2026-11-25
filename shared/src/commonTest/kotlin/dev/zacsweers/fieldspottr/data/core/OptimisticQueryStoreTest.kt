@@ -40,6 +40,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
@@ -1508,6 +1509,137 @@ class OptimisticQueryStoreTest {
       .containsExactly("\"x\"")
     // A single store's rows hold the change itself, all on one key
     assertThat(data.outboxStore<Add>("tags").entries().first().map { it.key }).containsExactly("")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a keyed change stores its line within its key's line`() = runTest {
+    data =
+      testDataScope(clock = testClock(START), online = false, senders = setOf(tagsByItemSender()))
+    val stores =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+      )
+
+    stores.mutate("x", Add("b"), Ordering.Keyed("y")).stored.awaitSucceeded()
+    stores.mutate("x", Add("c")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map { it.key }
+      )
+      .containsExactly("\"x\"/y", "\"x\"")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a change on another line of one value sends and commits while a head backs off`() = runTest {
+    send.failure = { add, _ -> IllegalStateException("Transient").takeIf { add == Add("b") } }
+    val sender = Tags.sender(retry = RetryPolicy { 1.hours }, send = send)
+    data = testDataScope(clock = testClock(START), senders = setOf(sender))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value } }
+    runCurrent()
+
+    val withB = seen.size
+    val b = store.mutate(Add("b"), Ordering.Keyed("x"))
+    store.pending.first { changes -> changes.any { it.retryAt != null } }
+    val withC = seen.size
+    val c = store.mutate(Add("c"), Ordering.Keyed("y"))
+    c.awaitSucceeded()
+    runCurrent()
+
+    b.assertPending()
+    assertThat(send.sent).containsExactly(Add("c"))
+    assertThat(truth.data.value?.value).isEqualTo(listOf("a", "c"))
+    assertThat(seen.drop(withB).all { "b" in it.orEmpty() }).isTrue()
+    assertThat(seen.drop(withC).all { "c" in it.orEmpty() }).isTrue()
+    assertThat(seen.last()?.toSet()).isEqualTo(setOf("a", "b", "c"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a commit that lands after another line's commit and an older fetch keeps both changes`() =
+    runTest {
+      data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
+      truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+      var failNextWrite = false
+      val base =
+        QueryStore.of(
+          truth.data,
+          write = { fetched, keepsStored ->
+            if (failNextWrite) {
+              failNextWrite = false
+              error("Disk full")
+            }
+            truth.writeFetched(fetched, keepsStored)
+          },
+          clear = truth::clearFetched,
+        )
+      val store = data.optimisticStore(Tags, base = base, apply = ::addOnce)
+      val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+      val seen = mutableListOf<List<String>?>()
+      backgroundScope.launch { store.data.collect { seen += it?.value } }
+      runCurrent()
+      // The refresh reads the server before either send, and lands between the two commits
+      fetch.respond = { listOf("a", "z") }
+      fetch.hold()
+      val refresh = query.requestFetch(force = true)
+      advanceTimeBy(1.seconds)
+
+      // The first line's commit fails once, so it lands after the second line's commit
+      failNextWrite = true
+      val withB = seen.size
+      val b = store.mutate(Add("b"), Ordering.Keyed("x"))
+      b.awaitSucceeded()
+      assertThat(failNextWrite).isFalse()
+      advanceTimeBy(100.milliseconds)
+      val withC = seen.size
+      store.mutate(Add("c"), Ordering.Keyed("y")).awaitSucceeded()
+      // The second line's commit landed first, and took the first line's sent change along
+      assertThat(truth.data.value?.value).isEqualTo(listOf("a", "b", "c"))
+      assertOwed(b.id)
+      fetch.release()
+      refresh.awaitSucceeded()
+      assertOwed(b.id)
+      advanceTimeBy(2.seconds)
+      runCurrent()
+
+      assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
+      assertThat(truth.data.value?.value?.toSet()).isEqualTo(setOf("a", "z", "b", "c"))
+      assertThat(seen.drop(withB).all { "b" in it.orEmpty() }).isTrue()
+      assertThat(seen.drop(withC).all { "c" in it.orEmpty() }).isTrue()
+      assertThat(data.actionFailures.assertSingle<IllegalStateException>()).hasMessage("Disk full")
+      data.fetchFailures.assertNone()
+    }
+
+  /** Passes when row [id] of [Tags] is sent and its commit has not landed. */
+  private suspend fun assertOwed(id: EntryId) {
+    val row = checkNotNull(data.outboxStore<Add>("tags").entry(id).first())
+    assertThat(row.status).isEqualTo(OutboxStatus.Sent)
+    assertThat(row.committed).isFalse()
+  }
+
+  @Test
+  fun `an ordering an entry cannot take throws from mutate and leaves data as it was`() = runTest {
+    val (store, _) = tags(online = false)
+    val before = store.data.first()
+
+    for (ordering in
+      listOf(
+        Ordering.Keyed("x", OnPrevious.Cancel),
+        Ordering.Keyed("x", OnPrevious.Supersede),
+        Ordering.Keyed(42),
+      )) {
+      assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), ordering) }
+    }
+    runCurrent()
+
+    assertThat(store.data.first()).isEqualTo(before)
+    assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
     data.assertNoFailures()
   }
 

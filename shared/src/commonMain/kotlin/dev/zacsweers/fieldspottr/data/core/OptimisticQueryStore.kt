@@ -19,7 +19,7 @@ import kotlinx.serialization.Serializable
  * mutate(m2)                 data = apply(apply(truth, m1), m2)
  *    |                                   ^
  *    v                                   |
- * entry m2 --> entries [m1, m2] ---------+--> the sender sends m1, then m2, in order per key
+ * entry m2 --> entries [m1, m2] ---------+--> the sender sends m1, then m2, in order per line
  *                                                |
  *                       sent: the store commits it, so the truth takes the server's answer, or
  *                             apply(truth, m) when the server answered with nothing
@@ -64,8 +64,12 @@ import kotlinx.serialization.Serializable
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStore<T, M> : QueryStore<T> {
   /**
-   * Shows [mutation] in [data] now, stores it as an entry, and sends it after the entries before
-   * it.
+   * Shows [mutation] in [data] now, stores it as an entry, and sends it after the entries before it
+   * on its line. [ordering] picks the line among this value's changes, as [Ordering] describes, and
+   * takes what [Outbox.enqueue] takes. Changes on different lines can apply and commit in either
+   * order, so they must commute. A pair that does not can leave the truth wrong until the next
+   * fetch. A store whose sender answers with a value takes [Ordering.Serial] only. A refused
+   * [ordering] throws [IllegalArgumentException], stores nothing and leaves [data] as it was.
    *
    * From the moment this returns, each value [data] computes holds the change until it is sent,
    * fails or is dropped, also before its entry is stored. A value computed before this call can
@@ -77,7 +81,7 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * [OutboxOperation.stored] settles once the entry is written, for a caller that only needs the
    * change kept.
    */
-  fun mutate(mutation: M): OutboxOperation
+  fun mutate(mutation: M, ordering: Ordering = Ordering.Serial): OutboxOperation
 
   /**
    * Changes the server has not confirmed, oldest first: waiting, sending or failed. It lists stored
@@ -134,13 +138,13 @@ data class PendingMutation<M>(
 
 /**
  * One [OptimisticQueryStore] per key, all sharing one set of entries. Pass it as the store of a
- * [DataScope.keyed] query, and call [mutate] with the key. Entries for one key send in order, and
- * keys do not wait on each other.
+ * [DataScope.keyed] query, and call [mutate] with the key. With [Ordering.Serial], entries for one
+ * key send in order. Keys do not wait on each other.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, M> {
-  /** [OptimisticQueryStore.mutate] on [key]'s store. */
-  fun mutate(key: K, mutation: M): OutboxOperation
+  /** [OptimisticQueryStore.mutate] on [key]'s store, with [ordering] among [key]'s changes. */
+  fun mutate(key: K, mutation: M, ordering: Ordering = Ordering.Serial): OutboxOperation
 
   /**
    * [key]'s changes the server has not confirmed, oldest first, from stored entries only. A change

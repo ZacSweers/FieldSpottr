@@ -6,6 +6,7 @@ import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
 import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
@@ -87,8 +88,9 @@ internal fun <M> OwnedRows<M>.keyedByUnit(): OwnedRows<KeyedMutation<Unit, M>> {
     override fun enqueue(
       id: EntryId,
       payload: KeyedMutation<Unit, M>,
-      key: String?,
-    ): OutboxOperation = outbox.enqueue(id, payload.mutation, key)
+      ordering: Ordering,
+      line: String,
+    ): OutboxOperation = outbox.enqueue(id, payload.mutation, ordering, line)
 
     override fun retry(id: EntryId): Operation = outbox.retry(id)
 

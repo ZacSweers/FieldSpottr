@@ -37,6 +37,7 @@ import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.assertOneTypePerName
 import dev.zacsweers.fieldspottr.data.core.assertUnreadableRowIsHandled
+import dev.zacsweers.fieldspottr.data.core.enqueue
 import dev.zacsweers.fieldspottr.data.core.exchangingSender
 import dev.zacsweers.fieldspottr.data.core.impl.UNKNOWN_REPLY
 import dev.zacsweers.fieldspottr.data.core.replying

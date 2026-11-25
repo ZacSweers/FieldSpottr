@@ -73,7 +73,7 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 
 /**
  * A handle's side of an outbox, which [RealOutbox.attach] takes. The engine sends the rows, and the
- * handle keeps all local state. Commits for one key run on that key's drain lane in send order.
+ * handle keeps all local state. Commits for one row key run on that key's drain lane in send order.
  */
 internal interface RowOwner<E> {
   /**
@@ -116,7 +116,8 @@ internal interface RowOwner<E> {
  * calls. [AttachedOutbox] provides it, and [keyedByUnit] adapts it for a single store.
  */
 internal interface OwnedRows<P> {
-  fun enqueue(id: EntryId, payload: P, key: String?): OutboxOperation
+  /** [Outbox.enqueue] with the row id [id], on the receiver's default line [line]. */
+  fun enqueue(id: EntryId, payload: P, ordering: Ordering, line: String): OutboxOperation
 
   fun retry(id: EntryId): Operation
 
@@ -131,11 +132,11 @@ internal interface OwnedRows<P> {
 internal class AttachedOutbox<E>(val engine: RealOutbox<E>) : Outbox<E>, OwnedRows<E> {
   override val entries: Flow<List<OutboxEntry<E>>> = engine.entries
 
-  override fun enqueue(payload: E, key: String?): OutboxOperation =
-    engine.enqueue(EntryId(Uuid.random().toString()), payload, key)
+  override fun enqueue(payload: E, ordering: Ordering): OutboxOperation =
+    engine.enqueue(EntryId(Uuid.random().toString()), payload, ordering, WHOLE_QUEUE)
 
-  override fun enqueue(id: EntryId, payload: E, key: String?): OutboxOperation =
-    engine.enqueue(id, payload, key)
+  override fun enqueue(id: EntryId, payload: E, ordering: Ordering, line: String): OutboxOperation =
+    engine.enqueue(id, payload, ordering, line)
 
   override fun retry(id: EntryId): Operation = engine.retry(id)
 
@@ -404,11 +405,12 @@ internal class RealOutbox<E>(
 
   /**
    * Runs the handle's apply for [payload], then inserts it as row [id], in one command. The id
-   * comes first, so the handle knows it before the row exists.
+   * comes first, so the handle knows it before the row exists. The row key comes from [ordering]
+   * and the receiver's default [line], as [rowKeyOf] gives it.
    */
-  fun enqueue(id: EntryId, payload: E, key: String?): OutboxOperation {
+  fun enqueue(id: EntryId, payload: E, ordering: Ordering, line: String): OutboxOperation {
     val owner = checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner
-    val rowKey = key ?: WHOLE_QUEUE
+    val rowKey = rowKeyOf(ordering, line, id)
     return tracked(id, Ordering.Keyed(Enqueue(rowKey))) { attempt ->
       // Once the change is applied, the row goes in or the change is undone, as RowOwner.apply
       // promises. An insert that throws stored nothing, so no send or revert would reach it.
@@ -424,6 +426,38 @@ internal class RealOutbox<E>(
       drain(rowKey)
     }
   }
+
+  /**
+   * The row key of row [id] enqueued with [ordering] on the default line [line]: [line] itself for
+   * [Ordering.Serial], the id for [Ordering.Concurrent], and for [Ordering.Keyed] its key, after
+   * [line] and `/` unless [line] is empty. Stored rows keep their keys, so these formats never
+   * change. It refuses a key that is not a `String`, since another type's `toString` can differ
+   * after a restart, and any [OnPrevious] but [OnPrevious.Wait].
+   */
+  private fun rowKeyOf(ordering: Ordering, line: String, id: EntryId): String =
+    when (ordering) {
+      Ordering.Serial -> line
+      Ordering.Concurrent -> id.value
+      is Ordering.Keyed -> {
+        require(ordering.onPrevious != OnPrevious.Cancel) {
+          "Outbox $name cannot cancel an earlier entry, since a send in flight may have reached " +
+            "the server. Use OnPrevious.Wait, and discard the earlier entry while it is queued."
+        }
+        require(ordering.onPrevious != OnPrevious.Supersede) {
+          "Outbox $name cannot supersede an earlier entry. Use OnPrevious.Wait."
+        }
+        val key =
+          requireNotNull(ordering.key as? String) {
+            "Outbox $name takes only a String key, since the key is stored and the toString of " +
+              "${ordering.key::class} can differ after a restart. Use a String key."
+          }
+        if (line.isEmpty()) {
+          key
+        } else {
+          "$line/$key"
+        }
+      }
+    }
 
   /**
    * Requeues row [id] on its row key, so this handle follows only the new attempt, for the reason

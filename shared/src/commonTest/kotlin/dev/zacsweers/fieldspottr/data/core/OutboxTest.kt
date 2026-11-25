@@ -140,6 +140,62 @@ class OutboxTest {
   }
 
   @Test
+  fun `a serial row stores the whole queue's key and a keyed row stores its own key`() = runTest {
+    val outbox = outbox(online = false)
+
+    outbox.enqueue("a", Ordering.Serial)
+    outbox.enqueue("b", Ordering.Keyed("a"))
+    outbox.enqueue("c", key = "a")
+
+    val rows = outbox.entries.first { it.size == 3 }
+    assertThat(rows.map { it.payload to it.key }).containsExactly("a" to "", "b" to "a", "c" to "a")
+  }
+
+  @OptIn(DelicateDataLayerApi::class)
+  @Test
+  fun `a concurrent row stores its id as its key and sends while another head backs off`() =
+    runTest {
+      send.failure = { payload, _ -> IllegalStateException("Transient").takeIf { payload == "a" } }
+      val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+      val a = outbox.enqueue("a")
+      outbox.entries.first { rows -> rows.any { it.retryAt != null } }
+      send.hold("b")
+
+      val b = outbox.enqueue("b", Ordering.Concurrent)
+
+      val row =
+        outbox.entries
+          .first { rows -> rows.any { it.payload == "b" } }
+          .single {
+            it.payload == "b"
+          }
+      assertThat(row.key).isEqualTo(b.id.value)
+      send.release("b")
+      b.awaitSucceeded()
+      a.assertPending()
+      assertThat(send.sent).containsExactly("b")
+    }
+
+  @Test
+  fun `an ordering an entry cannot take throws and runs and stores nothing`() = runTest {
+    var applied = 0
+    val outbox = outbox(online = false, apply = { _, _ -> applied++ })
+
+    for (ordering in
+      listOf(
+        Ordering.Keyed("a", OnPrevious.Cancel),
+        Ordering.Keyed("a", OnPrevious.Supersede),
+        Ordering.Keyed(42),
+      )) {
+      assertFailsWith<IllegalArgumentException> { outbox.enqueue("a", ordering) }
+    }
+
+    testScheduler.runCurrent()
+    assertThat(applied).isEqualTo(0)
+    assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  @Test
   fun `a failed apply inserts nothing and fails the handle`() = runTest {
     val outbox = outbox(apply = { _, _ -> error("apply failed") })
 

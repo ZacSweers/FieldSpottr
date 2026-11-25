@@ -12,6 +12,7 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStores
+import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
@@ -113,7 +114,8 @@ import kotlinx.coroutines.sync.withLock
  * store makes them atomic. Meanwhile a fetch that started before the send can land with a value
  * that lacks the change. So a view shows the change from its [Committed] record in place of its
  * row. Two cases fall outside the records, which is why [apply] must be idempotent, as
- * [checkIdempotent] describes.
+ * [checkIdempotent] describes. With several lines on one value, a change whose commit write failed
+ * can be carried into the truth by another line's commit and then applied again by its own retry.
  *
  * The query's fetch and the outbox's commit both write a key's truth, and they take turns on the
  * key's [Base.lock].
@@ -124,10 +126,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   /** Joins this set to the outbox engine over [rows] as its handle, once, to build [outbox]. */
   attach: (RowOwner<KeyedMutation<K, M>>) -> OwnedRows<KeyedMutation<K, M>>,
   /**
-   * The ordering key of a key's rows. Keys that are equal must give the same ordering key, so they
-   * share one order however their `toString` reads.
+   * The default line of a key's rows, which a [Ordering.Keyed] change extends. Keys that are equal
+   * must give the same line, so they share one order however their `toString` reads.
    */
   private val orderKey: (K) -> String,
+  /**
+   * Whether the sender can answer with a value. Such a set takes [Ordering.Serial] only, since two
+   * lines could commit their answers out of order and an older answer would replace a newer one.
+   */
+  private val replies: Boolean,
   private val base: (key: K) -> QueryStore<T>,
   private val apply: (current: T?, mutation: M) -> T?,
   /** The clock the queries' fetch times come from, so a send time compares against them. */
@@ -302,9 +309,14 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   /**
    * Gives the change its row id, records it as Pending, then enqueues its row and follows it. The
    * row's write is registered in [storing] before the change is recorded, so a clear that finds the
-   * change also waits for its row, even while this call has not enqueued it yet.
+   * change also waits for its row, even while this call has not enqueued it yet. A refusal of
+   * [ordering] throws before the change is recorded, or from the enqueue, which forgets it.
    */
-  override fun mutate(key: K, mutation: M): OutboxOperation {
+  override fun mutate(key: K, mutation: M, ordering: Ordering): OutboxOperation {
+    require(!replies || ordering == Ordering.Serial) {
+      "This store's sender can answer with a value, so its changes take Ordering.Serial only. " +
+        "Two lines could commit their answers out of order. Use Ordering.Serial."
+    }
     val id = EntryId(Uuid.random().toString())
     val payload = KeyedMutation(key, mutation)
     val write = Storing(key)
@@ -312,7 +324,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     edit { it.knowing(id, Known(Kind.Pending, payload)) }
     val handle =
       try {
-        outbox.enqueue(id, payload, key = orderKey(key))
+        outbox.enqueue(id, payload, ordering, line = orderKey(key))
       } catch (e: Throwable) {
         // No row will exist, so nothing waits for it and nothing shows the change
         write.started.complete(Operation.failed(e))
@@ -534,7 +546,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * A server answer replaces the truth as fresh data. Otherwise the change is applied to the truth
    * with the earlier sent changes a fetch may have dropped put back, and the truth keeps its fetch
-   * time. A truth fetched after the send already holds the change, so it stays as it is.
+   * time. A truth fetched after the send already holds the change, so it stays as it is, and the
+   * record keeps no value, since that truth may lack another line's change whose write is owed.
    *
    * Two failures end the commit without the change written, since a retry cannot fix them, and both
    * mark the truth stale, so the next fetch brings the server's value with the change in it. An
@@ -608,7 +621,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       val next =
         when {
           result is Delivery.Replaced -> Fetched(result.value, sentAt, invalidated = stale)
-          alreadyFetched -> current
+          // The record keeps no value. The stored truth may lack a change of another line whose
+          // commit write is still owed, and a record with a value tells views that the truth holds
+          // every record before it. Without one, views judge the other records as they did before
+          // this commit.
+          alreadyFetched -> null
           else -> {
             val folded =
               try {
@@ -636,6 +653,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           sentAt = sentAt,
           truth = next,
           replaced = replaced,
+          hasValue = replaced || !alreadyFetched,
         )
       // Views show this in place of the row and the change's known state from here, so the writes
       // below never show as a gap
@@ -648,14 +666,18 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         }
       }
       landed.update { it.putting(change, false) }
-      // The store holds this record's value now, which tells views that it holds every change
-      // before it too. So the key's older records need only what a slow fetch folds back in.
-      edit { s ->
-        s.updatingRecords(key) {
-          if (it.change != change) {
-            it.withoutValue(newerAnswer = replaced)
-          } else {
-            it
+      // This record's value tells views that the store holds every change before it too, so the
+      // key's older records need only what a slow fetch folds back in. A record without a value
+      // comes from a commit that wrote nothing, so it changes no other record, and an older record
+      // whose write landed stays held by its own value.
+      if (record.hasValue) {
+        edit { s ->
+          s.updatingRecords(key) {
+            if (it.change != change) {
+              it.withoutValue(newerAnswer = replaced)
+            } else {
+              it
+            }
           }
         }
       }
@@ -670,9 +692,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * Two cases fall outside the records and pass [apply] such a value, and the store cannot tell: a
    * fetch that overlapped the send but read the server after it took the change, and a restart
-   * between the truth write and the row's status. So a change that fails this would show twice. A
-   * change the server answers with a value is never folded, so nothing checks it, and a counter
-   * shows twice until a server answer replaces the truth.
+   * between the truth write and the row's status. With several lines on one value, a change whose
+   * commit write failed can be carried into the truth by another line's commit and then applied
+   * again by its own retry. So a change that fails this would show twice. A change the server
+   * answers with a value is never folded, so nothing checks it, and a counter shows twice until a
+   * server answer replaces the truth.
    */
   private fun checkIdempotent(folded: Fetched<T>?, mutation: M, change: EntryId) {
     if (reportedApply.load() || idempotenceChecks.fetchAndIncrement() >= IDEMPOTENCE_CHECKS) {
@@ -837,8 +861,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * A listed row applies in its queue position whatever the set knows of it, so a retry or a
    * discard that teaches the set a change never moves it past a newer row. A known change missing
-   * from the list goes last. Its insert has not returned or the list lags, and a key's inserts run
-   * in order, so its row comes after every row the list shows.
+   * from the list goes last. Its insert has not returned or the list lags, and a line's inserts run
+   * in order, so its row comes after every row of its line the list shows. A row of another line
+   * can apply in either order, which is why changes on different lines must commute.
    */
   private fun plan(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Plan<T, M> {
     if (slice == null) {
@@ -1113,8 +1138,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
     }
 
-    override fun mutate(mutation: M): OutboxOperation =
-      this@RealOptimisticQueryStores.mutate(key, mutation)
+    override fun mutate(mutation: M, ordering: Ordering): OutboxOperation =
+      this@RealOptimisticQueryStores.mutate(key, mutation, ordering)
 
     override val pending: Flow<List<PendingMutation<M>>> =
       this@RealOptimisticQueryStores.pending(key)

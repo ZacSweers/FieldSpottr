@@ -19,6 +19,7 @@ import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
+import dev.zacsweers.fieldspottr.data.core.enqueue
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_ERROR_CHARS
 import dev.zacsweers.fieldspottr.data.core.sender
 import kotlin.test.Test

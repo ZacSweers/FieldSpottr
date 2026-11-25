@@ -528,6 +528,7 @@ private class RealDataScope(
         rows = engine.store.keyedByUnit(),
         attach = { owner -> engine.attach(owner.forChange(), handler).keyedByUnit() },
         orderKey = { WHOLE_QUEUE },
+        replies = engine.replyDescriptor != null,
         base = { base },
         apply = apply,
         onFailure = handler,
@@ -548,17 +549,22 @@ private class RealDataScope(
       rows = engine.store,
       attach = { owner -> engine.attach(owner, handler) },
       orderKey = { k -> ORDER_KEY_JSON.encodeToString(keySerializer, k) },
+      replies = engine.replyDescriptor != null,
       base = base,
       apply = apply,
       onFailure = handler,
     )
   }
 
-  /** An optimistic store set over [rows] in this scope, reporting to [onFailure], guarded. */
+  /**
+   * An optimistic store set over [rows] in this scope, reporting to [onFailure], guarded. [replies]
+   * says whether its sender can answer with a value.
+   */
   private fun <K : Any, T, M> newStores(
     rows: OutboxStore<KeyedMutation<K, M>>,
     attach: (RowOwner<KeyedMutation<K, M>>) -> OwnedRows<KeyedMutation<K, M>>,
     orderKey: (K) -> String,
+    replies: Boolean,
     base: (key: K) -> QueryStore<T>,
     apply: (current: T?, mutation: M) -> T?,
     onFailure: (Throwable) -> Unit,
@@ -567,6 +573,7 @@ private class RealDataScope(
       rows = rows,
       attach = attach,
       orderKey = orderKey,
+      replies = replies,
       base = base,
       apply = apply,
       clock = factory.clock,

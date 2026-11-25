@@ -154,7 +154,7 @@ class UnreadableEntryException(val outbox: String, val id: EntryId, cause: Throw
  *
  * The handle side, from the repository:
  * ```
- * enqueue(payload, key) --> id --> apply(payload, id) --> store.insert(id) --> drain(key)
+ * enqueue(payload, ordering) --> id --> apply(payload, id) --> store.insert(id) --> drain(key)
  *
  * attach --> read the owed entries once --> ready --> drain(key) for each key with owed entries
  *
@@ -199,7 +199,11 @@ interface Outbox<E> {
   /**
    * Runs the handle's `apply`, the optimistic local change, then inserts an entry, in one command.
    * The entry's id is made first, and `apply` gets it, so the handle knows the change by the id its
-   * entry will have. Without a [key], every entry shares one order.
+   * entry will have. The entry joins the line [ordering] picks, as [Ordering] describes.
+   *
+   * [ordering] must be [Ordering.Serial], [Ordering.Concurrent], or [Ordering.Keyed] with a
+   * `String` key and [OnPrevious.Wait]. Any other throws [IllegalArgumentException], and nothing
+   * runs or is stored.
    *
    * If apply throws, nothing is inserted and the handle fails. If the insert throws, the handle's
    * `revert` undoes the change and the handle fails. Once apply starts, it and the insert finish
@@ -207,7 +211,7 @@ interface Outbox<E> {
    * any send. The handle follows its entry from the moment the insert returns. So when the entry
    * was sent, failed and retried before then, the handle reports the retry's attempt.
    */
-  fun enqueue(payload: E, key: String? = null): OutboxOperation
+  fun enqueue(payload: E, ordering: Ordering = Ordering.Serial): OutboxOperation
 
   /**
    * Requeues a failed entry with its attempts reset, or ends a backoff early. The handle follows
@@ -232,6 +236,10 @@ interface Outbox<E> {
 
   companion object
 }
+
+/** [Outbox.enqueue] on the line of [key]. */
+fun <E> Outbox<E>.enqueue(payload: E, key: String): OutboxOperation =
+  enqueue(payload, Ordering.Keyed(key))
 
 /**
  * The handle [Outbox.enqueue] and [OptimisticQueryStore.mutate] return. As an [Operation] it
