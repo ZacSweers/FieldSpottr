@@ -10,6 +10,8 @@ import androidx.datastore.core.okio.OkioSerializer
 import androidx.datastore.core.okio.OkioStorage
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -180,8 +182,8 @@ class DataStoreOutboxStores(
    * Clears every outbox file under [directory]. A store this set has opened in this process owns
    * its file through a DataStore, and only that DataStore may write the file, so such a store is
    * cleared through it, also when it opens while the clear runs. A file left behind by an earlier
-   * process, which no store here has opened, is deleted directly. The deletes run on the caller's
-   * dispatcher.
+   * process, which no store here has opened, is deleted directly. The directory reads and the
+   * deletes run on the dispatcher of [scope], since they block.
    *
    * A [directory] that does not exist holds no files, so only the opened stores are cleared. It
    * counts as missing only when the nearest ancestor that can be listed does not list it. Any other
@@ -189,21 +191,31 @@ class DataStoreOutboxStores(
    * every row stays.
    */
   override suspend fun clearAll() {
+    // Only the dispatcher, so the work stays part of the caller's job
+    val io = scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext
+    // Thrown after the block, so the caller gets the listing's own exception. One that leaves
+    // withContext can arrive as a copy.
+    var listingError: IOException? = null
     val files =
-      try {
-        fileSystem.list(directory)
-      } catch (e: IOException) {
-        if (!isMissing(directory)) {
-          throw e
+      withContext(io) {
+        try {
+          fileSystem.list(directory)
+        } catch (e: IOException) {
+          if (!isMissing(directory)) {
+            listingError = e
+          }
+          emptyList()
         }
-        emptyList()
       }
+    listingError?.let { throw it }
     // First, since a direct delete beside a live DataStore leaves its rows in memory
     clearOpened()
-    for (path in files) {
-      // Read for each file, so a store opened meanwhile keeps its file
-      if (path.name.endsWith(".outbox") && path.name !in ownedFiles()) {
-        fileSystem.delete(path, mustExist = false)
+    withContext(io) {
+      for (path in files) {
+        // Read for each file, so a store opened meanwhile keeps its file
+        if (path.name.endsWith(".outbox") && path.name !in ownedFiles()) {
+          fileSystem.delete(path, mustExist = false)
+        }
       }
     }
     // A store opened during the deletes kept its file, so it is cleared here

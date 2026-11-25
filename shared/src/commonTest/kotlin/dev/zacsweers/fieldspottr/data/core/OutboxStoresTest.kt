@@ -15,13 +15,18 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
+import kotlinx.coroutines.plus
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
@@ -230,6 +235,31 @@ class OutboxStoresTest {
     }
 
   @Test
+  fun `DataStore stores read and delete files on the dispatcher of their scope`() = runTest {
+    val fake = FakeFileSystem()
+    val directory = "/data/outbox".toPath()
+    fake.createDirectories(directory)
+    fake.write(directory / "old.outbox") { writeUtf8("{}") }
+    val io = MarkingDispatcher(StandardTestDispatcher(testScheduler))
+    val fileSystem = DispatcherRecordingFileSystem(fake, io)
+    val stores = DataStoreOutboxStores(backgroundScope + io, directory, fileSystem = fileSystem)
+    stores.open("notes", String.serializer()).insertNew("k", "a")
+
+    stores.clearAll()
+    // A missing directory makes the clear list its ancestors
+    fake.deleteRecursively(directory)
+    stores.clearAll()
+
+    assertThat(fileSystem.calls)
+      .containsExactly(
+        "list $directory" to true,
+        "delete ${directory / "old.outbox"}" to true,
+        "list $directory" to true,
+        "list ${directory.parent}" to true,
+      )
+  }
+
+  @Test
   fun `DataStore stores reject a second name that differs only in case`() = runTest {
     val fileSystem = FakeFileSystem()
     val directory = "/outbox".toPath()
@@ -297,6 +327,50 @@ class OutboxStoresTest {
         return null
       }
       return super.metadataOrNull(path)
+    }
+  }
+
+  /** [delegate] that marks while a block it dispatched runs, so a test can tell where code runs. */
+  private class MarkingDispatcher(private val delegate: CoroutineDispatcher) :
+    CoroutineDispatcher() {
+    var running = false
+      private set
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+      delegate.dispatch(
+        context,
+        Runnable {
+          running = true
+          try {
+            block.run()
+          } finally {
+            running = false
+          }
+        },
+      )
+    }
+  }
+
+  /**
+   * [delegate] that records each directory listing and each delete of an outbox file, with whether
+   * it ran on [io].
+   */
+  private class DispatcherRecordingFileSystem(
+    delegate: FileSystem,
+    private val io: MarkingDispatcher,
+  ) : ForwardingFileSystem(delegate) {
+    val calls = mutableListOf<Pair<String, Boolean>>()
+
+    override fun list(dir: Path): List<Path> {
+      calls += "list $dir" to io.running
+      return super.list(dir)
+    }
+
+    override fun delete(path: Path, mustExist: Boolean) {
+      if (path.name.endsWith(".outbox")) {
+        calls += "delete $path" to io.running
+      }
+      super.delete(path, mustExist)
     }
   }
 
