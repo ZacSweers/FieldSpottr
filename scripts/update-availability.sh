@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/kernel-browser.sh"
+GENERATOR="$ROOT/generator/build/install/generator/bin/generator"
 
 LIVE_DAYS="${LIVE_DAYS:-7}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-.}"
@@ -16,7 +17,7 @@ HRP_SOURCE_FILE="${HRP_SOURCE_FILE:-}"
 NYC_CLOSURES_SOURCE_FILE="${NYC_CLOSURES_SOURCE_FILE:-}"
 USER_AGENT="${USER_AGENT:-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36}"
 HRP_URL="https://hudsonriverpark.org/visit/events/permits/fields/"
-HRP_READER_URL="https://r.jina.ai/http://r.jina.ai/http://$HRP_URL"
+HRP_READER_URL="https://r.jina.ai/$HRP_URL"
 CHROME="${CHROME:-}"
 
 find_chrome() {
@@ -110,9 +111,7 @@ initialize_fetch_backend() {
 hrp_source_is_parseable() {
   local source_file="$1"
 
-  ./gradlew --quiet :generator:run \
-    --args="--validate-hrp-source=$source_file" \
-    >/dev/null 2>&1
+  "$GENERATOR" "--validate-hrp-source=$source_file"
 }
 
 require_staged_hrp_source_in_strict_mode() {
@@ -125,6 +124,16 @@ require_staged_hrp_source_in_strict_mode() {
 
   echo "Strict refresh requires a fresh Hudson River Park source after all fallbacks." >&2
   return 1
+}
+
+fetch_hrp_reader_source() {
+  local output="$1"
+
+  if [[ "$FETCH_BACKEND" == "kernel" ]]; then
+    kernel_browser_curl "$HRP_READER_URL" "$output"
+  else
+    curl -fsSL --max-time 60 "$HRP_READER_URL" >"$output"
+  fi
 }
 
 validate_configuration() {
@@ -187,13 +196,16 @@ fetch_hrp_source() {
   fi
   if [[ -s "$HRP_DIR/fields.html" ]] &&
     ! hrp_source_is_parseable "$HRP_DIR/fields.html"; then
-    echo "Primary Hudson River Park response produced no schedule rows; using reader fallback." >&2
+    echo "Primary Hudson River Park response failed schedule validation; using reader fallback." >&2
     rm -f "$HRP_DIR/fields.html"
   fi
 
   if [[ ! -s "$HRP_DIR/fields.html" ]]; then
     echo "Dumping Hudson River Park field schedule via reader fallback"
-    curl -fsSL "$HRP_READER_URL" >"$HRP_DIR/fields.md" || rm -f "$HRP_DIR/fields.md"
+    if ! fetch_hrp_reader_source "$HRP_DIR/fields.md" ||
+      ! hrp_source_is_parseable "$HRP_DIR/fields.md"; then
+      rm -f "$HRP_DIR/fields.md"
+    fi
   fi
 
   if [[ ! -s "$HRP_DIR/fields.html" && ! -s "$HRP_DIR/fields.md" ]]; then
@@ -201,6 +213,23 @@ fetch_hrp_source() {
       "Hudson River Park field schedule" \
       "$HRP_URL" \
       "HRP_SOURCE_FILE"
+  fi
+}
+
+fetch_nyc_live_with_kernel_fallback() {
+  local url="$1"
+  local output="$2"
+
+  if curl -fsSL --max-time 10 --user-agent "$USER_AGENT" "$url" >"$output" &&
+    discard_invalid_json_dump "$output" "$url" "curl"; then
+    return 0
+  fi
+
+  if kernel_browser_curl "$url" "$output"; then
+    discard_invalid_json_dump "$output" "$url" "Kernel Browser Curl"
+  else
+    rm -f "$output"
+    return 1
   fi
 }
 
@@ -237,10 +266,8 @@ fetch_nyc_live_sources() {
           else
             discard_invalid_json_dump "$output" "$url" "Chrome" || true
           fi
-        elif kernel_browser_curl "$url" "$output"; then
-          discard_invalid_json_dump "$output" "$url" "Kernel Browser Curl" || true
         else
-          rm -f "$output"
+          fetch_nyc_live_with_kernel_fallback "$url" "$output" || true
         fi
 
         if [[ "$REQUIRE_FRESH_LIVE_SOURCES" == true && ! -s "$output" ]]; then
@@ -254,27 +281,34 @@ fetch_nyc_live_sources() {
 }
 
 run_generator() {
-  local args="--output=$OUTPUT_ROOT --live-days=$LIVE_DAYS --nyc-csv-source-dir=$NYC_CSV_DIR --nyc-live-source-dir=$NYC_LIVE_DIR"
+  local args=(
+    "--output=$OUTPUT_ROOT"
+    "--live-days=$LIVE_DAYS"
+    "--nyc-csv-source-dir=$NYC_CSV_DIR"
+    "--nyc-live-source-dir=$NYC_LIVE_DIR"
+  )
   if [[ -n "$HRP_SOURCE_FILE" ]]; then
-    args="$args --hrp-source-file=$HRP_SOURCE_FILE"
+    args+=("--hrp-source-file=$HRP_SOURCE_FILE")
   elif [[ -s "$HRP_DIR/fields.html" ]]; then
-    args="$args --hrp-source-file=$HRP_DIR/fields.html"
+    args+=("--hrp-source-file=$HRP_DIR/fields.html")
   elif [[ -s "$HRP_DIR/fields.md" ]]; then
-    args="$args --hrp-source-file=$HRP_DIR/fields.md"
+    args+=("--hrp-source-file=$HRP_DIR/fields.md")
   fi
   if [[ -n "$NYC_CLOSURES_SOURCE_FILE" ]]; then
-    args="$args --closures-source-file=$NYC_CLOSURES_SOURCE_FILE"
+    args+=("--closures-source-file=$NYC_CLOSURES_SOURCE_FILE")
   fi
   if [[ "$REQUIRE_FRESH_LIVE_SOURCES" == "true" ]]; then
-    args="$args --require-fresh-live-sources"
+    args+=(--require-fresh-live-sources)
   fi
 
-  ./gradlew :generator:run --args="$args"
+  "$GENERATOR" "${args[@]}"
 }
 
 main() {
   cd "$ROOT"
   validate_configuration
+  echo "Preparing the availability generator"
+  ./gradlew :generator:installDist
   mkdir -p "$HRP_DIR" "$NYC_CSV_DIR" "$NYC_LIVE_DIR"
 
   if [[ -n "$HRP_SOURCE_FILE" ]]; then
