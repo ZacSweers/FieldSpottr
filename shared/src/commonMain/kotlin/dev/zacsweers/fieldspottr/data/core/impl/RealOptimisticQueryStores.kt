@@ -533,7 +533,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * [apply] that throws is reported, and the change settles Dropped. An unknown answer leaves a
    * record without a value, which puts the change back on every truth fetched before the send until
    * a fetch from after the send replaces it, or until the record expires and the stale mark alone
-   * corrects the value. A stale mark that fails throws, so the commit runs again.
+   * corrects the value. A fetch from before the send that lands later keeps the stale mark, as
+   * [KeyStore.land] describes. A stale mark that fails throws, so the commit runs again.
    *
    * The record replaces what the set knew of the change in one update, found by the row id, so this
    * holds even when the row sent before its insert returned.
@@ -585,6 +586,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             truth = null,
             replaced = false,
             hasValue = false,
+            answerUnknown = true,
           )
         prune(key, current?.fetchedAt) { s -> s.withRecord(record) }
         return
@@ -970,7 +972,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      * The value may lack a send that finished after the fetch started, which only its in-memory
      * record shows. So the truth takes those changes too, as [withSent] puts them back, and a
      * restart still shows them. A [fetched] marked invalidated lands marked, whatever the sent
-     * changes do to its value.
+     * changes do to its value. So does one that lands while a change sent since its fetch has an
+     * unknown answer, since its value may be an estimate.
      *
      * After a [fetched] value, it prunes on the key's lock, so the confirmation of an earlier fetch
      * never applies after a later write.
@@ -987,9 +990,12 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
             }
           val folded = withSent(fetched, sentSince)
           // A server answer on record replaces the fetched value with its own, which is not
-          // stale. A write marked stale stays stale, so the truth never holds it as fresh.
+          // stale. A write marked stale stays stale all the same. So does a write while a change
+          // sent since its fetch has an unknown answer, so the truth never holds an estimate as
+          // fresh.
+          val stale = fetched?.invalidated == true || sentSince.any { it.answerUnknown }
           val next =
-            if (fetched?.invalidated == true && folded != null && !folded.invalidated) {
+            if (stale && folded != null && !folded.invalidated) {
               folded.copy(invalidated = true)
             } else {
               folded
@@ -1614,7 +1620,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * back. The rest keep only the change and its send time, as [withoutValue] and [marked] decide.
    *
    * [shown] says the list showed the row, [passed] that the list has moved past it, and [confirmed]
-   * that a fetch from after the send landed. A record goes when it expires.
+   * that a fetch from after the send landed. [answerUnknown] says the server's answer could not be
+   * decoded, so a truth with this change folded in is an estimate. A record goes when it expires.
    */
   private class Committed<K, T, M>(
     val change: EntryId,
@@ -1628,6 +1635,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     val shown: Boolean = false,
     val passed: Boolean = false,
     val confirmed: Boolean = false,
+    val answerUnknown: Boolean = false,
   ) {
     private fun copy(
       truth: Fetched<T>? = this.truth,
@@ -1649,6 +1657,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         shown,
         passed,
         confirmed,
+        answerUnknown,
       )
 
     /**

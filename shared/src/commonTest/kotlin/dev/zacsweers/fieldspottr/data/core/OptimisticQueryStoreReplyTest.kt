@@ -8,9 +8,11 @@ import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
-import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.concurrent.Volatile
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.minutes
@@ -32,18 +34,22 @@ class OptimisticQueryStoreReplyTest {
   private lateinit var sets: OptimisticQueryStores<Unit, Int, Int>
   private val base = FailingStore(QueryStore.inMemory(Fetched(0, START)))
 
-  /** A count over [base] that never goes stale by age, and a query over it. */
-  private fun TestScope.counter(): Pair<OptimisticQueryStore<Int, Int>, DataQuery<Int>> {
+  /**
+   * A count over [base] that never goes stale by age, and a query over it. [factory] holds the
+   * outbox rows, so a test can store rows before the count opens.
+   */
+  private fun TestScope.counter(
+    factory: TestDataScopeFactory = testDataScopeFactory(clock = testClock(START))
+  ): Pair<OptimisticQueryStore<Int, Int>, DataQuery<Int>> {
     data =
-      testDataScope(
-        clock = testClock(START),
-        senders =
-          setOf(
-            Counter.exchangingSender { change, _ ->
-              server += change.mutation
-              server
-            }
-          ),
+      factory.create(
+        backgroundScope,
+        setOf(
+          Counter.exchangingSender { change, _ ->
+            server += change.mutation
+            server
+          }
+        ),
       )
     sets =
       data.optimisticStores(
@@ -106,6 +112,35 @@ class OptimisticQueryStoreReplyTest {
     query.requestFetch(force = false).awaitSucceeded()
     assertThat(fetches).isEqualTo(2)
   }
+
+  /**
+   * A +1 sent before the count opened, whose stored answer cannot be decoded, then a fetch that
+   * read the server before the send. The folded value is an estimate, so the truth stays stale.
+   */
+  @Test
+  fun `an older fetch that folds in a change with an unknown answer leaves the truth stale`() =
+    runTest {
+      val factory = testDataScopeFactory(clock = testClock(START))
+      val rows = factory.outboxStore<KeyedMutation<Unit, Int>>(Counter.name)
+      val id = rows.insertNew("", KeyedMutation(Unit, 1))
+      val row = checkNotNull(rows.entry(id).first())
+      val sent = row.copy(status = OutboxStatus.Sent, sentAt = START, reply = "not json")
+      assertThat(rows.update(sent, expected = OutboxStatus.Queued)).isTrue()
+      val (store, query) = counter(factory)
+      rows.entry(id).first { it?.committed == true }
+      runCurrent()
+      assertThat(base.delegate.data.value?.invalidated).isEqualTo(true)
+
+      store.writeFetched(Fetched(0, START - 30.minutes)) { _, _ -> false }
+      assertThat(base.delegate.data.value?.value).isEqualTo(1)
+      assertThat(base.delegate.data.value?.invalidated).isEqualTo(true)
+      // The server took the change, and a fetch from after the send brings its word
+      server = 1
+      advanceTimeBy(1.minutes)
+      query.fetchIfStale().awaitSucceeded()
+      assertThat(fetches).isEqualTo(1)
+      assertThat(base.delegate.data.value).isEqualTo(Fetched(1, START + 1.minutes))
+    }
 
   /** A store whose writes throw while [failWrites] is set, like a full disk. */
   private class FailingStore<T>(val delegate: InMemoryQueryStore<T>) : QueryStore<T> {
