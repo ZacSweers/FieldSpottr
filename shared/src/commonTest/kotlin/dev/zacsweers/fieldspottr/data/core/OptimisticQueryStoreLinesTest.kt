@@ -248,7 +248,7 @@ class OptimisticQueryStoreLinesTest {
     val scopes = testDataScopeFactory(clock = testClock(START))
     val rows = scopes.outboxStore<KeyedMutation<Unit, Add>>("tags")
     // Rows a process sent on two lines and died before it committed either
-    for ((line, tag) in listOf("{}/x" to "b", "{}/y" to "c")) {
+    for ((line, tag) in listOf("2:{}/x" to "b", "2:{}/y" to "c")) {
       val id = rows.insertNew(key = line, payload = KeyedMutation(Unit, Add(tag)))
       val row = checkNotNull(rows.entry(id).first())
       rows.update(

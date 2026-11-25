@@ -31,6 +31,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.append
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
+import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
@@ -66,9 +67,16 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonUnquotedLiteral
 
 class OptimisticQueryStoreTest {
   /** Sets a note's text, or deletes the note when [text] is null. */
@@ -1530,7 +1538,45 @@ class OptimisticQueryStoreTest {
     assertThat(
         data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map { it.key }
       )
-      .containsExactly("\"x\"/y", "\"x\"")
+      .containsExactly("3:\"x\"/y", "\"x\"")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `keyed changes of two values whose order keys overlap stay on separate lines`() = runTest {
+    send.failure = { add, _ -> IllegalStateException("Transient").takeIf { add == Add("b") } }
+    val sender =
+      TagsByItem.sender(retry = RetryPolicy { 1.hours }) { change, id ->
+        send(change.mutation, id)
+      }
+    data = testDataScope(clock = testClock(START), senders = setOf(sender))
+    val stores =
+      data.optimisticStores(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey<String, List<String>>(),
+        keySerializer = BareKey,
+        apply = ::addOnce,
+      )
+
+    // Without the line's length, line "notes" with key "a/b" and line "notes/a" with key "b" join
+    // to one name
+    val b = stores.mutate("notes", Add("b"), Ordering.Keyed("a/b"))
+    stores.pending("notes").first { changes -> changes.any { it.retryAt != null } }
+    val c = stores.mutate("notes/a", Add("c"), Ordering.Keyed("b"))
+    runCurrent()
+
+    assertThat(send.sent).containsExactly(Add("c"))
+    c.assertSucceeded()
+    b.assertPending()
+    assertThat(
+        data
+          .outboxStore<KeyedMutation<String, Add>>("tagsByItem")
+          .entries()
+          .first()
+          .single { it.id == b.id }
+          .key
+      )
+      .isEqualTo("5:notes/a/b")
     data.assertNoFailures()
   }
 
@@ -1820,7 +1866,31 @@ class OptimisticQueryStoreTest {
           it.rejectKey
         }
       )
-      .containsExactly("\"x\"/k", "\"y\"/k")
+      .containsExactly("3:\"x\"/k", "3:\"y\"/k")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `reject keys of two values whose order keys overlap stay apart`() = runTest {
+    data =
+      testDataScope(clock = testClock(START), online = false, senders = setOf(tagsByItemSender()))
+    val stores =
+      data.optimisticStores(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey<String, List<String>>(),
+        keySerializer = BareKey,
+        apply = ::addOnce,
+      )
+
+    stores.mutate("notes", Add("b"), admission = Admission.Reject("a/b")).stored.awaitSucceeded()
+    stores.mutate("notes/a", Add("c"), admission = Admission.Reject("b")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map {
+          it.rejectKey
+        }
+      )
+      .containsExactly("5:notes/a/b", "7:notes/a/b")
     data.assertNoFailures()
   }
 
@@ -2587,6 +2657,18 @@ private val ReplyingTagsByItem =
 
 /** The tag lists' outbox, one list per name, beside [TagsByItem]. */
 private val TagsByName = OutboxKey<KeyedMutation<String, Add>>("tagsByName")
+
+/** Writes a key with no quotes, so one key's encoded form can be the start of another's. */
+@OptIn(ExperimentalSerializationApi::class)
+private object BareKey : KSerializer<String> {
+  override val descriptor = PrimitiveSerialDescriptor("BareKey", PrimitiveKind.STRING)
+
+  override fun serialize(encoder: Encoder, value: String) {
+    (encoder as JsonEncoder).encodeJsonElement(JsonUnquotedLiteral(value))
+  }
+
+  override fun deserialize(decoder: Decoder): String = decoder.decodeString()
+}
 
 /**
  * A new key for the tag lists' outbox, one list per [OptimisticQueryStoreTest.Item]. Each call

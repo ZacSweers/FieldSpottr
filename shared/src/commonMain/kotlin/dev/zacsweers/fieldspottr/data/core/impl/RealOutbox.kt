@@ -504,9 +504,9 @@ internal class RealOutbox<E>(
 
   /**
    * The row key of row [id] enqueued with [ordering] on the default line [line]: [line] itself for
-   * [Ordering.Serial], the id for [Ordering.Concurrent], and for [Ordering.Keyed] its key, after
-   * [line] and `/` unless [line] is empty, whatever its mode. Stored rows keep their keys, so these
-   * formats never change. [requireEntryCanTake] has checked [ordering].
+   * [Ordering.Serial], the id for [Ordering.Concurrent], and for [Ordering.Keyed] its key on [line]
+   * as [onLine] gives it, whatever its mode. Stored rows keep their keys, so these formats never
+   * change. [requireEntryCanTake] has checked [ordering].
    */
   private fun rowKeyOf(ordering: Ordering, line: String, id: EntryId): String =
     when (ordering) {
@@ -515,12 +515,17 @@ internal class RealOutbox<E>(
       is Ordering.Keyed -> onLine(line, ordering.key as String)
     }
 
-  /** [key] on the default line [line]: [key] itself when [line] is empty, else after `/`. */
+  /**
+   * [key] on the default line [line]: [key] itself when [line] is empty, else the length of [line],
+   * `:`, [line], `/` and [key]. The length marks where [line] ends. Without it, line `notes` with
+   * key `a/b` and line `notes/a` with key `b` both give `notes/a/b`. With it, they give
+   * `5:notes/a/b` and `7:notes/a/b`.
+   */
   private fun onLine(line: String, key: String): String =
     if (line.isEmpty()) {
       key
     } else {
-      "$line/$key"
+      "${line.length}:$line/$key"
     }
 
   /**
