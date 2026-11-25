@@ -1644,6 +1644,57 @@ class OptimisticQueryStoreTest {
   }
 
   @Test
+  fun `a refused ordering never shows its change to a live collector`() = runTest {
+    data =
+      testDataScope(
+        eager = true,
+        clock = testClock(START),
+        senders = setOf(Tags.sender(send = send)),
+      )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val seen = mutableListOf<Set<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
+    runCurrent()
+
+    for (ordering in
+      listOf(
+        Ordering.Keyed(42),
+        Ordering.Keyed("x", OnPrevious.Cancel),
+        Ordering.Keyed("x", OnPrevious.Supersede),
+      )) {
+      assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), ordering) }
+    }
+    runCurrent()
+
+    assertThat(seen.filter { "b" in it.orEmpty() }).isEmpty()
+    assertThat(send.attempts).isEmpty()
+  }
+
+  @Test
+  fun `a refused reject key never shows its change to a live collector`() = runTest {
+    data =
+      testDataScope(
+        eager = true,
+        clock = testClock(START),
+        senders = setOf(Tags.sender(send = send)),
+      )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val seen = mutableListOf<Set<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
+    runCurrent()
+
+    assertFailsWith<IllegalArgumentException> {
+      store.mutate(Add("b"), admission = Admission.Reject(42))
+    }
+    runCurrent()
+
+    assertThat(seen.filter { "b" in it.orEmpty() }).isEmpty()
+    assertThat(send.attempts).isEmpty()
+  }
+
+  @Test
   fun `a rejected change leaves data and pending as they were and fails its handle`() = runTest {
     val (store, _) = tags(online = false)
     store.mutate(Add("b"), admission = Admission.Reject("k")).stored.awaitSucceeded()

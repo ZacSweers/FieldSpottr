@@ -439,17 +439,11 @@ internal class RealOutbox<E>(
     line: String,
     admission: CancellableAdmission,
   ): OutboxOperation {
+    requireEntryCanTake(ordering, admission)
     val owner = checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner
     val rowKey = rowKeyOf(ordering, line, id)
     val rejection = (admission as? Admission.Reject)?.let { CommandRejectedException(it.key) }
-    val rejectKey = rejection?.let {
-      val key =
-        requireNotNull(it.key as? String) {
-          "Outbox $name takes only a String reject key, since the key is stored. Use a " +
-            "String key."
-        }
-      onLine(line, key)
-    }
+    val rejectKey = rejection?.let { onLine(line, it.key as String) }
     return tracked(id, Ordering.Keyed(Enqueue(rowKey)), rejectKey, rejection) { attempt ->
       if (
         rejection != null &&
@@ -484,28 +478,13 @@ internal class RealOutbox<E>(
    * The row key of row [id] enqueued with [ordering] on the default line [line]: [line] itself for
    * [Ordering.Serial], the id for [Ordering.Concurrent], and for [Ordering.Keyed] its key, after
    * [line] and `/` unless [line] is empty. Stored rows keep their keys, so these formats never
-   * change. It refuses a key that is not a `String`, since another type's `toString` can differ
-   * after a restart, and any [OnPrevious] but [OnPrevious.Wait].
+   * change. [requireEntryCanTake] has checked [ordering].
    */
   private fun rowKeyOf(ordering: Ordering, line: String, id: EntryId): String =
     when (ordering) {
       Ordering.Serial -> line
       Ordering.Concurrent -> id.value
-      is Ordering.Keyed -> {
-        require(ordering.onPrevious != OnPrevious.Cancel) {
-          "Outbox $name cannot cancel an earlier entry, since a send in flight may have reached " +
-            "the server. Use OnPrevious.Wait, and discard the earlier entry while it is queued."
-        }
-        require(ordering.onPrevious != OnPrevious.Supersede) {
-          "Outbox $name cannot supersede an earlier entry. Use OnPrevious.Wait."
-        }
-        val key =
-          requireNotNull(ordering.key as? String) {
-            "Outbox $name takes only a String key, since the key is stored and the toString of " +
-              "${ordering.key::class} can differ after a restart. Use a String key."
-          }
-        onLine(line, key)
-      }
+      is Ordering.Keyed -> onLine(line, ordering.key as String)
     }
 
   /** [key] on the default line [line]: [key] itself when [line] is empty, else after `/`. */
@@ -1611,6 +1590,35 @@ internal class RealOutbox<E>(
 }
 
 private const val WHOLE_QUEUE = ""
+
+/**
+ * Throws [IllegalArgumentException] for an [ordering] or an [admission] that an entry cannot take.
+ * It refuses [OnPrevious.Cancel], since a send in flight may have reached the server, and
+ * [OnPrevious.Supersede]. It refuses an [Ordering.Keyed] key and an [Admission.Reject] key that is
+ * not a `String`, since the key is stored and another type's `toString` can differ after a restart.
+ * [RealOutbox.enqueue] and an optimistic store's mutate run it before they change anything, so a
+ * refused call leaves nothing for a collector to see.
+ */
+internal fun requireEntryCanTake(ordering: Ordering, admission: CancellableAdmission) {
+  if (ordering is Ordering.Keyed) {
+    require(ordering.onPrevious != OnPrevious.Cancel) {
+      "An outbox cannot cancel an earlier entry, since a send in flight may have reached the " +
+        "server. Use OnPrevious.Wait, and discard the earlier entry while it is queued."
+    }
+    require(ordering.onPrevious != OnPrevious.Supersede) {
+      "An outbox cannot supersede an earlier entry. Use OnPrevious.Wait."
+    }
+    require(ordering.key is String) {
+      "An outbox takes only a String key, since the key is stored and the toString of " +
+        "${ordering.key::class} can differ after a restart. Use a String key."
+    }
+  }
+  if (admission is Admission.Reject) {
+    require(admission.key is String) {
+      "An outbox takes only a String reject key, since the key is stored. Use a String key."
+    }
+  }
+}
 
 /**
  * What [OutboxEntry.reply] holds when the server's answer failed to encode, so the commit runs with

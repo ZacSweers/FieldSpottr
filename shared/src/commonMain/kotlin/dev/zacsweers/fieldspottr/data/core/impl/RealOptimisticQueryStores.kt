@@ -310,10 +310,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   /**
    * Gives the change its row id, records it as Pending, then enqueues its row and follows it. The
    * row's write is registered in [storing] before the change is recorded, so a clear that finds the
-   * change also waits for its row, even while this call has not enqueued it yet. A refusal of
-   * [ordering] throws before the change is recorded, or from the enqueue, which forgets it. So does
-   * a refused [admission]. A rejected change fails its stored milestone, so it is forgotten like a
-   * change whose row could not be stored.
+   * change also waits for its row, even while this call has not enqueued it yet. A refused
+   * [ordering] or [admission] throws before the change is recorded, so no collector sees it. An
+   * enqueue that throws anyway forgets the change. A rejected change fails its stored milestone, so
+   * it is forgotten like a change whose row could not be stored.
    */
   override fun mutate(
     key: K,
@@ -325,6 +325,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       "This store's sender can answer with a value, so its changes take Ordering.Serial only. " +
         "Two lines could commit their answers out of order. Use Ordering.Serial."
     }
+    requireEntryCanTake(ordering, admission)
     val id = EntryId(Uuid.random().toString())
     val payload = KeyedMutation(key, mutation)
     val write = Storing(key)
