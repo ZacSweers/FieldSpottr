@@ -8,12 +8,18 @@ import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
 import assertk.assertThat
+import assertk.assertions.containsExactly
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.DataScope
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
+import dev.zacsweers.fieldspottr.data.core.EntryId
+import dev.zacsweers.fieldspottr.data.core.InMemoryOutboxStores
 import dev.zacsweers.fieldspottr.data.core.OutboxBacklog
+import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxSender
+import dev.zacsweers.fieldspottr.data.core.sender
 import kotlin.test.Test
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -57,6 +63,29 @@ class OutboxDrainWorkerTest {
   }
 
   @Test
+  fun `a run after a restart drains a stored row with no repository built`() = runTest {
+    val stores = InMemoryOutboxStores()
+    // Left by the process before the restart
+    stores.open(Notes.name, Notes.serializer).insert(EntryId("left"), "k", "a")
+    val sent = mutableListOf<String>()
+    val failures = mutableListOf<Throwable>()
+    val factory = DataScope.Factory(onFailure = { failures += it }, stores = stores)
+    // Creates the data scope with the senders only, as the graph's app data scope does
+    val worker =
+      TestListenableWorkerBuilder<OutboxDrainWorker>(context)
+        .setWorkerFactory(
+          OutboxDrainWorkerFactory(factory) {
+            factory.create(backgroundScope, setOf(Notes.sender { payload, _ -> sent += payload }))
+          }
+        )
+        .build()
+
+    assertThat(worker.doWork()).isEqualTo(ListenableWorker.Result.success())
+    assertThat(sent).containsExactly("a")
+    assertThat(failures).isEmpty()
+  }
+
+  @Test
   fun `rows left in a backoff end the run too, since the deadline has a request of its own`() =
     runTest {
       val worker = worker(flowOf(OutboxBacklog.BackingOff(Instant.fromEpochSeconds(0) + 1.minutes)))
@@ -87,6 +116,10 @@ class OutboxDrainWorkerTest {
         }
       )
       .build()
+
+  private companion object {
+    val Notes = OutboxKey<String>("notes")
+  }
 }
 
 /** A factory whose backlog is [backlog]. The worker never creates a data scope itself. */

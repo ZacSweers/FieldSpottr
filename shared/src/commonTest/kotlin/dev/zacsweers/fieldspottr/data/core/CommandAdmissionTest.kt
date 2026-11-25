@@ -198,13 +198,17 @@ class CommandAdmissionTest {
       }
     testScheduler.runCurrent()
 
-    running.cancel()
-    testScheduler.runCurrent()
-    // Its block still unwinds, so its work is not over
-    actions
-      .run(admission = Admission.Reject("export")) { ran += "too early" }
-      .assertFailed<CommandRejectedException>()
-    cleanup.complete(Unit)
+    try {
+      running.cancel()
+      testScheduler.runCurrent()
+      // Its block still unwinds, so its work is not over
+      actions
+        .run(admission = Admission.Reject("export")) { ran += "too early" }
+        .assertFailed<CommandRejectedException>()
+    } finally {
+      // Also after a failed check, so the held cleanup never outlives the test
+      cleanup.complete(Unit)
+    }
     testScheduler.runCurrent()
     val next = actions.run(admission = Admission.Reject("export")) { ran += "next" }
     testScheduler.runCurrent()

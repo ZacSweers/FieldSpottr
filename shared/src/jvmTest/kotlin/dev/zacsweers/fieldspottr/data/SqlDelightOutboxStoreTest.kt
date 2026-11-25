@@ -585,6 +585,21 @@ class SqlDelightOutboxStoresClearAllTest {
   }
 
   @Test
+  fun `clearing a set that opened no outbox deletes the rows an earlier set stored`() = runTest {
+    val earlier =
+      SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+    earlier.open("tags", String.serializer()).insertNew("k", "a")
+    earlier.open("notes", String.serializer()).insertNew("k", "b")
+    // Like the set of a new process, which has opened neither outbox
+    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+
+    stores.clearAll()
+
+    assertThat(stores.open("tags", String.serializer()).entries().first()).isEmpty()
+    assertThat(stores.open("notes", String.serializer()).entries().first()).isEmpty()
+  }
+
+  @Test
   fun `handles of rows a clear deletes settle cancelled`() = runBlocking {
     val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

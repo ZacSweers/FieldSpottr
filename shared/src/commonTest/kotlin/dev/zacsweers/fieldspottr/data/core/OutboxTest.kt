@@ -9,6 +9,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isLessThan
 import assertk.assertions.isNotEmpty
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
@@ -17,6 +18,7 @@ import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_ERROR_CHARS
 import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
 import dev.zacsweers.fieldspottr.data.core.impl.timersHeld
+import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
@@ -199,6 +201,32 @@ class OutboxTest {
     assertThat(outbox.retry(id).await()).isEqualTo(OperationState.Succeeded)
     assertThat(send.sent).containsExactly("a")
     assertThat(send.reverted).containsExactly("a")
+  }
+
+  @Test
+  fun `an enqueue handle reports a retry that raced its insert`() = runTest {
+    // The row is stored at once, and its insert returns ten seconds later
+    val stores = LaggingOutboxStores(insertReturnsAfter = 10.seconds)
+    val rows = stores.open(Rows.name, Rows.serializer)
+    val outbox = dataOver(rows).outbox(Rows, revert = send::revert)
+    runCurrent()
+    send.failPermanently()
+
+    val handle = outbox.enqueue("a")
+    runCurrent()
+    // The row sent and failed for good before its insert returned
+    assertThat(checkNotNull(rows.entry(handle.id).first()).status)
+      .isInstanceOf<OutboxStatus.Failed>()
+    handle.assertPending()
+
+    send.succeed()
+    outbox.retry(handle.id).awaitSucceeded()
+    assertThat(testScheduler.currentTime).isLessThan(10_000)
+    assertThat(send.sent).containsExactly("a")
+
+    // The handle follows the retry's attempt once the insert returns
+    handle.awaitSucceeded()
+    assertThat(send.attempts).containsExactly("a", "a")
   }
 
   @Test

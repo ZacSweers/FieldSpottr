@@ -78,6 +78,9 @@ class OptimisticQueryStoreStaleFetchTest {
     val store = stores("k")
     store.mutate(Add(REMOVE)).awaitSucceeded()
     assertThat(stores.committedRecords).isEqualTo(1)
+    // The commit removed the value, so an old one is stored again for the fetch write to remove
+    truth.write(Fetched(listOf("a"), START - 1.hours))
+    assertThat(stores.committedRecords).isEqualTo(1)
 
     store.writeFetched(Fetched(listOf("a"), START - 1.minutes, invalidated = true)) { _, _ ->
       false

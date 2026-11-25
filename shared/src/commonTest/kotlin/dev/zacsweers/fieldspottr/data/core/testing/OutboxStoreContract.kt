@@ -212,7 +212,9 @@ abstract class OutboxStoreContract {
     val id = store.insertNew("k", "a")
     val row = checkNotNull(store.entry(id).first())
 
-    store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Queued)
+    assertTrue(
+      store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Queued)
+    )
     assertEquals(emptyList(), store.entries().first())
     assertEquals(OutboxStatus.Sent, store.entry(id).first()?.status)
 
@@ -284,7 +286,7 @@ abstract class OutboxStoreContract {
     val store = newStore(1.minutes)
     val id = store.insertNew("k", "a")
     val row = checkNotNull(store.entry(id).first())
-    store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued)
+    assertTrue(store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued))
 
     advanceStoreTime(2.minutes)
     store.insertNew("k", "b")
@@ -304,7 +306,7 @@ abstract class OutboxStoreContract {
       }
     for (id in ids.take(3)) {
       val row = checkNotNull(store.entry(id).first())
-      store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued)
+      assertTrue(store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued))
     }
 
     // Oldest first, and the queued d is not owed
@@ -333,11 +335,13 @@ abstract class OutboxStoreContract {
     val store = newStore(1.minutes)
     val id = store.insertNew("k", "a")
     val row = checkNotNull(store.entry(id).first())
-    store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued)
+    assertTrue(store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued))
     advanceStoreTime(2.minutes)
 
     // Committed now, so its settled time starts now and the row stays readable for a while
-    store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Sent)
+    assertTrue(
+      store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Sent)
+    )
     store.insertNew("k", "b")
     assertEquals(OutboxStatus.Sent, store.entry(id).first()?.status)
     assertEquals(listOf("b"), store.entries().first().map { it.payload })

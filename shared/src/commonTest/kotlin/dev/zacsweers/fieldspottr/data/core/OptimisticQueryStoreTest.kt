@@ -248,6 +248,8 @@ class OptimisticQueryStoreTest {
       assertThat(handle.state.value).isEqualTo(OperationState.Cancelled)
     }
     data.online.value = true
+    // The reconnect watcher drains whatever is left before the check
+    runCurrent()
     assertThat(send.sent).isEmpty()
     assertThat(store.pending.first()).isEmpty()
   }
@@ -277,6 +279,8 @@ class OptimisticQueryStoreTest {
     }
     assertThat(store.pending.first()).isEmpty()
     data.online.value = true
+    // The reconnect watcher drains whatever is left before the check
+    runCurrent()
     assertThat(send.sent).isEmpty()
   }
 
@@ -1926,6 +1930,54 @@ class OptimisticQueryStoreTest {
   }
 
   /**
+   * Another writer stores a change, and this store lists it. A discard hides it from the moment the
+   * call returns, while the status write still takes a second.
+   */
+  @Test
+  fun `a discard hides a listed row of another writer before its write lands`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds)
+    val tags = factoryTags(stores, online = false) { _, _ -> }
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    val id = stores.delegate.open(Tags.name, Tags.serializer).insertNew("", Add("b"))
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a", "b"))
+
+    tags.discard(id)
+    runCurrent()
+
+    assertThat(seen.last()).isEqualTo(listOf("a"))
+    assertThat(tags.data.first()?.value).isEqualTo(listOf("a"))
+  }
+
+  /**
+   * Another writer stores a change that this store's lagging list has not shown yet. A discard
+   * cannot hide a row the store has neither made nor listed, so the change shows once the list
+   * does, until the discard's write lands.
+   */
+  @Test
+  fun `a discard does not hide a row this store has neither made nor listed`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 2.seconds, rowsLag = 1.seconds)
+    val tags = factoryTags(stores, online = false) { _, _ -> }
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    advanceTimeBy(2.seconds)
+    runCurrent()
+    val id = stores.delegate.open(Tags.name, Tags.serializer).insertNew("", Add("b"))
+
+    val discarding = tags.discard(id)
+    runCurrent()
+    assertThat(seen.last()).isEqualTo(listOf("a"))
+    advanceTimeBy(1.5.seconds)
+
+    // The list shows the row before the discard's write lands
+    assertThat(seen.last()).isEqualTo(listOf("a", "b"))
+    discarding.awaitSucceeded()
+    advanceTimeBy(2.seconds)
+    assertThat(seen.last()).isEqualTo(listOf("a"))
+  }
+
+  /**
    * Two retries of one failed row. The first sends and commits while a list a second behind still
    * shows the row, and the second retry's requeue reads the row slowly. The second retry finds the
    * change on record and adds no mark, so nothing stays known on an idle set.
@@ -1964,6 +2016,7 @@ class OptimisticQueryStoreTest {
     runCurrent()
     val id = tags.pending.first().single().id
     assertThat(sets.knownChanges).isEqualTo(0)
+    assertThat(tags.data.first()?.value).isEqualTo(emptyList<String>())
     rejected.value = false
     tags.retry(id).await()
     runCurrent()

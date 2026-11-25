@@ -11,6 +11,7 @@ import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
+import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.frozenClock
@@ -26,6 +27,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -581,6 +584,48 @@ class OutboxOwedReadTest {
 
       assertThat(send.sent).containsExactly("a")
       failures.assertNone()
+    } finally {
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
+  fun `a stop during an apply that waits for a cancelled sibling stores no row`() = runTest {
+    val send = TestSend<String>()
+    val sender = Rows.sender(store = textRows, send = send)
+    // A task of the owner that only ends when the owner stops
+    val sibling =
+      CoroutineScope(StandardTestDispatcher(testScheduler) + ownerJob).async<Unit> {
+        awaitCancellation()
+      }
+    val applied = mutableListOf<String>()
+    val waiting = CompletableDeferred<Unit>()
+    try {
+      val outbox =
+        dataScope(sender)
+          .outbox(
+            Rows,
+            apply = { payload, _ ->
+              waiting.complete(Unit)
+              // The owner's stop cancels the sibling, so this throws before the change is made
+              sibling.await()
+              applied += payload
+            },
+          )
+      runCurrent()
+      val handle = outbox.enqueue("a", key = "k")
+      runCurrent()
+      assertThat(waiting.isCompleted).isTrue()
+
+      ownerJob.cancel()
+      runCurrent()
+
+      assertThat(ownerJob.isCompleted).isTrue()
+      handle.stored.assertCancelled()
+      handle.assertCancelled()
+      assertThat(textRows.entries().first()).isEmpty()
+      assertThat(applied).isEmpty()
+      assertThat(send.attempts).isEmpty()
     } finally {
       ownerJob.cancel()
     }

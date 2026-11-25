@@ -123,6 +123,24 @@ class RowListFailureTest {
   }
 
   @Test
+  fun `a newer base value reaches the same collector while the row list fails`() = runTest {
+    base.update { Fetched("v0", START) }
+    val query = query()
+    val seen = mutableListOf<QueryState<String>>()
+    backgroundScope.launch { query.stateAutoFetch.collect { seen += it } }
+    runCurrent()
+    stores.failRowLists = true
+    advanceTimeBy(5.seconds)
+    assertThat(failures.take()).isNotEmpty()
+
+    base.update { Fetched("v1", START + 5.seconds) }
+    advanceTimeBy(1.seconds)
+
+    assertThat(seen.last()).isEqualTo(QueryState(Fetched("v1", START + 5.seconds), Idle))
+    assertThat(fetch.callCount).isEqualTo(0)
+  }
+
+  @Test
   fun `a forced request fetches while a check waits for a store that never emits`() = runTest {
     val stored = MutableStateFlow<Fetched<Int>?>(null)
     val silent =

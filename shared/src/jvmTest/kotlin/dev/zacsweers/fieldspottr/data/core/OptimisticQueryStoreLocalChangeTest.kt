@@ -141,6 +141,7 @@ class OptimisticQueryStoreLocalChangeTest {
         rejected.value = true
         tags.mutate(Add("b")).await()
         val id = tags.pending.first { it.singleOrNull()?.status is OutboxStatus.Failed }.single().id
+        assertThat(tags.data.first()?.value, "round $round").isEqualTo(emptyList<String>())
         rejected.value = false
         val calls = List(2) { async(Dispatchers.Default) { tags.retry(id).await() } }
         calls.awaitAll()
@@ -164,6 +165,7 @@ class OptimisticQueryStoreLocalChangeTest {
         rejected.value = true
         tags.mutate(Add("b")).await()
         val id = tags.pending.first { it.singleOrNull()?.status is OutboxStatus.Failed }.single().id
+        assertThat(tags.data.first()?.value, "round $round").isEqualTo(emptyList<String>())
         // Each requeue reads its row first, which fails here
         stores.failEntryReads = true
         val calls = List(2) { async(Dispatchers.Default) { tags.retry(id).await() } }

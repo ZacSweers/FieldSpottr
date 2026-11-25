@@ -682,7 +682,10 @@ class OutboxSenderTest {
     repeat(keys) { i ->
       val id = inner.insertNew("k$i", Add("t$i"))
       val row = checkNotNull(inner.entry(id).first())
-      inner.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+      assertThat(
+          inner.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+        )
+        .isTrue()
     }
     var wholeReads = 0
     var rowsRead = 0
@@ -755,6 +758,8 @@ class OutboxSenderTest {
       store.mutate(1)
       advanceTimeBy(10.milliseconds)
     }
+    // Every change reached the server, so only commits run from here
+    assertThat(server).isEqualTo(10 + changes)
     advanceTimeBy(30.minutes)
 
     assertThat(own.take().size).isEqualTo(attempts)
@@ -768,10 +773,13 @@ class OutboxSenderTest {
       val rows = factory.outboxStore<Int>(Counter.name)
       val id = rows.insertNew("", 1)
       val row = checkNotNull(rows.entry(id).first())
-      rows.update(
-        row.copy(status = OutboxStatus.Sent, sentAt = START, reply = "not json"),
-        OutboxStatus.Queued,
-      )
+      assertThat(
+          rows.update(
+            row.copy(status = OutboxStatus.Sent, sentAt = START, reply = "not json"),
+            OutboxStatus.Queued,
+          )
+        )
+        .isTrue()
       val data = factory.create(backgroundScope, setOf(Counter.sender { _, _ -> }))
       val truth = QueryStore.inMemory(Fetched(10, START - 1.hours))
       val store =
@@ -806,7 +814,10 @@ class OutboxSenderTest {
       val rows = stores.delegate.open(Counter.name, Int.serializer())
       val id = rows.insertNew("", 1)
       val row = checkNotNull(rows.entry(id).first())
-      rows.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+      assertThat(
+          rows.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+        )
+        .isTrue()
       val data = factory.create(backgroundScope, setOf(Counter.sender { _, _ -> }))
       val truth = QueryStore.inMemory(Fetched(10, START - 1.hours))
 
@@ -838,7 +849,10 @@ class OutboxSenderTest {
     val rows = stores.delegate.open(Counter.name, Int.serializer())
     val id = rows.insertNew("", 1)
     val row = checkNotNull(rows.entry(id).first())
-    rows.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+    assertThat(
+        rows.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+      )
+      .isTrue()
     val data = factory.create(backgroundScope, setOf(Counter.sender { _, _ -> }))
     val truth = QueryStore.inMemory(Fetched(10, START - 1.hours))
 
@@ -882,7 +896,10 @@ class OutboxSenderTest {
     val (rows, gate) = waitingRows()
     val id = rows.insertNew("\"y\"", KeyedMutation("y", 1))
     val row = checkNotNull(rows.entry(id).first())
-    rows.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+    assertThat(
+        rows.update(row.copy(status = OutboxStatus.Sent, sentAt = START), OutboxStatus.Queued)
+      )
+      .isTrue()
     val data =
       testDataScope(
         clock = testClock(START),

@@ -18,6 +18,7 @@ import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
+import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.QueryStore
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
 import dev.zacsweers.fieldspottr.data.core.sender
@@ -367,14 +368,21 @@ class TestFixturesTest {
     screen.newActionRunner().run { error("boom") }
     assertThat(app.actionFailures.take()).hasSize(1)
 
-    screen.outbox(Notes).enqueue("a")
+    val id = screen.outbox(Notes).enqueue("a").id
     assertThat(factory.outboxStore<String>("notes").entries().first().map { it.payload })
       .containsExactly("a")
+    // Another scope of the factory reads the same row
+    val waiting = checkNotNull(app.outboxStore<String>("notes").entry(id).first())
+    assertThat(waiting.payload).isEqualTo("a")
+    assertThat(waiting.status).isEqualTo(OutboxStatus.Queued)
     // The screen's scope ends, so another data scope can run the sender and send what it left
     owner.coroutineContext.job.cancelAndJoin()
     factory.create(backgroundScope, setOf(Notes.sender(send = send)))
     factory.online.value = true
     assertThat(send.sent).containsExactly("a")
+    val sent = checkNotNull(app.outboxStore<String>("notes").entry(id).first())
+    assertThat(sent.payload).isEqualTo("a")
+    assertThat(sent.status).isEqualTo(OutboxStatus.Sent)
     factory.assertNoFailures()
   }
 

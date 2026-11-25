@@ -179,6 +179,35 @@ class UnreadableRowTest {
     assertThat(reported.await().outbox).isEqualTo("labelled")
   }
 
+  @Test
+  fun `a row met before any listener is handed to the first listener`() = runTest {
+    writeLog("changes", OutboxLog.Row("old", key = "k", payload = OLD_CHANGE, status = "queued"))
+    val store =
+      DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+        .open("changes", Change.serializer())
+    assertThat(store.entries().first()).isEmpty()
+
+    val reports = mutableListOf<EntryId>()
+    store.onUndecodable { id, _ -> reports += id }
+
+    assertThat(reports).containsExactly(EntryId("old"))
+  }
+
+  @Test
+  fun `a listener set after a clear hears nothing of a row met before it`() = runTest {
+    writeLog("changes", OutboxLog.Row("old", key = "k", payload = OLD_CHANGE, status = "queued"))
+    val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
+    val store = stores.open("changes", Change.serializer())
+    assertThat(store.entries().first()).isEmpty()
+    stores.clearAll()
+
+    val reports = mutableListOf<EntryId>()
+    store.onUndecodable { id, _ -> reports += id }
+    assertThat(store.entries().first()).isEmpty()
+
+    assertThat(reports).isEmpty()
+  }
+
   /**
    * A [CancellationException] thrown by a payload serializer fails the read that met it, and leaves
    * the row readable by the next read, since it says nothing about the stored payload. A payload
