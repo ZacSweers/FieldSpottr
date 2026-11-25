@@ -3,6 +3,8 @@
 package dev.zacsweers.fieldspottr.data.core.impl
 
 import dev.zacsweers.fieldspottr.data.core.ActionRunner
+import dev.zacsweers.fieldspottr.data.core.Admission
+import dev.zacsweers.fieldspottr.data.core.CancellableAdmission
 import dev.zacsweers.fieldspottr.data.core.CancellableOperation
 import dev.zacsweers.fieldspottr.data.core.CommandRejectedException
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
@@ -36,7 +38,7 @@ import kotlinx.coroutines.launch
  * one ahead of it, so a new command finds its turn by walking back along its key. A key stays in
  * the map until every command on it has settled.
  *
- * The same map holds each conflict key with the command that was accepted under it, until that
+ * The same map holds each reject key with the command that was accepted under it, until that
  * command settles. So one compare-and-set joins, rejects or links a new command, and a rejection
  * reads one map entry however many commands wait.
  */
@@ -45,12 +47,12 @@ internal class RealActionRunner(
   private val scope: CoroutineScope,
   private val onFailure: (Throwable) -> Unit,
 ) : ActionRunner {
-  // Each ordering key's newest unsettled entry, and each conflict key's accepted command. Updated
-  // by compare-and-set only. Nothing observes it, so it needs no StateFlow.
+  // Each ordering key's newest unsettled entry, and each reject key's accepted command. Updated by
+  // compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val slots = AtomicReference(persistentHashMapOf<Slot, Entry>())
 
   /**
-   * How many ordering keys and conflict keys still hold a command. For tests, which cannot see the
+   * How many ordering keys and reject keys still hold a command. For tests, which cannot see the
    * map any other way.
    */
   internal val keysHeld: Int
@@ -71,12 +73,9 @@ internal class RealActionRunner(
    * carries an equal tag. A command without a join key has no tag, so nothing joins it, and that
    * includes every command from [runCancellable].
    */
-  override fun run(
-    ordering: Ordering,
-    joinKey: Any?,
-    conflictKey: Any?,
-    block: suspend () -> Unit,
-  ): Operation {
+  override fun run(ordering: Ordering, admission: Admission, block: suspend () -> Unit): Operation {
+    val joinKey = (admission as? Admission.Join)?.key
+    val rejectKey = (admission as? Admission.Reject)?.key
     require(joinKey == null || ordering.chainKey != null) {
       "A join key needs an ordering with a key, and Ordering.Concurrent has none"
     }
@@ -87,17 +86,18 @@ internal class RealActionRunner(
         { it.tag == joinKey }
       }
     val entry =
-      submit(ordering, joinKey, joins, passes = { false }, cancellable = false, conflictKey, block)
+      submit(ordering, joinKey, joins, passes = { false }, cancellable = false, rejectKey, block)
     // A settled plain handle, so no cast on it reaches a cancel
-    return entry?.handle ?: Operation.failed(CommandRejectedException(checkNotNull(conflictKey)))
+    return entry?.handle ?: Operation.failed(CommandRejectedException(checkNotNull(rejectKey)))
   }
 
   // A new command that joins nothing, so its entry is always the cancellable one built here
   override fun runCancellable(
     ordering: Ordering,
-    conflictKey: Any?,
+    admission: CancellableAdmission,
     block: suspend () -> Unit,
   ): CancellableOperation {
+    val rejectKey = (admission as? Admission.Reject)?.key
     val entry =
       submit(
         ordering,
@@ -105,9 +105,9 @@ internal class RealActionRunner(
         joins = { false },
         passes = { false },
         cancellable = true,
-        conflictKey,
+        rejectKey,
         block,
-      ) ?: return RejectedOperation(checkNotNull(conflictKey))
+      ) ?: return RejectedOperation(checkNotNull(rejectKey))
     return checkNotNull(entry.cancellableHandle) {
       "A new command's entry has no cancellable handle"
     }
@@ -128,18 +128,18 @@ internal class RealActionRunner(
     passes: (Entry) -> Boolean = { false },
     block: suspend () -> Unit,
   ): Operation {
-    val entry = submit(ordering, tag, joins, passes, cancellable = false, conflictKey = null, block)
-    return checkNotNull(entry) { "A command without a conflict key was rejected" }.handle
+    val entry = submit(ordering, tag, joins, passes, cancellable = false, rejectKey = null, block)
+    return checkNotNull(entry) { "A command without a reject key was rejected" }.handle
   }
 
   /**
    * The entry [runOrJoin] describes: the command it joined, or a new one it started. Only a new
    * entry built with [cancellable] true has a [Entry.cancellableHandle].
    *
-   * Returns null when [conflictKey] rejects the call: a command accepted under an equal key has not
+   * Returns null when [rejectKey] rejects the call: a command accepted under an equal key has not
    * settled. The join is tried first, since a joined call adds no command. One compare-and-set
-   * takes the conflict key and links the entry, so of two calls with one conflict key at most one
-   * is accepted, and a rejected call never changes the map.
+   * takes the reject key and links the entry, so of two calls with one reject key at most one is
+   * accepted, and a rejected call never changes the map.
    */
   private fun submit(
     ordering: Ordering,
@@ -147,15 +147,14 @@ internal class RealActionRunner(
     joins: (Entry) -> Boolean,
     passes: (Entry) -> Boolean,
     cancellable: Boolean,
-    conflictKey: Any?,
+    rejectKey: Any?,
     block: suspend () -> Unit,
   ): Entry? {
     val key = ordering.chainKey
-    val conflict = conflictKey?.let(::ConflictSlot)
+    val reject = rejectKey?.let(::RejectSlot)
     var entry: Entry? = null
-    // Serial is a key of its own. Concurrent has none, so it takes this path only for a conflict
-    // key.
-    while (key != null || conflict != null) {
+    // Serial is a key of its own. Concurrent has none, so it takes this path only for a reject key.
+    while (key != null || reject != null) {
       val current = slots.load()
       val tail = key?.let { current[it] }
       val joined = tail?.let { joinable(it, joins, passes) }
@@ -167,7 +166,7 @@ internal class RealActionRunner(
       // A holder whose handle settled may not have left the map yet, and its key is free already.
       // So a caller that awaits the handle and submits again is never rejected by the command it
       // just waited for.
-      val holder = conflict?.let { current[it] }
+      val holder = reject?.let { current[it] }
       if (holder != null && holder.state.value !is OperationState.Terminal) {
         entry?.job?.cancel()
         return null
@@ -179,15 +178,15 @@ internal class RealActionRunner(
       if (key != null) {
         updated = updated.putting(key, next)
       }
-      if (conflict != null) {
-        updated = updated.putting(conflict, next)
+      if (reject != null) {
+        updated = updated.putting(reject, next)
       }
       if (slots.compareAndSet(current, updated)) {
         break
       }
     }
     val started = entry ?: newEntry(ordering, tag, cancellable, block)
-    startLinked(started, key, conflict)
+    startLinked(started, key, reject)
     return started
   }
 
@@ -211,29 +210,29 @@ internal class RealActionRunner(
   }
 
   /**
-   * Starts [entry] once it is linked on [key] and holds [conflict], or at once when it has neither.
+   * Starts [entry] once it is linked on [key] and holds [reject], or at once when it has neither.
    */
-  private fun startLinked(entry: Entry, key: ChainKey?, conflict: ConflictSlot?) {
+  private fun startLinked(entry: Entry, key: ChainKey?, reject: RejectSlot?) {
     // Registered once linked, so it also runs for a job that ended before then, like one whose
     // scope was already cancelled
     if (key != null) {
       entry.settled.invokeOnCompletion { releaseSettledTail(key) }
     }
-    if (conflict != null) {
-      entry.settled.invokeOnCompletion { releaseConflict(conflict, entry) }
+    if (reject != null) {
+      entry.settled.invokeOnCompletion { releaseRejectKey(reject, entry) }
     }
     claimPredecessors(entry)
     entry.job?.start()
   }
 
   /**
-   * Frees [conflict] once [holder] has settled, unless a newer command took the key in the
-   * meantime, which a call may do as soon as the holder's handle has settled.
+   * Frees [reject] once [holder] has settled, unless a newer command took the key in the meantime,
+   * which a call may do as soon as the holder's handle has settled.
    */
-  private fun releaseConflict(conflict: ConflictSlot, holder: Entry) {
+  private fun releaseRejectKey(reject: RejectSlot, holder: Entry) {
     slots.update { current ->
-      if (current[conflict] === holder) {
-        current.removing(conflict)
+      if (current[reject] === holder) {
+        current.removing(reject)
       } else {
         current
       }
@@ -599,13 +598,13 @@ private suspend fun requireNotWaitingOnItself(entry: Entry) {
 }
 
 /**
- * The handle [ActionRunner.runCancellable] returns for a call that its conflict key rejected:
- * already failed, with nothing to cancel.
+ * The handle [ActionRunner.runCancellable] returns for a call that its reject key rejected: already
+ * failed, with nothing to cancel.
  */
 @OptIn(DelicateDataLayerApi::class)
-private class RejectedOperation(conflictKey: Any) : CancellableOperation {
+private class RejectedOperation(rejectKey: Any) : CancellableOperation {
   override val state: StateFlow<OperationState> =
-    MutableStateFlow(OperationState.Failed(CommandRejectedException(conflictKey))).asStateFlow()
+    MutableStateFlow(OperationState.Failed(CommandRejectedException(rejectKey))).asStateFlow()
 
   override fun cancel() {}
 }
@@ -634,7 +633,7 @@ internal enum class Claim {
   Superseded,
 }
 
-/** What the runner's map is keyed by: an ordering key's chain, or a conflict key. */
+/** What the runner's map is keyed by: an ordering key's chain, or a reject key. */
 internal sealed interface Slot
 
 /** The chain a command joins. Wrapping keeps [Ordering.Serial] from colliding with a caller key. */
@@ -644,8 +643,8 @@ internal sealed interface ChainKey : Slot {
   data class Keyed(val key: Any) : ChainKey
 }
 
-/** A caller's conflict key. Wrapping keeps it apart from an ordering key that equals it. */
-private data class ConflictSlot(val key: Any) : Slot
+/** A caller's reject key. Wrapping keeps it apart from an ordering key that equals it. */
+private data class RejectSlot(val key: Any) : Slot
 
 @OptIn(DelicateDataLayerApi::class)
 internal val Ordering.chainKey: ChainKey?

@@ -32,7 +32,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
 /**
- * Conflict keys on [ActionRunner.run] and [ActionRunner.runCancellable]: a call is rejected while a
+ * Reject keys on [ActionRunner.run] and [ActionRunner.runCancellable]: a call is rejected while a
  * command accepted under an equal key has not settled, and a rejection changes nothing for the
  * commands already accepted.
  */
@@ -49,15 +49,15 @@ class CommandAdmissionTest {
     val release = CompletableDeferred<Unit>()
 
     val a =
-      actions.run(conflictKey = "a") {
+      actions.run(admission = Admission.Reject("a")) {
         release.await()
         ran += "a"
       }
-    val b = actions.run(conflictKey = "b") { ran += "b" }
-    val again = actions.run(conflictKey = "a") { ran += "a again" }
+    val b = actions.run(admission = Admission.Reject("b")) { ran += "b" }
+    val again = actions.run(admission = Admission.Reject("a")) { ran += "a again" }
 
     // Rejected before anything ran, with the key that rejected it
-    assertThat(again.assertFailed<CommandRejectedException>().conflictKey).isEqualTo("a")
+    assertThat(again.assertFailed<CommandRejectedException>().key).isEqualTo("a")
     a.assertPending()
     b.assertPending()
     release.complete(Unit)
@@ -71,14 +71,14 @@ class CommandAdmissionTest {
   }
 
   @Test
-  fun `a conflict key is free again once its command succeeds or fails`() = runTest {
+  fun `a reject key is free again once its command succeeds or fails`() = runTest {
     val actions = actions()
 
-    actions.run(conflictKey = "export") { ran += "first" }
+    actions.run(admission = Admission.Reject("export")) { ran += "first" }
     testScheduler.runCurrent()
-    actions.run(conflictKey = "export") { error("disk full") }
+    actions.run(admission = Admission.Reject("export")) { error("disk full") }
     testScheduler.runCurrent()
-    val third = actions.run(conflictKey = "export") { ran += "third" }
+    val third = actions.run(admission = Admission.Reject("export")) { ran += "third" }
     testScheduler.runCurrent()
 
     third.assertSucceeded()
@@ -88,38 +88,45 @@ class CommandAdmissionTest {
   }
 
   @Test
-  fun `a caller that sees its command settle may submit its conflict key again at once`() =
-    runTest {
-      val actions = actions()
-      val first = actions.run(conflictKey = "export") { ran += "first" }
-      var again: Operation? = null
-      // Unconfined, so this resumes inside the state change, before the command's job completes
-      // and lets go of the key
-      backgroundScope.launch(Dispatchers.Unconfined) {
-        first.state.first { it is OperationState.Terminal }
-        again = actions.run(conflictKey = "export") { ran += "again" }
-      }
-      testScheduler.runCurrent()
-
-      first.assertSucceeded()
-      checkNotNull(again).assertSucceeded()
-      assertThat(ran).containsExactly("first", "again")
-      assertThat(actions.keysHeld).isEqualTo(0)
+  fun `a caller that sees its command settle may submit its reject key again at once`() = runTest {
+    val actions = actions()
+    val first = actions.run(admission = Admission.Reject("export")) { ran += "first" }
+    var again: Operation? = null
+    // Unconfined, so this resumes inside the state change, before the command's job completes
+    // and lets go of the key
+    backgroundScope.launch(Dispatchers.Unconfined) {
+      first.state.first { it is OperationState.Terminal }
+      again = actions.run(admission = Admission.Reject("export")) { ran += "again" }
     }
+    testScheduler.runCurrent()
+
+    first.assertSucceeded()
+    checkNotNull(again).assertSucceeded()
+    assertThat(ran).containsExactly("first", "again")
+    assertThat(actions.keysHeld).isEqualTo(0)
+  }
 
   @Test
-  fun `commands that share a conflict key reject each other whatever their ordering`() = runTest {
+  fun `commands that share a reject key reject each other whatever their ordering`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
 
     // Different work on different keys, one group: none may be pending beside another
-    val upload = actions.run(Ordering.Keyed("photo-1"), conflictKey = "sync") { release.await() }
-    val download = actions.run(Ordering.Keyed("photo-2"), conflictKey = "sync") { ran += "down" }
-    val serial = actions.run(conflictKey = "sync") { ran += "serial" }
+    val upload =
+      actions.run(Ordering.Keyed("photo-1"), admission = Admission.Reject("sync")) {
+        release.await()
+      }
+    val download =
+      actions.run(Ordering.Keyed("photo-2"), admission = Admission.Reject("sync")) { ran += "down" }
+    val serial = actions.run(admission = Admission.Reject("sync")) { ran += "serial" }
     @OptIn(DelicateDataLayerApi::class)
-    val concurrent = actions.run(Ordering.Concurrent, conflictKey = "sync") { ran += "concurrent" }
+    val concurrent =
+      actions.run(Ordering.Concurrent, admission = Admission.Reject("sync")) { ran += "concurrent" }
     // A command outside the group runs beside it
-    val other = actions.run(Ordering.Keyed("photo-2"), conflictKey = "export") { ran += "export" }
+    val other =
+      actions.run(Ordering.Keyed("photo-2"), admission = Admission.Reject("export")) {
+        ran += "export"
+      }
     testScheduler.runCurrent()
 
     upload.assertRunning()
@@ -132,17 +139,18 @@ class CommandAdmissionTest {
   }
 
   @Test
-  fun `a concurrent command holds its conflict key until it settles`() = runTest {
+  fun `a concurrent command holds its reject key until it settles`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
 
     @OptIn(DelicateDataLayerApi::class)
-    val first = actions.run(Ordering.Concurrent, conflictKey = "sync") { release.await() }
+    val first =
+      actions.run(Ordering.Concurrent, admission = Admission.Reject("sync")) { release.await() }
     testScheduler.runCurrent()
-    val rejected = actions.run(conflictKey = "sync") { ran += "second" }
+    val rejected = actions.run(admission = Admission.Reject("sync")) { ran += "second" }
     release.complete(Unit)
     testScheduler.runCurrent()
-    val accepted = actions.run(conflictKey = "sync") { ran += "third" }
+    val accepted = actions.run(admission = Admission.Reject("sync")) { ran += "third" }
     testScheduler.runCurrent()
 
     first.assertSucceeded()
@@ -153,19 +161,20 @@ class CommandAdmissionTest {
   }
 
   @Test
-  fun `a command cancelled while queued frees its conflict key`() = runTest {
+  fun `a command cancelled while queued frees its reject key`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
     actions.run { release.await() }
     testScheduler.runCurrent()
 
-    val queued = actions.runCancellable(conflictKey = "export") { ran += "cancelled" }
+    val queued =
+      actions.runCancellable(admission = Admission.Reject("export")) { ran += "cancelled" }
     actions
-      .run(conflictKey = "export") { ran += "rejected" }
+      .run(admission = Admission.Reject("export")) { ran += "rejected" }
       .assertFailed<CommandRejectedException>()
     queued.cancel()
     testScheduler.runCurrent()
-    val next = actions.run(conflictKey = "export") { ran += "next" }
+    val next = actions.run(admission = Admission.Reject("export")) { ran += "next" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -176,50 +185,49 @@ class CommandAdmissionTest {
   }
 
   @Test
-  fun `a command cancelled while it runs keeps its conflict key until its cleanup ends`() =
-    runTest {
-      val actions = actions()
-      val cleanup = CompletableDeferred<Unit>()
-      val running =
-        actions.runCancellable(conflictKey = "export") {
-          try {
-            CompletableDeferred<Unit>().await()
-          } finally {
-            withContext(NonCancellable) { cleanup.await() }
-          }
+  fun `a command cancelled while it runs keeps its reject key until its cleanup ends`() = runTest {
+    val actions = actions()
+    val cleanup = CompletableDeferred<Unit>()
+    val running =
+      actions.runCancellable(admission = Admission.Reject("export")) {
+        try {
+          CompletableDeferred<Unit>().await()
+        } finally {
+          withContext(NonCancellable) { cleanup.await() }
         }
-      testScheduler.runCurrent()
+      }
+    testScheduler.runCurrent()
 
-      running.cancel()
-      testScheduler.runCurrent()
-      // Its block still unwinds, so its work is not over
-      actions
-        .run(conflictKey = "export") { ran += "too early" }
-        .assertFailed<CommandRejectedException>()
-      cleanup.complete(Unit)
-      testScheduler.runCurrent()
-      val next = actions.run(conflictKey = "export") { ran += "next" }
-      testScheduler.runCurrent()
+    running.cancel()
+    testScheduler.runCurrent()
+    // Its block still unwinds, so its work is not over
+    actions
+      .run(admission = Admission.Reject("export")) { ran += "too early" }
+      .assertFailed<CommandRejectedException>()
+    cleanup.complete(Unit)
+    testScheduler.runCurrent()
+    val next = actions.run(admission = Admission.Reject("export")) { ran += "next" }
+    testScheduler.runCurrent()
 
-      running.assertCancelled()
-      next.assertSucceeded()
-      assertThat(ran).containsExactly("next")
-    }
+    running.assertCancelled()
+    next.assertSucceeded()
+    assertThat(ran).containsExactly("next")
+  }
 
   @Test
-  fun `a replaced command frees its conflict key`() = runTest {
+  fun `a replaced command frees its reject key`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
     val saving = Ordering.Keyed("draft", OnPrevious.Supersede)
     actions.run(saving) { release.await() }
     testScheduler.runCurrent()
 
-    val replaced = actions.run(saving, conflictKey = "save") { ran += "replaced" }
-    // No conflict key, so it is accepted and replaces the queued save
+    val replaced = actions.run(saving, admission = Admission.Reject("save")) { ran += "replaced" }
+    // No reject key, so it is accepted and replaces the queued save
     actions.run(saving) { ran += "newest" }
     testScheduler.runCurrent()
     replaced.assertCancelled()
-    val next = actions.run(conflictKey = "save") { ran += "next" }
+    val next = actions.run(admission = Admission.Reject("save")) { ran += "next" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -234,14 +242,15 @@ class CommandAdmissionTest {
     val release = CompletableDeferred<Unit>()
     val cancelling = Ordering.Keyed("search", OnPrevious.Cancel)
     val running =
-      actions.run(cancelling, conflictKey = "search") {
+      actions.run(cancelling, admission = Admission.Reject("search")) {
         release.await()
         ran += "running"
       }
     testScheduler.runCurrent()
 
     // Accepted, it would cancel the running command
-    val rejected = actions.run(cancelling, conflictKey = "search") { ran += "rejected" }
+    val rejected =
+      actions.run(cancelling, admission = Admission.Reject("search")) { ran += "rejected" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -254,51 +263,31 @@ class CommandAdmissionTest {
   fun `a rejected cancellable call returns a failed handle whose cancel does nothing`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
-    val accepted = actions.runCancellable(conflictKey = "export") { release.await() }
+    val accepted =
+      actions.runCancellable(admission = Admission.Reject("export")) { release.await() }
     testScheduler.runCurrent()
 
-    val rejected = actions.runCancellable(conflictKey = "export") { ran += "rejected" }
+    val rejected =
+      actions.runCancellable(admission = Admission.Reject("export")) { ran += "rejected" }
     rejected.cancel()
     testScheduler.runCurrent()
 
     rejected.assertFailed<CommandRejectedException>()
     accepted.assertRunning()
     // A plain call's rejected handle is plain too
-    assertThat(actions.run(conflictKey = "export") {} is CancellableOperation).isFalse()
+    assertThat(actions.run(admission = Admission.Reject("export")) {} is CancellableOperation)
+      .isFalse()
     release.complete(Unit)
   }
 
   @Test
-  fun `a join is tried before the conflict key`() = runTest {
-    val actions = actions()
-    val release = CompletableDeferred<Unit>()
-    val note = Ordering.Keyed("note-1")
-
-    val fetch =
-      actions.run(note, joinKey = "fetch", conflictKey = "fetch") {
-        release.await()
-        ran += "fetch"
-      }
-    // The newest command on the key is the same work, so this call shares it
-    val joined = actions.run(note, joinKey = "fetch", conflictKey = "fetch") { ran += "joined" }
-    actions.run(note) { ran += "write" }
-    // A write lies in between now, so the call cannot join, and the first fetch still holds the key
-    val rejected = actions.run(note, joinKey = "fetch", conflictKey = "fetch") { ran += "rejected" }
-    release.complete(Unit)
-    testScheduler.runCurrent()
-
-    assertThat(joined).isSameInstanceAs(fetch)
-    rejected.assertFailed<CommandRejectedException>()
-    assertThat(ran).containsExactly("fetch", "write")
-  }
-
-  @Test
-  fun `an ordering key and a conflict key that are equal do not collide`() = runTest {
+  fun `an ordering key and a reject key that are equal do not collide`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
 
     actions.run(Ordering.Keyed("note-1")) { release.await() }
-    val accepted = actions.run(Ordering.Keyed("note-2"), conflictKey = "note-1") { ran += "ran" }
+    val accepted =
+      actions.run(Ordering.Keyed("note-2"), admission = Admission.Reject("note-1")) { ran += "ran" }
     testScheduler.runCurrent()
 
     accepted.assertSucceeded()
@@ -306,24 +295,24 @@ class CommandAdmissionTest {
   }
 
   @Test
-  fun `a runner whose scope ended keeps no conflict key`() = runTest {
+  fun `a runner whose scope ended keeps no reject key`() = runTest {
     val scope =
       CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
     val actions = RealActionRunner(scope, failures)
-    actions.run(conflictKey = "a") { CompletableDeferred<Unit>().await() }
-    actions.run(conflictKey = "b") {}
+    actions.run(admission = Admission.Reject("a")) { CompletableDeferred<Unit>().await() }
+    actions.run(admission = Admission.Reject("b")) {}
     testScheduler.runCurrent()
 
     scope.cancel()
     testScheduler.runCurrent()
     // Submitted after the scope ended, so it settles at once and holds nothing
-    actions.run(conflictKey = "c") {}.assertCancelled()
+    actions.run(admission = Admission.Reject("c")) {}.assertCancelled()
 
     assertThat(actions.keysHeld).isEqualTo(0)
   }
 
   @Test
-  fun `a call that loses its conflict key to a call made meanwhile is rejected`() = runTest {
+  fun `a call that loses its reject key to a call made meanwhile is rejected`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
     var winner: Operation? = null
@@ -332,13 +321,13 @@ class CommandAdmissionTest {
     val key =
       HookedKey("export") {
         winner =
-          actions.run(conflictKey = HookedKey("export")) {
+          actions.run(admission = Admission.Reject(HookedKey("export"))) {
             release.await()
             ran += "winner"
           }
       }
 
-    val loser = actions.run(conflictKey = key) { ran += "loser" }
+    val loser = actions.run(admission = Admission.Reject(key)) { ran += "loser" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -353,10 +342,11 @@ class CommandAdmissionTest {
     val actions = actions()
     var between: Operation? = null
     // Another key's command links while this call is between its read and its link
-    val key = HookedKey("a") { between = actions.run(conflictKey = "b") { ran += "b" } }
+    val key =
+      HookedKey("a") { between = actions.run(admission = Admission.Reject("b")) { ran += "b" } }
 
-    val a = actions.run(conflictKey = key) { ran += "a" }
-    val again = actions.run(conflictKey = HookedKey("a")) { ran += "a again" }
+    val a = actions.run(admission = Admission.Reject(key)) { ran += "a" }
+    val again = actions.run(admission = Admission.Reject(HookedKey("a"))) { ran += "a again" }
     testScheduler.runCurrent()
 
     a.assertSucceeded()
@@ -375,9 +365,13 @@ class CommandAdmissionTest {
     testScheduler.runCurrent()
 
     val accepted =
-      List(BACKLOG) { i -> actions.run(conflictKey = CountedKey(i, counter)) { ran += "$i" } }
+      List(BACKLOG) { i ->
+        actions.run(admission = Admission.Reject(CountedKey(i, counter))) { ran += "$i" }
+      }
     val rejected =
-      List(BACKLOG) { i -> actions.run(conflictKey = CountedKey(i, counter)) { ran += "again $i" } }
+      List(BACKLOG) { i ->
+        actions.run(admission = Admission.Reject(CountedKey(i, counter))) { ran += "again $i" }
+      }
 
     rejected.forEach { it.assertFailed<CommandRejectedException>() }
     release.complete(Unit)
@@ -402,13 +396,15 @@ class CommandAdmissionTest {
 
       val accepted =
         List(BACKLOG) { i ->
-          actions.runCancellable(conflictKey = CountedKey(i, counter)) { ran += "$i" }
+          actions.runCancellable(admission = Admission.Reject(CountedKey(i, counter))) {
+            ran += "$i"
+          }
         }
       accepted.filterIndexed { i, _ -> i % 3 == 0 }.forEach { it.cancel() }
       testScheduler.runCurrent()
       val retried =
         List(BACKLOG) { i ->
-          actions.run(conflictKey = CountedKey(i, counter)) { ran += "retry $i" }
+          actions.run(admission = Admission.Reject(CountedKey(i, counter))) { ran += "retry $i" }
         }
 
       // A cancelled command's key is free once it settled. Every other key still rejects.
@@ -438,9 +434,12 @@ class CommandAdmissionTest {
     testScheduler.runCurrent()
 
     val queued =
-      List(BACKLOG) { i -> actions.run(joinKey = CountedKey(i, counter)) { ran += "$i" } }
-    val joined = actions.run(joinKey = CountedKey(BACKLOG - 1, counter)) { ran += "joined" }
-    val older = actions.run(joinKey = CountedKey(0, counter)) { ran += "0 again" }
+      List(BACKLOG) { i ->
+        actions.run(admission = Admission.Join(CountedKey(i, counter))) { ran += "$i" }
+      }
+    val joined =
+      actions.run(admission = Admission.Join(CountedKey(BACKLOG - 1, counter))) { ran += "joined" }
+    val older = actions.run(admission = Admission.Join(CountedKey(0, counter))) { ran += "0 again" }
 
     assertThat(joined).isSameInstanceAs(queued.last())
     assertThat(older).isNotSameInstanceAs(queued.first())

@@ -37,11 +37,14 @@ interface ActionRunner {
    * it can cancel the command. The command still stops when the runner's scope stops, or when a
    * newer command replaces it through [OnPrevious.Cancel] or [OnPrevious.Supersede].
    *
-   * A [joinKey] lets callers that ask for the same work one after another share one run of it. The
-   * call looks at the newest command on [ordering]'s key that has not settled. When that command
-   * was run with an equal join key, the call starts nothing and returns that command's handle,
-   * whatever [OnPrevious] it asked for. Any other command in that place ends the search, so a join
-   * never crosses a command in between:
+   * [admission] says what the call does when a matching command has not settled. With
+   * [Admission.Queue], the default, the command lines up as [ordering] says.
+   *
+   * [Admission.Join] lets callers that ask for the same work one after another share one run of it.
+   * The call looks at the newest command on [ordering]'s key that has not settled. When that
+   * command was run with an equal join key, the call starts nothing and returns that command's
+   * handle, whatever [OnPrevious] it asked for. Any other command in that place ends the search, so
+   * a join never crosses a command in between:
    * ```
    * k:  [read A, "fetch"] <-- [write B] <-- [read C, "fetch"]
    *
@@ -51,23 +54,22 @@ interface ActionRunner {
    * So put a read and the writes it must follow on one key. A caller that stops waiting on a shared
    * handle changes nothing for the others, since no holder can cancel the command. A command from
    * [runCancellable] is never joined. A join key needs a key to look on, so [Ordering.Concurrent]
-   * with one throws [IllegalArgumentException].
+   * with [Admission.Join] throws [IllegalArgumentException].
    *
-   * A [conflictKey] rejects the call while a command run with an equal conflict key on this runner
+   * [Admission.Reject] rejects the call while a command run with an equal reject key on this runner
    * has not settled, whatever the ordering of either. A rejected call starts nothing and leaves
    * every accepted command in its place. Its handle is already [OperationState.Failed] with a
    * [CommandRejectedException], and no failure handler hears of it. Commands that must never be
-   * pending together share one conflict key. The key is free again once its command settles,
-   * cancelled or not. With both keys, the join is tried first.
+   * pending together share one reject key. The key is free again once its command settles,
+   * cancelled or not.
    *
-   * A join key is compared with `equals` to the newest command's join key alone. A conflict key is
+   * A join key is compared with `equals` to the newest command's join key alone. A reject key is
    * looked up by `hashCode` and `equals`, like a map key. So a call costs the same however many
    * commands wait.
    */
   fun run(
     ordering: Ordering = Ordering.Serial,
-    joinKey: Any? = null,
-    conflictKey: Any? = null,
+    admission: Admission = Admission.Queue,
     block: suspend () -> Unit,
   ): Operation
 
@@ -75,13 +77,13 @@ interface ActionRunner {
    * [run], with a handle that can also cancel the command, as [CancellableOperation.cancel]
    * describes. An owner that returns this handle to its callers lets them cancel the command.
    *
-   * It takes a [conflictKey] as [run] does. A rejected call's handle is already Failed, and its
-   * `cancel` does nothing. It takes no join key, since one holder's cancel would stop the command
-   * for every caller that shares it.
+   * It takes [Admission.Queue] or [Admission.Reject] as [run] does. A rejected call's handle is
+   * already Failed, and its `cancel` does nothing. It takes no [Admission.Join], since one holder's
+   * cancel would stop the command for every caller that shares it.
    */
   fun runCancellable(
     ordering: Ordering = Ordering.Serial,
-    conflictKey: Any? = null,
+    admission: CancellableAdmission = Admission.Queue,
     block: suspend () -> Unit,
   ): CancellableOperation
 
@@ -89,13 +91,42 @@ interface ActionRunner {
 }
 
 /**
- * Why a command never ran: when it was submitted, another command with an equal [conflictKey] had
- * not settled on its runner. It is the cause of the Failed handle that [ActionRunner.run] and
- * [ActionRunner.runCancellable] return for a rejected call, so a caller can tell a rejection from a
- * command that ran and failed.
+ * What a call to [ActionRunner.run] or [ActionRunner.runCancellable] does when a matching command
+ * has not settled, as [ActionRunner.run] describes.
  */
-class CommandRejectedException(val conflictKey: Any) :
-  IllegalStateException("A command with conflict key $conflictKey has not settled yet")
+sealed interface Admission {
+  /** Starts a new command, which lines up as its ordering says. The default. */
+  data object Queue : CancellableAdmission
+
+  /**
+   * Returns the handle of the newest unsettled command on the ordering's key when that command was
+   * run with an equal join [key]. Otherwise starts a new command. It needs an ordering with a key,
+   * so [Ordering.Concurrent] with it throws [IllegalArgumentException].
+   */
+  data class Join(val key: Any) : Admission
+
+  /**
+   * Fails the call while a command run with an equal reject [key] on the same runner has not
+   * settled, whatever the ordering of either. Otherwise starts a new command that holds the key
+   * until it settles.
+   */
+  data class Reject(val key: Any) : CancellableAdmission
+}
+
+/**
+ * The admissions [ActionRunner.runCancellable] takes. It leaves out [Admission.Join], since one
+ * holder's cancel would stop a shared command for every caller that shares it.
+ */
+sealed interface CancellableAdmission : Admission
+
+/**
+ * Why a command never ran: when it was submitted, another command with an equal reject [key] had
+ * not settled on its runner. It is the cause of the Failed handle that [ActionRunner.run] and
+ * [ActionRunner.runCancellable] return for a call that [Admission.Reject] rejected, so a caller can
+ * tell a rejection from a command that ran and failed.
+ */
+class CommandRejectedException(val key: Any) :
+  IllegalStateException("A command with reject key $key has not settled yet")
 
 /**
  * Runs commands where each new one cancels the one before it, like a search field's queries. Every

@@ -21,48 +21,47 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeout
 
-/** Conflict keys while several threads submit at once and commands settle on real threads. */
+/** Reject keys while several threads submit at once and commands settle on real threads. */
 class CommandAdmissionThreadsTest {
   @Test
-  fun `of the threads that submit one conflict key at once exactly one is accepted`() =
-    runBlocking {
-      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-      val failures = Collections.synchronizedList(mutableListOf<Throwable>())
-      val actions = RealActionRunner(scope) { failures += it }
-      try {
-        repeat(ROUNDS) { round ->
-          val release = CountDownLatch(1)
-          val barrier = CyclicBarrier(THREADS)
-          val handles = ConcurrentLinkedQueue<Operation>()
-          val ran = ConcurrentLinkedQueue<Int>()
-          val submitters =
-            List(THREADS) { index ->
-              TestThread {
-                barrier.await(10, SECONDS)
-                handles +=
-                  actions.run(Ordering.Keyed(index), conflictKey = "sync") {
-                    ran += index
-                    runInterruptible { release.await() }
-                  }
-              }
+  fun `of the threads that submit one reject key at once exactly one is accepted`() = runBlocking {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failures = Collections.synchronizedList(mutableListOf<Throwable>())
+    val actions = RealActionRunner(scope) { failures += it }
+    try {
+      repeat(ROUNDS) { round ->
+        val release = CountDownLatch(1)
+        val barrier = CyclicBarrier(THREADS)
+        val handles = ConcurrentLinkedQueue<Operation>()
+        val ran = ConcurrentLinkedQueue<Int>()
+        val submitters =
+          List(THREADS) { index ->
+            TestThread {
+              barrier.await(10, SECONDS)
+              handles +=
+                actions.run(Ordering.Keyed(index), admission = Admission.Reject("sync")) {
+                  ran += index
+                  runInterruptible { release.await() }
+                }
             }
-          submitters.forEach { it.joinOrFail(10_000) }
-
-          val rejected = handles.count {
-            (it.state.value as? OperationState.Failed)?.cause is CommandRejectedException
           }
-          assertThat(rejected, "round $round").isEqualTo(THREADS - 1)
-          release.countDown()
-          withTimeout(10_000) { handles.forEach { it.await() } }
-          // Only the accepted command ran
-          assertThat(ran.size, "round $round").isEqualTo(1)
+        submitters.forEach { it.joinOrFail(10_000) }
+
+        val rejected = handles.count {
+          (it.state.value as? OperationState.Failed)?.cause is CommandRejectedException
         }
-        check(waitForKeys(actions)) { "A conflict key was never released" }
-        assertThat(failures).isEmpty()
-      } finally {
-        scope.cancel()
+        assertThat(rejected, "round $round").isEqualTo(THREADS - 1)
+        release.countDown()
+        withTimeout(10_000) { handles.forEach { it.await() } }
+        // Only the accepted command ran
+        assertThat(ran.size, "round $round").isEqualTo(1)
       }
+      check(waitForKeys(actions)) { "A reject key was never released" }
+      assertThat(failures).isEmpty()
+    } finally {
+      scope.cancel()
     }
+  }
 
   @Test
   fun `accepted commands from many threads run in each thread's order and rejected ones never`() =
@@ -89,8 +88,8 @@ class CommandAdmissionThreadsTest {
               barrier.await(10, SECONDS)
               for (step in 0 until COMMANDS) {
                 val key = owner to step
-                accepted += actions.run(conflictKey = key) { ran += key }
-                copies += actions.run(conflictKey = key) { ran += -1 to -1 }
+                accepted += actions.run(admission = Admission.Reject(key)) { ran += key }
+                copies += actions.run(admission = Admission.Reject(key)) { ran += -1 to -1 }
               }
             }
           }
@@ -110,7 +109,7 @@ class CommandAdmissionThreadsTest {
           val steps = ran.filter { it.first == owner }.map { it.second }
           assertThat(steps, "thread $owner").isEqualTo(List(COMMANDS) { it })
         }
-        check(waitForKeys(actions)) { "A conflict key was never released" }
+        check(waitForKeys(actions)) { "A reject key was never released" }
         assertThat(failures).isEmpty()
       } finally {
         scope.cancel()

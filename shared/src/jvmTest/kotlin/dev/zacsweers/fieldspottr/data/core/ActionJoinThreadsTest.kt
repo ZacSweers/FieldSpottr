@@ -53,7 +53,7 @@ class ActionJoinThreadsTest {
                 repeat(READS) {
                   val call = calls.incrementAndGet()
                   val read =
-                    actions.run(note, joinKey = "fetch") {
+                    actions.run(note, admission = Admission.Join("fetch")) {
                       seen[call] = version.get()
                       yield()
                     }

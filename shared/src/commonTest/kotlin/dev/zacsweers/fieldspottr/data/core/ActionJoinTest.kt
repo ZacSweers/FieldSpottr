@@ -45,8 +45,8 @@ class ActionJoinTest {
   fun `calls with one join key made one after another share one command`() = runTest {
     val actions = actions()
 
-    val first = actions.run(NOTE, joinKey = "fetch") { ran += "fetch" }
-    val second = actions.run(NOTE, joinKey = "fetch") { ran += "fetch again" }
+    val first = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "fetch" }
+    val second = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "fetch again" }
     testScheduler.runCurrent()
 
     assertThat(second).isSameInstanceAs(first)
@@ -61,13 +61,13 @@ class ActionJoinTest {
     val release = CompletableDeferred<Unit>()
 
     val readA =
-      actions.run(NOTE, joinKey = "fetch") {
+      actions.run(NOTE, admission = Admission.Join("fetch")) {
         ran += "read A"
         release.await()
       }
     testScheduler.runCurrent()
     val writeB = actions.run(NOTE) { ran += "write B" }
-    val readC = actions.run(NOTE, joinKey = "fetch") { ran += "read C" }
+    val readC = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "read C" }
 
     assertThat(readC).isNotSameInstanceAs(readA)
     readA.assertRunning()
@@ -85,11 +85,11 @@ class ActionJoinTest {
   fun `a later read joins the read queued behind the write`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
-    actions.run(NOTE, joinKey = "fetch") { release.await() }
+    actions.run(NOTE, admission = Admission.Join("fetch")) { release.await() }
     actions.run(NOTE) { ran += "write" }
 
-    val readC = actions.run(NOTE, joinKey = "fetch") { ran += "read C" }
-    val readD = actions.run(NOTE, joinKey = "fetch") { ran += "read D" }
+    val readC = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "read C" }
+    val readD = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "read D" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -102,14 +102,14 @@ class ActionJoinTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
     val running =
-      actions.run(NOTE, joinKey = "fetch") {
+      actions.run(NOTE, admission = Admission.Join("fetch")) {
         ran += "fetch"
         release.await()
       }
     testScheduler.runCurrent()
     running.assertRunning()
 
-    val joined = actions.run(NOTE, joinKey = "fetch") { ran += "fetch again" }
+    val joined = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "fetch again" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -120,11 +120,11 @@ class ActionJoinTest {
   @Test
   fun `a settled command is not joined`() = runTest {
     val actions = actions()
-    val first = actions.run(NOTE, joinKey = "fetch") { ran += "first" }
+    val first = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "first" }
     testScheduler.runCurrent()
     first.assertSucceeded()
 
-    val second = actions.run(NOTE, joinKey = "fetch") { ran += "second" }
+    val second = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "second" }
     testScheduler.runCurrent()
 
     assertThat(second).isNotSameInstanceAs(first)
@@ -134,13 +134,13 @@ class ActionJoinTest {
   @Test
   fun `a call made as the newest command settles starts a command of its own`() = runTest {
     val actions = actions()
-    val first = actions.run(NOTE, joinKey = "fetch") { ran += "first" }
+    val first = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "first" }
     var second: Operation? = null
     // Unconfined, so this resumes inside the state change, before the command's job completes
     // and leaves its key
     backgroundScope.launch(Dispatchers.Unconfined) {
       first.state.first { it is OperationState.Terminal }
-      second = actions.run(NOTE, joinKey = "fetch") { ran += "second" }
+      second = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "second" }
     }
     testScheduler.runCurrent()
 
@@ -153,12 +153,12 @@ class ActionJoinTest {
   fun `only an equal join key on the same ordering key joins`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
-    val fetch = actions.run(NOTE, joinKey = "fetch") { release.await() }
+    val fetch = actions.run(NOTE, admission = Admission.Join("fetch")) { release.await() }
 
-    val otherWork = actions.run(NOTE, joinKey = "export") {}
-    val otherNote = actions.run(Ordering.Keyed("note-2"), joinKey = "fetch") {}
+    val otherWork = actions.run(NOTE, admission = Admission.Join("export")) {}
+    val otherNote = actions.run(Ordering.Keyed("note-2"), admission = Admission.Join("fetch")) {}
     val unkeyed = actions.run(Ordering.Keyed("note-3")) {}
-    val afterUnkeyed = actions.run(Ordering.Keyed("note-3"), joinKey = "fetch") {}
+    val afterUnkeyed = actions.run(Ordering.Keyed("note-3"), admission = Admission.Join("fetch")) {}
 
     assertThat(otherWork).isNotSameInstanceAs(fetch)
     assertThat(otherNote).isNotSameInstanceAs(fetch)
@@ -172,9 +172,9 @@ class ActionJoinTest {
     val actions = actions()
     data class Page(val number: Int)
 
-    val first = actions.run(joinKey = Page(1)) { ran += "page" }
-    val second = actions.run(joinKey = Page(1)) { ran += "page again" }
-    val other = actions.run(joinKey = Page(2)) { ran += "next page" }
+    val first = actions.run(admission = Admission.Join(Page(1))) { ran += "page" }
+    val second = actions.run(admission = Admission.Join(Page(1))) { ran += "page again" }
+    val other = actions.run(admission = Admission.Join(Page(2))) { ran += "next page" }
     testScheduler.runCurrent()
 
     assertThat(second).isSameInstanceAs(first)
@@ -189,23 +189,25 @@ class ActionJoinTest {
     val release = CompletableDeferred<Unit>()
     val cancelling = Ordering.Keyed("search", OnPrevious.Cancel)
     val running =
-      actions.run(cancelling, joinKey = "query") {
+      actions.run(cancelling, admission = Admission.Join("query")) {
         ran += "search"
         release.await()
       }
     testScheduler.runCurrent()
 
     // Without the join key, this call would cancel the running command
-    val joined = actions.run(cancelling, joinKey = "query") { ran += "search again" }
+    val joined =
+      actions.run(cancelling, admission = Admission.Join("query")) { ran += "search again" }
     testScheduler.runCurrent()
     running.assertRunning()
     assertThat(joined).isSameInstanceAs(running)
 
     val superseding = Ordering.Keyed("save", OnPrevious.Supersede)
     actions.run(superseding) { release.await() }
-    val queued = actions.run(superseding, joinKey = "draft") { ran += "save" }
+    val queued = actions.run(superseding, admission = Admission.Join("draft")) { ran += "save" }
     // Without the join key, this call would replace the queued command
-    val joinedSave = actions.run(superseding, joinKey = "draft") { ran += "save again" }
+    val joinedSave =
+      actions.run(superseding, admission = Admission.Join("draft")) { ran += "save again" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -220,11 +222,11 @@ class ActionJoinTest {
       val actions = actions()
       val release = CompletableDeferred<Unit>()
       val first =
-        actions.run(NOTE, joinKey = "fetch") {
+        actions.run(NOTE, admission = Admission.Join("fetch")) {
           release.await()
           ran += "fetch"
         }
-      val second = actions.run(NOTE, joinKey = "fetch") { ran += "fetch again" }
+      val second = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "fetch again" }
       val leaving = launch { first.await() }
       val staying = async { second.await() }
       testScheduler.runCurrent()
@@ -244,8 +246,8 @@ class ActionJoinTest {
   fun `a shared handle cannot cancel its command`() = runTest {
     val actions = actions()
 
-    val first = actions.run(NOTE, joinKey = "fetch") {}
-    val second = actions.run(NOTE, joinKey = "fetch") {}
+    val first = actions.run(NOTE, admission = Admission.Join("fetch")) {}
+    val second = actions.run(NOTE, admission = Admission.Join("fetch")) {}
 
     assertThat(first is CancellableOperation).isFalse()
     assertThat(second is CancellableOperation).isFalse()
@@ -262,7 +264,7 @@ class ActionJoinTest {
       }
     testScheduler.runCurrent()
 
-    val later = actions.run(NOTE, joinKey = "fetch") { ran += "fetch" }
+    val later = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "fetch" }
     assertThat(later).isNotSameInstanceAs(cancellable)
     // Its holder's cancel stops only its own command
     cancellable.cancel()
@@ -277,11 +279,15 @@ class ActionJoinTest {
   fun `a newer cancel command stops a shared command for every caller`() = runTest {
     val actions = actions()
     val cancelling = Ordering.Keyed("search", OnPrevious.Cancel)
-    val first = actions.run(cancelling, joinKey = "kotlin") { CompletableDeferred<Unit>().await() }
-    val second = actions.run(cancelling, joinKey = "kotlin") {}
+    val first =
+      actions.run(cancelling, admission = Admission.Join("kotlin")) {
+        CompletableDeferred<Unit>().await()
+      }
+    val second = actions.run(cancelling, admission = Admission.Join("kotlin")) {}
     testScheduler.runCurrent()
 
-    val newer = actions.run(cancelling, joinKey = "kotlin multiplatform") { ran += "newer" }
+    val newer =
+      actions.run(cancelling, admission = Admission.Join("kotlin multiplatform")) { ran += "newer" }
     testScheduler.runCurrent()
 
     assertThat(second).isSameInstanceAs(first)
@@ -295,8 +301,8 @@ class ActionJoinTest {
     val actions = actions()
     val failure = IllegalStateException("offline")
 
-    val first = actions.run(NOTE, joinKey = "fetch") { throw failure }
-    val second = actions.run(NOTE, joinKey = "fetch") {}
+    val first = actions.run(NOTE, admission = Admission.Join("fetch")) { throw failure }
+    val second = actions.run(NOTE, admission = Admission.Join("fetch")) {}
     testScheduler.runCurrent()
 
     assertThat(first.assertFailed<IllegalStateException>()).isSameInstanceAs(failure)
@@ -308,14 +314,14 @@ class ActionJoinTest {
   fun `a call joins the running command once a cancelled one behind it settled`() = runTest {
     val actions = actions()
     val release = CompletableDeferred<Unit>()
-    val running = actions.run(NOTE, joinKey = "fetch") { release.await() }
+    val running = actions.run(NOTE, admission = Admission.Join("fetch")) { release.await() }
     testScheduler.runCurrent()
     val cancelled = actions.runCancellable(NOTE) { ran += "write" }
 
     cancelled.cancel()
     testScheduler.runCurrent()
     // The write never ran, so nothing lies between the two reads
-    val joined = actions.run(NOTE, joinKey = "fetch") { ran += "fetch again" }
+    val joined = actions.run(NOTE, admission = Admission.Join("fetch")) { ran += "fetch again" }
     release.complete(Unit)
     testScheduler.runCurrent()
 
@@ -329,7 +335,7 @@ class ActionJoinTest {
 
     @OptIn(DelicateDataLayerApi::class)
     assertFailsWith<IllegalArgumentException> {
-      actions.run(Ordering.Concurrent, joinKey = "fetch") { ran += "fetch" }
+      actions.run(Ordering.Concurrent, admission = Admission.Join("fetch")) { ran += "fetch" }
     }
     testScheduler.runCurrent()
 

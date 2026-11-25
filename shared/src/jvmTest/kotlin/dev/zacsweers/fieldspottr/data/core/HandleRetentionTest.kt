@@ -336,20 +336,21 @@ class HandleRetentionTest {
     }
 
   @Test
-  fun `a settled handle does not keep its join key or its conflict key`() = runTest {
+  fun `a settled handle does not keep its join key or its reject key`() = runTest {
     val joinKey = ByteArray(1 shl 20)
-    val conflictKey = ByteArray(1 shl 20)
+    val rejectKey = ByteArray(1 shl 20)
     val actions = testDataScope().newActionRunner()
-    val handle = actions.run(joinKey = joinKey, conflictKey = conflictKey) {}
-    val rejected = actions.run(conflictKey = conflictKey) {}
+    val joining = actions.run(admission = Admission.Join(joinKey)) {}
+    val rejecting = actions.run(admission = Admission.Reject(rejectKey)) {}
+    val rejected = actions.run(admission = Admission.Reject(rejectKey)) {}
     testScheduler.runCurrent()
 
-    handle.assertSucceeded()
-    assertThat(handle.reaches(joinKey)).isFalse()
-    assertThat(handle.reaches(conflictKey)).isFalse()
+    joining.assertSucceeded()
+    rejecting.assertSucceeded()
+    assertThat(joining.reaches(joinKey)).isFalse()
+    assertThat(rejecting.reaches(rejectKey)).isFalse()
     // A rejected handle names the key that rejected it, for the caller to read
-    assertThat(rejected.assertFailed<CommandRejectedException>().conflictKey)
-      .isSameInstanceAs(conflictKey)
+    assertThat(rejected.assertFailed<CommandRejectedException>().key).isSameInstanceAs(rejectKey)
   }
 
   @Test
