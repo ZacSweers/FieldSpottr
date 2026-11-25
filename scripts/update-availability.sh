@@ -16,7 +16,7 @@ HRP_SOURCE_FILE="${HRP_SOURCE_FILE:-}"
 NYC_CLOSURES_SOURCE_FILE="${NYC_CLOSURES_SOURCE_FILE:-}"
 USER_AGENT="${USER_AGENT:-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36}"
 HRP_URL="https://hudsonriverpark.org/visit/events/permits/fields/"
-HRP_READER_URL="https://r.jina.ai/http://r.jina.ai/http://$HRP_URL"
+HRP_READER_URL="https://r.jina.ai/$HRP_URL"
 CHROME="${CHROME:-}"
 
 find_chrome() {
@@ -111,8 +111,7 @@ hrp_source_is_parseable() {
   local source_file="$1"
 
   ./gradlew --quiet :generator:run \
-    --args="--validate-hrp-source=$source_file" \
-    >/dev/null 2>&1
+    --args="--validate-hrp-source=$source_file"
 }
 
 require_staged_hrp_source_in_strict_mode() {
@@ -187,13 +186,16 @@ fetch_hrp_source() {
   fi
   if [[ -s "$HRP_DIR/fields.html" ]] &&
     ! hrp_source_is_parseable "$HRP_DIR/fields.html"; then
-    echo "Primary Hudson River Park response produced no schedule rows; using reader fallback." >&2
+    echo "Primary Hudson River Park response failed schedule validation; using reader fallback." >&2
     rm -f "$HRP_DIR/fields.html"
   fi
 
   if [[ ! -s "$HRP_DIR/fields.html" ]]; then
     echo "Dumping Hudson River Park field schedule via reader fallback"
-    curl -fsSL "$HRP_READER_URL" >"$HRP_DIR/fields.md" || rm -f "$HRP_DIR/fields.md"
+    if ! curl -fsSL --max-time 60 "$HRP_READER_URL" >"$HRP_DIR/fields.md" ||
+      ! hrp_source_is_parseable "$HRP_DIR/fields.md"; then
+      rm -f "$HRP_DIR/fields.md"
+    fi
   fi
 
   if [[ ! -s "$HRP_DIR/fields.html" && ! -s "$HRP_DIR/fields.md" ]]; then
