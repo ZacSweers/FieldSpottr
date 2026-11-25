@@ -216,6 +216,23 @@ fetch_hrp_source() {
   fi
 }
 
+fetch_nyc_live_with_kernel_fallback() {
+  local url="$1"
+  local output="$2"
+
+  if curl -fsSL --max-time 10 --user-agent "$USER_AGENT" "$url" >"$output" &&
+    discard_invalid_json_dump "$output" "$url" "curl"; then
+    return 0
+  fi
+
+  if kernel_browser_curl "$url" "$output"; then
+    discard_invalid_json_dump "$output" "$url" "Kernel Browser Curl"
+  else
+    rm -f "$output"
+    return 1
+  fi
+}
+
 fetch_nyc_live_sources() {
   local today="$1"
 
@@ -249,10 +266,8 @@ fetch_nyc_live_sources() {
           else
             discard_invalid_json_dump "$output" "$url" "Chrome" || true
           fi
-        elif kernel_browser_curl "$url" "$output"; then
-          discard_invalid_json_dump "$output" "$url" "Kernel Browser Curl" || true
         else
-          rm -f "$output"
+          fetch_nyc_live_with_kernel_fallback "$url" "$output" || true
         fi
 
         if [[ "$REQUIRE_FRESH_LIVE_SOURCES" == true && ! -s "$output" ]]; then
