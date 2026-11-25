@@ -23,10 +23,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -165,7 +167,8 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
     val directory = "/outbox".toPath()
     fileSystem.createDirectories(directory)
     val codec = String.serializer().asCodec(Json)
-    // DataStore allows one active instance per file, so the first scope ends before the reopen
+    // DataStore allows one active instance per file. It lets go of the file once its scope has
+    // finished, which a cancel alone does not wait for.
     val earlier = CoroutineScope(Job())
     val before =
       DataStoreOutboxStore(
@@ -173,7 +176,7 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
         codec,
       )
     before.insert(EntryId("rejecting"), "k", "a", rejectKey = "r")
-    earlier.cancel()
+    earlier.coroutineContext.job.cancelAndJoin()
 
     val store =
       DataStoreOutboxStore(
