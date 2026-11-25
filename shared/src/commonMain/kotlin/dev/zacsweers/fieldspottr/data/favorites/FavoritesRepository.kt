@@ -9,7 +9,6 @@ import dev.zacsweers.fieldspottr.data.core.Freshness
 import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.PendingMutation
 import dev.zacsweers.fieldspottr.data.core.QueryStore
-import dev.zacsweers.fieldspottr.data.core.data
 import dev.zacsweers.fieldspottr.data.core.inFile
 import dev.zacsweers.fieldspottr.data.core.values
 import dev.zacsweers.fieldspottr.di.IoDispatcher
@@ -26,12 +25,12 @@ import kotlinx.serialization.json.Json
 
 /**
  * The user's favorite field groups, changed locally first and sent to [FavoritesApi] after. The
- * truth is the last set fetched from the server, in a DataStore file, and each change is a row of
- * the [FavoritesOutbox] beside it until the server takes it. [favorites] shows the truth with the
- * waiting changes on top, so a tap shows at once, offline too, and a restart shows the same.
+ * truth is the last set fetched from the server, in a DataStore file, and each change is an entry
+ * of the [FavoritesOutboxKey] beside it until the server takes it. [favorites] shows the truth with
+ * the waiting changes on top, so a tap shows at once, offline too, and a restart shows the same.
  *
  * This repository holds the handle on the outbox. Its sender, [favoritesSender], belongs to the app
- * data scope, so rows stored before a restart send before this repository exists, like in a
+ * data scope, so entries stored before a restart send before this repository exists, like in a
  * WorkManager drain on Android. A change sent then reaches the truth when this repository is built.
  *
  * It is the app's first use of [DataScope.optimisticStore], and it exercises the whole path: outbox
@@ -67,7 +66,7 @@ internal constructor(
 
   private val store =
     data.optimisticStore(
-      FavoritesOutbox,
+      FavoritesOutboxKey,
       base = base,
       // Idempotent: a group set on twice is on once, so a resend or an overlapping fetch is safe
       apply = { current, change ->
@@ -82,7 +81,7 @@ internal constructor(
   private val query = data.query(store, Freshness.staleAfter(1.hours), fetch = api::favorites)
 
   /** The favorite groups, local changes included. Collecting it fetches first when stale. */
-  val favorites: Flow<Set<String>> = query.data.values().map { it.orEmpty() }
+  val favorites: Flow<Set<String>> = query.dataAutoFetch.values().map { it.orEmpty() }
 
   /** Changes the server has not confirmed, oldest first, for a badge and for retry. */
   val unsynced: Flow<List<PendingMutation<FavoriteChange>>> = store.pending

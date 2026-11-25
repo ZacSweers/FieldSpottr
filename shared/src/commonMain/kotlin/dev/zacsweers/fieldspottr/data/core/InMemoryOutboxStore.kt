@@ -89,7 +89,10 @@ internal class InMemoryOutboxStore<E>(
   override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
     var written = false
     rows.update { current ->
-      val row = current.all[entry.id]
+      // Looks in the pruned rows, so an expired row fails like a missing one, and the write below
+      // never puts it back
+      val pruned = current.pruned()
+      val row = pruned.all[entry.id]
       written = row != null && row.entry.status == expected
       if (row == null || !written) {
         current
@@ -105,7 +108,6 @@ internal class InMemoryOutboxStore<E>(
             sentAt = entry.sentAt,
             reply = entry.reply,
           )
-        val pruned = current.pruned()
         if (updated.status.isSettled) {
           // A Sent row waits in all until it is committed, and only then gets a settled time
           val settledAt = time.markNow().takeIf { updated.isDone }

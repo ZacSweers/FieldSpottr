@@ -2,15 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
+import assertk.assertThat
+import assertk.assertions.containsExactly
+import assertk.assertions.isEqualTo
 import dev.zacsweers.fieldspottr.data.core.testing.QueryStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.RecordingQueryStore
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
+import kotlin.test.Test
+import kotlin.time.Instant
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.serializer
 import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
@@ -37,6 +45,32 @@ class ComposedQueryStoreContractTest : QueryStoreContract() {
         state.writeFetched(fetched, keepsStored)
       },
     )
+  }
+
+  @Test
+  fun `a store with no invalidate of its own reads once and writes back once`() = runTest {
+    val stored = Fetched("a", Instant.parse("2026-06-10T12:00:00Z"))
+    val state = MutableStateFlow<Fetched<String>?>(stored)
+    var reads = 0
+    val writes = mutableListOf<Fetched<String>>()
+    val store =
+      QueryStore.of(
+        flow {
+          reads++
+          emitAll(state)
+        },
+        clear = state::clearFetched,
+        write = { fetched, keepsStored ->
+          writes += fetched
+          state.writeFetched(fetched, keepsStored)
+        },
+      )
+
+    store.invalidate()
+
+    assertThat(reads).isEqualTo(1)
+    assertThat(writes).containsExactly(stored.copy(invalidated = true))
+    assertThat(state.value).isEqualTo(stored.copy(invalidated = true))
   }
 }
 

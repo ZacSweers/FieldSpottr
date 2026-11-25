@@ -40,6 +40,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -49,7 +50,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.sync.Semaphore
@@ -87,14 +88,15 @@ internal class RealDataScopeFactory(
   /** The hold-off policy of every query built without one of its own. */
   val fetchRetry: RetryPolicy,
 ) : DataScope.Factory {
-  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
+  // The names of the running outbox senders. This and reported change by compare-and-set only, and
+  // nothing observes them, so they need no StateFlow.
   private val runningOutboxes = AtomicReference(persistentHashSetOf<String>())
-  // Each running outbox's last reported backlog, null until its first read. Updated by
-  // compare-and-set only.
+  // Each running outbox's last reported backlog, null until its first read
   private val reported = AtomicReference(persistentHashMapOf<Any, OutboxBacklog?>())
   // The combined backlog, null while a running outbox has not read its rows yet
   private val combined = MutableStateFlow<OutboxBacklog?>(OutboxBacklog.Empty)
-  // The last combined result, so the scheduler hears each change once
+  // The last combined result the scheduler took, so it hears each change once. A call that threw
+  // took nothing, so the next report makes it again.
   private val told = AtomicReference<OutboxBacklog?>(null)
   // One publisher at a time, so the scheduler hears changes in order. A report made while one
   // publishes marks it dirty, and the publisher goes round again.
@@ -102,9 +104,22 @@ internal class RealDataScopeFactory(
   private val dirty = AtomicBoolean(false)
 
   // A backoff whose deadline the wall clock has passed reads as Ready, since the outbox's timer
-  // follows a clock that can stop while the device sleeps, so a waiter waits for the send instead
+  // follows a clock that can stop while the device sleeps, so a waiter waits for the send instead.
+  // A backoff turns Ready at its deadline on its own too, so a collector that waits sees it even
+  // when no row changes and no report comes, like while offline.
+  @OptIn(ExperimentalCoroutinesApi::class)
   override val backlog: Flow<OutboxBacklog> =
-    combined.filterNotNull().map { it.asOf(clock.now()) }.distinctUntilChanged()
+    combined
+      .filterNotNull()
+      .transformLatest { reported ->
+        val current = reported.asOf(clock.now())
+        emit(current)
+        if (current is OutboxBacklog.BackingOff) {
+          awaitClock(clock, current.until)
+          emit(OutboxBacklog.Ready)
+        }
+      }
+      .distinctUntilChanged()
 
   override fun create(scope: CoroutineScope, senders: Set<OutboxSender<*>>): DataScope =
     RealDataScope(scope, this, senders)
@@ -125,8 +140,7 @@ internal class RealDataScopeFactory(
   /**
    * Counts a new outbox in [scope] as running, with its backlog unknown until it first reads its
    * rows, and stops counting it when the scope completes. Returns the callback the outbox reports
-   * its backlog through. A scope without a job never completes, so its outbox stays counted for
-   * good, the same way [claimOutbox] keeps such an outbox's name claimed.
+   * its backlog through. A scope without a job never completes, so its outbox stays counted.
    */
   fun track(scope: CoroutineScope): (OutboxBacklog) -> Unit {
     val token = Any()
@@ -147,22 +161,31 @@ internal class RealDataScopeFactory(
    * Combines the reports into [combined] and tells the scheduler when the result changed to rows
    * that wait. An empty result is kept but not told, as [OutboxScheduler] explains. A scheduler
    * that throws is reported to [onFactoryFailure], whichever data scope's report published, and
-   * neither holds up the drain that reported nor the next report.
+   * neither holds up the drain that reported nor the next report. Its call counts as made only once
+   * it returns, so the next report makes it again, even one with the same result.
+   *
+   * While an outbox has not read its rows, the result stays unknown, and the scheduler hears the
+   * earliest backoff the other outboxes reported, so a known deadline still gets its platform job.
    */
   private fun publish() {
     dirty.store(true)
     while (dirty.load() && publishing.compareAndSet(expectedValue = false, newValue = true)) {
       try {
         dirty.store(false)
-        val next = combinedOf(reported.load().values)
-        combined.value = next
+        val states = reported.load().values
+        val combinedNow = combinedOf(states)
+        combined.value = combinedNow
+        // A Ready report makes the result Ready, so an unknown result has only backoffs to tell
+        val next =
+          combinedNow
+            ?: states.filterIsInstance<OutboxBacklog.BackingOff>().minByOrNull { it.until }
         if (next != null && next != told.load()) {
-          told.store(next)
           runCatching {
               when (next) {
                 OutboxBacklog.Empty -> Unit
                 is OutboxBacklog.Waiting -> scheduler.rowsWaiting(next)
               }
+              told.store(next)
             }
             .onFailure(onFactoryFailure)
         }
@@ -374,9 +397,9 @@ private class RealDataScope(
    * every sender's rows and claims each name opened from the factory's store set, and only then
    * builds the engines, so a failure in the first part leaves nothing running. Opening comes before
    * the claim, so a store that fails to open leaves its name free, and opening again is harmless. A
-   * failure releases every claim made, and an engine that fails to build cancels the engines built
-   * before it, so the caller can create the scope again. A sender over a store of its own is
-   * checked only within this scope, since nothing else knows its store.
+   * failure cancels the engines built before it and releases every claim made once they have
+   * stopped, so the caller can create the scope again. A sender over a store of its own is checked
+   * only within this scope, since nothing else knows its store.
    */
   private fun engines(senders: Set<OutboxSender<*>>): Map<String, RealOutbox<*>> {
     if (senders.isEmpty()) {
@@ -404,8 +427,10 @@ private class RealDataScope(
         sender.key.name to newEngine(sender, store, engineScope)
       }
     } catch (t: Throwable) {
+      // An engine built before the failure may still run cleanup, so its name stays claimed until
+      // the engines have stopped
+      engineJob.invokeOnCompletion { releases.forEach { it() } }
       engineJob.cancel()
-      releases.forEach { it() }
       throw t
     }
   }
@@ -491,7 +516,7 @@ private class RealDataScope(
   }
 
   override fun <T, M> optimisticStore(
-    key: OutboxKey<M, T>,
+    key: OutboxKey<M, out T>,
     base: QueryStore<T>,
     apply: (current: T?, mutation: M) -> T?,
     onFailure: ((Throwable) -> Unit)?,
@@ -511,7 +536,7 @@ private class RealDataScope(
   }
 
   override fun <K : Any, T, M> optimisticStores(
-    key: OutboxKey<KeyedMutation<K, M>, T>,
+    key: OutboxKey<KeyedMutation<K, M>, out T>,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
     apply: (current: T?, mutation: M) -> T?,

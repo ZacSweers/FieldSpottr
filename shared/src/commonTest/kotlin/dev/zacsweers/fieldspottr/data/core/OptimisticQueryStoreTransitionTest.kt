@@ -60,7 +60,7 @@ class OptimisticQueryStoreTransitionTest {
     val network = MutableStateFlow(online)
     val server = mutableListOf("a")
     val rejected = mutableSetOf<String>()
-    val sender = TagsOutbox.exchangingSender { change, _ ->
+    val sender = TagsOutboxKey.exchangingSender { change, _ ->
       val tag = change.mutation
       if (tag.name in rejected) {
         throw PermanentFailure("Rejected ${tag.name}")
@@ -77,7 +77,7 @@ class OptimisticQueryStoreTransitionTest {
         )
         .create(CoroutineScope(scope.backgroundScope.coroutineContext + owner), setOf(sender))
         .optimisticStores(
-          TagsOutbox,
+          TagsOutboxKey,
           base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
           apply = { current, tag ->
             check(!tag.boom) { "boom" }
@@ -145,6 +145,11 @@ class OptimisticQueryStoreTransitionTest {
 
         // A fetch from after the send confirms the record, and the list has passed the row
         h.clock.shift(1.minutes)
+        h.tags.write(h.server.toList(), h.clock.now())
+        settle()
+        // It stays for a reader of the base that runs late, until it expires
+        assertThat(h.sets.committedRecords, "$lag").isEqualTo(1)
+        h.clock.shift(11.minutes)
         h.tags.write(h.server.toList(), h.clock.now())
         settle()
         assertThat(h.sets.committedRecords, "$lag").isEqualTo(0)
@@ -287,6 +292,6 @@ class OptimisticQueryStoreTransitionTest {
 
   private companion object {
     val START: Instant = Instant.fromEpochSeconds(1_700_000_000)
-    val TagsOutbox = OutboxKey.replying<KeyedMutation<Unit, Tag>, List<String>>("tags")
+    val TagsOutboxKey = OutboxKey.replying<KeyedMutation<Unit, Tag>, List<String>>("tags")
   }
 }

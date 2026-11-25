@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.update
 /**
  * A value, the time it was fetched, and whether it was marked stale since.
  *
- * Stored values must be immutable. Queries compare them with `==` to skip equal re-emissions, as
+ * Stored values must be immutable. Queries skip a value equal to the one before, as
  * [DataQuery.state] describes, so a value type without a structural `equals` gets no such skip.
  */
 data class Fetched<out T>(
@@ -28,15 +28,16 @@ data class Fetched<out T>(
    * When the value was fetched. Null when it never was, like local changes over an evicted truth.
    */
   val fetchedAt: Instant?,
-  /** Set by invalidate(). The next fetch's write clears it. */
+  /**
+   * Set by invalidate(), and by the write of a fetch that started before an invalidate() call. The
+   * next fetch's write clears it.
+   */
   val invalidated: Boolean = false,
 )
 
 /**
- * Whether [a] and [b] show the same thing: the same fetch time and invalidated flag, and equal
- * values. The times and flags are compared first, so the values are compared with `==` only when
- * those match. [DataQuery.state], [DataQuery.stored] and [data] all skip a value that is the same
- * as the one before by this rule.
+ * Whether [a] and [b] show the same thing, by the rule [DataQuery.state] describes. Times and flags
+ * are compared first, so values are compared with `==` only when those match.
  */
 internal fun sameFetched(a: Fetched<*>?, b: Fetched<*>?): Boolean {
   if (a === b) {
@@ -61,8 +62,7 @@ fun <T> Flow<Fetched<T>?>.values(): Flow<T?> = map { it?.value }
 /**
  * Where a [DataQuery] keeps its value, the time it was fetched and whether it was invalidated. The
  * query judges freshness from those, so a store that outlives the process keeps its data fresh
- * across restarts. The store alone decides what stays in memory, like the cap [inMemoryByKey]
- * takes. Freshness never frees anything.
+ * across restarts. The store alone decides what stays in memory, like the [inMemoryByKey] cap.
  *
  * A store keeps what each write gives it: the value, its fetch time or none, and the invalidated
  * flag. A durable store keeps all three across a restart.
@@ -91,29 +91,27 @@ interface QueryStore<T> {
   /** The stored value with its fetch time and flag, or null when nothing is stored. */
   val data: Flow<Fetched<T>?>
 
-  /**
-   * Stores [fetched], whatever is stored now. For an edit outside a fetch, like a seed. A query's
-   * fetch uses [writeFetched], which this calls.
-   */
+  /** Stores [fetched], whatever is stored now. For an edit outside a fetch, like a seed. */
   suspend fun write(fetched: Fetched<T>) {
     writeFetched(fetched) { _, _ -> false }
   }
 
   /**
    * A conditional write. Stores [fetched] unless [keepsStored] says the stored value should stay.
-   * [keepsStored] gets the stored fetch time and invalidated flag, and is not called when nothing
-   * is stored.
+   * [keepsStored] is not called when nothing is stored.
    *
    * The check and the write are one update, like one transaction. So when two queries share a
-   * store, a fetch that read the server first never replaces what a later fetch stored meanwhile. A
-   * query's fetch writes its value with a real fetch time and no invalidated flag. It keeps only a
-   * stored value that is not invalidated and was fetched later than its own fetch but not ahead of
-   * the clock. So it always replaces a value that was never fetched, was invalidated, or has a
-   * fetch time ahead of the clock.
+   * store, a fetch that read the server first never replaces what a later fetch stored meanwhile.
+   *
+   * A query's fetch writes with a real fetch time. It keeps only a stored value that is not
+   * invalidated and was fetched later than its own fetch but not ahead of the clock. So it replaces
+   * a value that was never fetched, was invalidated, or has a fetch time ahead of the clock. A
+   * fetch that started before an invalidate() call writes its value with the invalidated flag set,
+   * and also keeps a value fetched later that is already invalidated.
    */
   suspend fun writeFetched(fetched: Fetched<T>, keepsStored: KeepsStored)
 
-  /** Removes the stored value, such as on logout. It calls [clearFetched]. */
+  /** Removes the stored value, such as on logout. */
   suspend fun clear() {
     clearFetched { _, _ -> false }
   }
@@ -127,7 +125,7 @@ interface QueryStore<T> {
 
   /**
    * Keeps the stored value and its fetch time but sets its invalidated flag, so the next freshness
-   * check fetches. The next fetch's write clears the flag.
+   * check fetches.
    */
   suspend fun invalidate()
 
@@ -141,11 +139,8 @@ interface QueryStore<T> {
 
     /**
      * A value per key held in memory, lost with the process. [maxEntries] caps the keys that nobody
-     * collects. Once more than [maxEntries] keys hold a value, a write drops the key nobody
-     * collects that was fetched longest ago, or one never fetched first, and that key's query
-     * fetches again the next time it is collected. A collected key is never dropped, so while more
-     * keys are collected than [maxEntries], the store holds them all and goes over the cap. It
-     * trims back down when a collector leaves.
+     * collects, as [InMemoryQueryStores] describes. A dropped key's query fetches again the next
+     * time it is collected.
      */
     fun <K : Any, T> inMemoryByKey(maxEntries: Int = Int.MAX_VALUE): InMemoryQueryStores<K, T> =
       InMemoryQueryStores(maxEntries)
@@ -153,11 +148,8 @@ interface QueryStore<T> {
     /**
      * A store from its parts, for a source of truth that merges a fetch instead of replacing it.
      *
-     * [write] serves [QueryStore.writeFetched]. In one update, like one transaction, it reads the
-     * stored fetch time and flag, asks `keepsStored` about them when something is stored, and
-     * writes only when the answer is false. [clear] serves [QueryStore.clearFetched] the same way.
-     * [QueryStore.write] and [QueryStore.clear] reach them with a `keepsStored` that is always
-     * false.
+     * [write] serves [QueryStore.writeFetched] and [clear] serves [QueryStore.clearFetched]. Each
+     * must check `keepsStored` and change the store in one update, as those describe.
      *
      * Without [invalidate], invalidating reads the value and writes it back with the invalidated
      * flag set. That is two steps, so a store that other writers share can lose a write between
@@ -197,10 +189,7 @@ suspend fun <T> QueryStore<T>.write(value: T, fetchedAt: Instant?) {
   write(Fetched(value, fetchedAt))
 }
 
-/**
- * A fetch's write: [QueryStore.writeFetched] of [value] fetched at [fetchedAt]. A fetch always has
- * a real time, and its write clears the invalidated flag.
- */
+/** [QueryStore.writeFetched] of [value] fetched at [fetchedAt], with the invalidated flag clear. */
 suspend fun <T> QueryStore<T>.writeFetched(
   value: T,
   fetchedAt: Instant,
@@ -212,8 +201,8 @@ suspend fun <T> QueryStore<T>.writeFetched(
 /**
  * A value held in memory: the one from [QueryStore.inMemory], or one key's from
  * [QueryStore.inMemoryByKey]. Code that owns the store can read [data] without collecting it and
- * edit it in place. Screens still read the query's data, since only collecting that runs the
- * staleness check.
+ * edit it in place. Screens still collect the query's [DataQuery.dataAutoFetch] or
+ * [DataQuery.stateAutoFetch], since only those run the staleness check.
  */
 sealed class InMemoryQueryStore<T> : QueryStore<T> {
   /** The stored value, readable without collecting. Reading it never fetches. */
@@ -269,9 +258,10 @@ private class SingleValueStore<T>(initial: Fetched<T>?) : InMemoryQueryStore<T>(
  * [maxEntries] caps the keys that nobody collects. A key counts as collected while anything
  * collects its store's `data`, like a query with a collector or a direct reader. Such a key is
  * never dropped, so while more keys are collected than the cap allows, the store holds them all and
- * goes over it. When a collector leaves and the store is over the cap, it drops keys nobody
- * collects until it is back under it, the key fetched longest ago first. The value and the count of
- * collectors per key live in one state, so a write and a collector that comes or goes never race.
+ * goes over it. When a write or a leaving collector puts the store over the cap, it drops keys
+ * nobody collects until it is back under it, one never fetched first, then the key fetched longest
+ * ago. The value and the count of collectors per key live in one state, so a write and a collector
+ * that comes or goes never race.
  */
 class InMemoryQueryStores<K : Any, T> internal constructor(private val maxEntries: Int) :
   (K) -> InMemoryQueryStore<T> {
@@ -292,6 +282,11 @@ class InMemoryQueryStores<K : Any, T> internal constructor(private val maxEntrie
   /** How many keys hold a value. For tests, which check the cap. */
   internal val size: Int
     get() = stored.value.values.size
+
+  /**
+   * Whether anything collects [key]'s store now, which keeps the cap from dropping it. For tests.
+   */
+  internal fun isCollected(key: K): Boolean = key in stored.value.collected
 
   /** One key's store, a view of that key in [stored]. */
   private inner class KeyStore(private val key: K) : InMemoryQueryStore<T>() {

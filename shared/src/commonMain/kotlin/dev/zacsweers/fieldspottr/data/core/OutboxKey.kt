@@ -7,11 +7,15 @@ import kotlinx.serialization.serializer
 
 /**
  * Names one outbox and its payload type [E], and joins the outbox's two halves: the [OutboxSender]
- * that sends its rows and the handle that writes them, like [DataScope.outbox] or
+ * that sends its entries and the handle that writes them, like [DataScope.outbox] or
  * [DataScope.optimisticStore]. [R] is the type of the server's answer, for a key built with
  * [replying]. A plain key has `R = Nothing`, and it fits a store of any value type.
  *
- * A data scope drains every sender it was created with, from the moment it is created, so rows
+ * [R] is invariant, so a sender's answer type is exactly the key's reply type. A sender whose
+ * answer has another type does not compile. Parameters that accept a plain key for any value type
+ * take `OutboxKey<E, out T>`.
+ *
+ * A data scope drains every sender it was created with, from the moment it is created, so entries
  * stored before a restart send even before any repository is built. The repository builds the
  * handle later with the same key, and the handle keeps all local state: the optimistic change, the
  * commit of a sent change to the truth, and the revert of a failed one.
@@ -21,24 +25,24 @@ import kotlinx.serialization.serializer
  * // FavoritesOutbox.kt
  * @Serializable data class FavoriteChange(val group: String, val on: Boolean)
  *
- * internal val FavoritesOutbox = OutboxKey<FavoriteChange>("favorites")
+ * internal val FavoritesOutboxKey = OutboxKey<FavoriteChange>("favorites")
  *
  * @ContributesTo(AppScope::class)
  * interface FavoritesOutboxProvider {
  *   @Provides @IntoSet
  *   fun favoritesSender(api: FavoritesApi): OutboxSender<*> =
- *     FavoritesOutbox.sender { change, id ->
+ *     FavoritesOutboxKey.sender { change, id ->
  *       api.setFavorite(change.group, change.on, idempotencyKey = id.value)
  *     }
  * }
  *
  * // FavoritesRepository.kt
  * private val store =
- *   data.optimisticStore(FavoritesOutbox, base = base, apply = { current, change -> ... })
+ *   data.optimisticStore(FavoritesOutboxKey, base = base, apply = { current, change -> ... })
  * ```
  *
  * [name] is the on-disk name of the outbox's rows. Renaming the `val` that holds the key changes
- * nothing stored. Changing [name] strands the rows stored under the old name, since no sender
+ * nothing stored. Changing [name] strands the entries stored under the old name, since no sender
  * drains them anymore.
  *
  * @property name the outbox's name in its store set. For a sender over the factory's
@@ -46,13 +50,13 @@ import kotlinx.serialization.serializer
  *   store of its own is checked only within its data scope.
  * @property serializer stores each payload as a row.
  */
-class OutboxKey<E, out R>
+class OutboxKey<E, R>
 @PublishedApi
 internal constructor(
   val name: String,
   val serializer: KSerializer<E>,
   /** Encodes the server's answers, or null for a plain key, whose sends answer with nothing. */
-  @PublishedApi internal val replySerializer: KSerializer<@UnsafeVariance R>?,
+  @PublishedApi internal val replySerializer: KSerializer<R>?,
 ) {
   override fun toString(): String = "OutboxKey($name)"
 
@@ -64,7 +68,7 @@ internal constructor(
  * built with [sender].
  *
  * ```
- * internal val NotesOutbox = OutboxKey<NoteChange>("notes")
+ * internal val NotesOutboxKey = OutboxKey<NoteChange>("notes")
  * ```
  */
 inline fun <reified E> OutboxKey(name: String): OutboxKey<E, Nothing> =
@@ -79,12 +83,12 @@ fun <E> OutboxKey(name: String, serializer: KSerializer<E>): OutboxKey<E, Nothin
  * the count a counter holds after an increment. Its sender is built with [exchangingSender] or
  * [deliveringSender], and an optimistic store over it needs a value type of [R].
  *
- * A row sent while no handle can commit it keeps the answer until a handle attaches. A sender over
- * the factory's [OutboxStores] encodes it with [OutboxStores.replyCodec]. A sender with a store of
- * its own encodes it as JSON.
+ * An entry sent while no handle can commit it keeps the answer until a handle attaches. A sender
+ * over the factory's [OutboxStores] encodes it with [OutboxStores.replyCodec]. A sender with a
+ * store of its own encodes it as JSON.
  *
  * ```
- * internal val CounterOutbox = OutboxKey.replying<CounterChange, Int>("counter")
+ * internal val CounterOutboxKey = OutboxKey.replying<CounterChange, Int>("counter")
  * ```
  */
 inline fun <reified E, reified R> OutboxKey.Companion.replying(name: String): OutboxKey<E, R> =

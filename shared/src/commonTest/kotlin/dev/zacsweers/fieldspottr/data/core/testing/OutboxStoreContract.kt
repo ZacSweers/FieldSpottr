@@ -20,7 +20,9 @@ import kotlin.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -210,13 +212,41 @@ abstract class OutboxStoreContract {
     val id = store.insertNew("k", "a")
     val row = checkNotNull(store.entry(id).first())
 
-    store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Queued)
+    assertTrue(
+      store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Queued)
+    )
     assertEquals(emptyList(), store.entries().first())
     assertEquals(OutboxStatus.Sent, store.entry(id).first()?.status)
 
     advanceStoreTime(2.minutes)
     store.insertNew("k", "b")
     assertNull(store.entry(id).first())
+  }
+
+  @Test
+  fun `an update of an expired row fails and leaves the row gone`() = runTest {
+    val store = newStore(1.minutes)
+    val sent = store.insertNew("k", "a")
+    val discarded = store.insertNew("k", "b")
+    val sentRow = checkNotNull(store.entry(sent).first())
+    val discardedRow = checkNotNull(store.entry(discarded).first())
+    val done = sentRow.copy(status = OutboxStatus.Sent, committed = true)
+    assertTrue(store.update(done, OutboxStatus.Queued))
+    assertTrue(
+      store.update(discardedRow.copy(status = OutboxStatus.Discarded), OutboxStatus.Queued)
+    )
+
+    // No write since the rows expired, so the update itself is the first to find them expired
+    advanceStoreTime(2.minutes)
+
+    assertFalse(store.update(done.copy(reply = "late"), OutboxStatus.Sent))
+    assertFalse(
+      store.update(discardedRow.copy(status = OutboxStatus.Queued), OutboxStatus.Discarded)
+    )
+    assertNull(store.entry(sent).first())
+    assertNull(store.entry(discarded).first())
+    assertEquals(emptyList(), store.entries().first())
+    assertNull(store.head("k"))
   }
 
   @Test
@@ -256,7 +286,7 @@ abstract class OutboxStoreContract {
     val store = newStore(1.minutes)
     val id = store.insertNew("k", "a")
     val row = checkNotNull(store.entry(id).first())
-    store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued)
+    assertTrue(store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued))
 
     advanceStoreTime(2.minutes)
     store.insertNew("k", "b")
@@ -276,7 +306,7 @@ abstract class OutboxStoreContract {
       }
     for (id in ids.take(3)) {
       val row = checkNotNull(store.entry(id).first())
-      store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued)
+      assertTrue(store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued))
     }
 
     // Oldest first, and the queued d is not owed
@@ -305,11 +335,13 @@ abstract class OutboxStoreContract {
     val store = newStore(1.minutes)
     val id = store.insertNew("k", "a")
     val row = checkNotNull(store.entry(id).first())
-    store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued)
+    assertTrue(store.update(row.copy(status = OutboxStatus.Sent), OutboxStatus.Queued))
     advanceStoreTime(2.minutes)
 
     // Committed now, so its settled time starts now and the row stays readable for a while
-    store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Sent)
+    assertTrue(
+      store.update(row.copy(status = OutboxStatus.Sent, committed = true), OutboxStatus.Sent)
+    )
     store.insertNew("k", "b")
     assertEquals(OutboxStatus.Sent, store.entry(id).first()?.status)
     assertEquals(listOf("b"), store.entries().first().map { it.payload })
@@ -337,16 +369,95 @@ abstract class OutboxStoreContract {
   }
 
   @Test
-  fun `changes cover every row a clear deletes`() = runTest {
+  fun `both head reads pick a key's oldest queued or sending row whichever it is`() = runTest {
     val store = newStore(1.minutes)
-    val a = store.insertNew("k", "a")
-    val b = store.insertNew("other", "b")
+    // On k the oldest row is Queued and a newer one is Sending
+    val queuedFirst = store.insertNew("k", "a")
+    val sendingSecond = store.insertNew("k", "b")
+    // On j the oldest row is Sending and a newer one is Queued
+    val sendingFirst = store.insertNew("j", "c")
+    store.insertNew("j", "d")
+    store.move(sendingSecond, OutboxStatus.Sending)
+    store.move(sendingFirst, OutboxStatus.Sending)
+
+    assertEquals(queuedFirst, store.head("k")?.id)
+    assertEquals(sendingFirst, store.head("j")?.id)
+    assertEquals(setOf(queuedFirst, sendingFirst), store.heads().first().map { it.id }.toSet())
+  }
+
+  @Test
+  fun `of two concurrent claims of one queued row exactly one wins`() = runTest {
+    val store = newStore(1.minutes)
+    val rows = List(20) { i -> checkNotNull(store.entry(store.insertNew("key$i", "p$i")).first()) }
+
+    // On other threads, like two drains that both read the row as Queued
+    val claims =
+      withContext(Dispatchers.Default) {
+        rows
+          .map { row ->
+            List(2) { attempt ->
+              async {
+                val claim = row.copy(status = OutboxStatus.Sending, attempts = attempt + 1)
+                store.update(claim, OutboxStatus.Queued)
+              }
+            }
+          }
+          .map { it.awaitAll() }
+      }
+
+    assertEquals(List(20) { 1 }, claims.map { won -> won.count { it } })
+    for ((row, won) in rows.zip(claims)) {
+      val stored = checkNotNull(store.entry(row.id).first())
+      assertEquals(OutboxStatus.Sending, stored.status)
+      // The stored row is the winning claim's
+      assertEquals(won.indexOf(true) + 1, stored.attempts)
+    }
+  }
+
+  @Test
+  fun `after a clear every read finds no row and watchers see the rows go`() = runTest {
+    val store = newStore(1.minutes)
+    val queued = store.insertNew("k", "a")
+    val sending = store.insertNew("j", "b")
+    val sent = store.insertNew("s", "c")
+    val failed = store.insertNew("f", "d")
+    val done = store.insertNew("d", "e")
+    store.move(sending, OutboxStatus.Sending)
+    store.move(sent, OutboxStatus.Sent)
+    store.move(failed, OutboxStatus.Failed("boom"))
+    val doneRow = checkNotNull(store.entry(done).first())
+    val committed = doneRow.copy(status = OutboxStatus.Sent, committed = true)
+    assertTrue(store.update(committed, doneRow.status))
+    val ids = listOf(queued, sending, sent, failed, done)
+    val entries = Channel<List<EntryId>>(Channel.UNLIMITED)
+    backgroundScope.launch { store.entries().collect { rows -> entries.send(rows.map { it.id }) } }
+    val watched = Channel<EntryId?>(Channel.UNLIMITED)
+    backgroundScope.launch { store.entry(queued).collect { watched.send(it?.id) } }
     val changes = store.changesIn(backgroundScope)
+    assertEquals(listOf(queued, sending, sent, failed), entries.receive())
+    assertEquals(queued, watched.receive())
     assertEquals(OutboxChange.Unknown, changes.receive())
 
     clearAll(store)
 
-    // A store may name the rows, or give Unknown when it deleted them without reading them
-    changes.awaitNamed(setOf(a, b), orUnknown = true)
+    // The watchers hear of the clear. The done row had settled already, so it needs no name.
+    changes.awaitNamed(setOf(queued, sending, sent, failed), orUnknown = true)
+    while (entries.receive().isNotEmpty()) {
+      // Earlier lists may still be on their way
+    }
+    while (watched.receive() != null) {
+      // Earlier rows may still be on their way
+    }
+    // And every read made now finds nothing
+    assertEquals(emptyList(), store.entries().first())
+    assertEquals(emptyList(), store.heads().first())
+    assertEquals(emptyList(), store.owed())
+    for (id in ids) {
+      assertNull(store.entry(id).first())
+    }
+    for (key in listOf("k", "j", "s", "f", "d")) {
+      assertNull(store.head(key))
+      assertEquals(emptyList(), store.owed(key))
+    }
   }
 }

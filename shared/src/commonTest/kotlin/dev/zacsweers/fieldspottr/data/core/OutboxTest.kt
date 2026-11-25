@@ -9,14 +9,19 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isLessThan
 import assertk.assertions.isNotEmpty
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.MAX_ERROR_CHARS
 import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
 import dev.zacsweers.fieldspottr.data.core.impl.timersHeld
+import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
+import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
@@ -30,6 +35,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.insertNew
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
+import kotlin.concurrent.Volatile
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.time.Duration
@@ -39,20 +45,29 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
 
@@ -186,6 +201,32 @@ class OutboxTest {
     assertThat(outbox.retry(id).await()).isEqualTo(OperationState.Succeeded)
     assertThat(send.sent).containsExactly("a")
     assertThat(send.reverted).containsExactly("a")
+  }
+
+  @Test
+  fun `an enqueue handle reports a retry that raced its insert`() = runTest {
+    // The row is stored at once, and its insert returns ten seconds later
+    val stores = LaggingOutboxStores(insertReturnsAfter = 10.seconds)
+    val rows = stores.open(Rows.name, Rows.serializer)
+    val outbox = dataOver(rows).outbox(Rows, revert = send::revert)
+    runCurrent()
+    send.failPermanently()
+
+    val handle = outbox.enqueue("a")
+    runCurrent()
+    // The row sent and failed for good before its insert returned
+    assertThat(checkNotNull(rows.entry(handle.id).first()).status)
+      .isInstanceOf<OutboxStatus.Failed>()
+    handle.assertPending()
+
+    send.succeed()
+    outbox.retry(handle.id).awaitSucceeded()
+    assertThat(testScheduler.currentTime).isLessThan(10_000)
+    assertThat(send.sent).containsExactly("a")
+
+    // The handle follows the retry's attempt once the insert returns
+    handle.awaitSucceeded()
+    assertThat(send.attempts).containsExactly("a", "a")
   }
 
   @Test
@@ -549,6 +590,74 @@ class OutboxTest {
   }
 
   @Test
+  fun `a retried row sends after a later row the drain already read`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val (a, b) = failedThenQueued(rows)
+    val claimReached = CompletableDeferred<Unit>()
+    val finishClaim = CompletableDeferred<Unit>()
+    // Pauses the drain's claim of b, after the drain read b as the head
+    val slowClaim =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          if (
+            entry.id == b && entry.status == OutboxStatus.Sending && claimReached.complete(Unit)
+          ) {
+            finishClaim.await()
+          }
+          return rows.update(entry, expected)
+        }
+      }
+    val data = dataOver(slowClaim)
+    val outbox = data.outbox(Rows, revert = send::revert)
+    claimReached.await()
+
+    val retried = outbox.retry(a)
+    runCurrent()
+
+    // a is the stored head again, but the drain already read b
+    assertThat(rows.head("k")?.id).isEqualTo(a)
+    assertThat(rows.entry(b).first()?.status).isEqualTo(OutboxStatus.Queued)
+    assertThat(send.attempts).isEmpty()
+
+    finishClaim.complete(Unit)
+    retried.awaitSucceeded()
+
+    assertThat(send.sent).containsExactly("b", "a")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a retried row sends before a later row the drain has not read`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val (a, _) = failedThenQueued(rows)
+    // Offline, so the drain reads no head before the requeue
+    val data = dataOver(rows, online = false)
+    val outbox = data.outbox(Rows, revert = send::revert)
+
+    val retried = outbox.retry(a)
+    rows.entry(a).first { it?.status == OutboxStatus.Queued }
+    data.online.value = true
+    retried.awaitSucceeded()
+    rows.entries().first { it.isEmpty() }
+
+    assertThat(send.sent).containsExactly("a", "b")
+    data.assertNoFailures()
+  }
+
+  /**
+   * Stores an older row a that failed and was reverted, then a later Queued row b, both on key k.
+   * Returns their ids.
+   */
+  private suspend fun failedThenQueued(rows: OutboxStore<String>): Pair<EntryId, EntryId> {
+    val a = rows.insertNew("k", "a")
+    val b = rows.insertNew("k", "b")
+    val queued = checkNotNull(rows.entry(a).first())
+    val failed = queued.copy(status = OutboxStatus.Failed("Rejected"), reverted = true)
+    assertThat(rows.update(failed, expected = OutboxStatus.Queued)).isTrue()
+    return a to b
+  }
+
+  @Test
   fun `a send that cannot be retried fails once and the next row sends`() = runTest {
     val rejected = IllegalArgumentException("400 Bad Request")
     send.failure = { payload, _ -> rejected.takeIf { payload == "a" } }
@@ -755,6 +864,21 @@ class OutboxTest {
   }
 
   @Test
+  fun `a row left sending resends at once despite a later deadline`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insertNew("k", "a")
+    val row = checkNotNull(rows.entry(id).first())
+    // A process claimed the row with a deadline ahead and died during the send
+    val sending = row.copy(status = OutboxStatus.Sending, retryAt = START + 5.minutes)
+    assertThat(rows.update(sending, expected = OutboxStatus.Queued)).isTrue()
+
+    dataOver(rows, clock = testClock(START)).outbox(Rows)
+    runCurrent()
+
+    assertThat(send.sent).containsExactly("a")
+  }
+
+  @Test
   fun `a clock moved back keeps a backing-off row waiting for its deadline`() = runTest {
     send.failTransiently()
     val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
@@ -801,6 +925,51 @@ class OutboxTest {
     assertThat(send.sent).containsExactly("a")
     // Once built, it still keeps the name from a second data scope
     assertFailsWith<IllegalStateException> { factory.create(backgroundScope, senders) }
+  }
+
+  @Test
+  fun `a name stays claimed until an engine stopped by a failed build has finished`() = runTest {
+    val rows = InMemoryOutboxStores()
+    val reading = CompletableDeferred<Unit>()
+    val cleanup = CompletableDeferred<Unit>()
+    val stores =
+      object : OutboxStores {
+        override fun <E> open(name: String, serializer: KSerializer<E>): OutboxStore<E> {
+          val opened = rows.open(name, serializer)
+          return object : OutboxStore<E> by opened {
+            override fun entries(): Flow<List<OutboxEntry<E>>> {
+              check(name != Broken.name) { "Rows did not open" }
+              // The first read of the rows ignores cancellation until the test lets it finish
+              return flow {
+                reading.complete(Unit)
+                withContext(NonCancellable) { cleanup.await() }
+                emitAll(opened.entries())
+              }
+            }
+          }
+        }
+
+        override suspend fun clearAll() = rows.clearAll()
+      }
+    val factory = DataScope.Factory(onFailure = {}, stores = stores)
+    val eager = backgroundScope + UnconfinedTestDispatcher(testScheduler)
+
+    assertFailsWith<IllegalStateException> {
+      factory.create(eager, setOf(Notes.sender(send = send), Broken.sender(send = send)))
+    }
+    assertThat(reading.isCompleted).isTrue()
+    assertFailsWith<IllegalStateException> {
+      factory.create(backgroundScope, setOf(Notes.sender(send = send)))
+    }
+    cleanup.complete(Unit)
+    runCurrent()
+
+    factory
+      .create(backgroundScope, setOf(Notes.sender(send = send)))
+      .outbox(Notes)
+      .enqueue("a")
+      .awaitSucceeded()
+    assertThat(send.sent).containsExactly("a")
   }
 
   @Test
@@ -879,6 +1048,27 @@ class OutboxTest {
     assertThat(failure.cause).isSameInstanceAs(flaky)
     assertThat(data.actionFailures.take()).containsExactly(flaky)
     assertThat(send.reverted).containsExactly("a")
+  }
+
+  /**
+   * A failure text longer than an entry keeps, with an emoji across the cut. The emoji goes whole,
+   * and a handle attached later still gets the exception, which the outbox matches by that text.
+   */
+  @Test
+  fun `a long failure text is cut and a later handle still carries the exception`() = runTest {
+    val prefix = IllegalStateException("").toString().length
+    val flaky =
+      IllegalStateException("x".repeat(MAX_ERROR_CHARS - 1 - prefix) + "😀" + "y".repeat(100))
+    send.failure = { _, _ -> flaky }
+    val outbox = outbox(retry = RetryPolicy(maxAttempts = 2) { 1.seconds })
+
+    val failure = outbox.enqueue("a").awaitFailed<PermanentFailure>()
+
+    val kept = flaky.toString().take(MAX_ERROR_CHARS - 1)
+    val entry = outbox.entries.first().single()
+    assertThat(entry.status).isEqualTo(OutboxStatus.Failed(kept))
+    assertThat(entry.lastError).isEqualTo(kept)
+    assertThat(outbox.operation(entry.id).awaitFailed<PermanentFailure>()).isSameInstanceAs(failure)
   }
 
   @Test
@@ -1423,13 +1613,338 @@ class OutboxTest {
       assertThat(outbox.timersHeld).isEqualTo(0)
     }
 
+  @Test
+  fun `a network drop that ends before the watcher sees it still sends the row`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val online = DropOnce(MutableStateFlow(true))
+    val failures = TestFailures()
+    DataScope.Factory(onFailure = failures, online = online, clock = testClock())
+      .create(backgroundScope, setOf(Rows.sender(store = rows, send = send)))
+    runCurrent()
+
+    // The drain this row starts reads the network as down, and no collector ever sees the drop
+    online.drop = true
+    rows.insertNew("k", "a")
+    runCurrent()
+
+    assertThat(send.sent).containsExactly("a")
+    failures.assertNone()
+  }
+
+  @Test
+  fun `a retry that read the row before a failed send keeps the newer attempt count`() = runTest {
+    send.failure = { _, _ -> IllegalStateException("Busy") }
+    val rows = inMemoryOutboxStore<String>()
+    val a = rows.insertNew("k", "a")
+    val requeueReached = CompletableDeferred<Unit>()
+    val finishRequeue = CompletableDeferred<Unit>()
+    // Pauses the retry's write, after the retry read the row as backing off
+    val slowRequeue =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          val requeue =
+            entry.status == OutboxStatus.Queued &&
+              entry.retryAt == null &&
+              expected == OutboxStatus.Queued
+          if (requeue && requeueReached.complete(Unit)) {
+            finishRequeue.await()
+          }
+          return rows.update(entry, expected)
+        }
+      }
+    val data = dataOver(slowRequeue, retry = RetryPolicy(maxAttempts = 5) { 5.seconds })
+    val outbox = data.outbox(Rows, revert = send::revert)
+    runCurrent()
+    // The first attempt failed, so the row backs off
+    assertThat(send.attempts("a")).isEqualTo(1)
+
+    outbox.retry(a)
+    requeueReached.await()
+    // The backoff ends, and the drain sends the row again while the retry's write waits
+    advanceTimeBy(5.seconds)
+    runCurrent()
+    assertThat(send.attempts("a")).isEqualTo(2)
+    finishRequeue.complete(Unit)
+    runCurrent()
+
+    // The retry's copy of the row, read before the second attempt, did not replace its count
+    assertThat(rows.entry(a).first()?.attempts).isEqualTo(send.attempts("a"))
+  }
+
+  @Test
+  fun `discarding a head the drain is about to wait on sends the next row now`() = runTest {
+    val clock = testClock(START)
+    val rows = inMemoryOutboxStore<String>()
+    val head = rows.insertNew("k", "a")
+    rows.insertNew("k", "b")
+    // The head backs off for an hour and has no timer yet, as after a restart
+    val waiting = checkNotNull(rows.entry(head).first()).copy(retryAt = START + 1.hours)
+    rows.update(waiting, expected = OutboxStatus.Queued)
+    val attaching = CompletableDeferred<Unit>()
+    val lookupReached = CompletableDeferred<Unit>()
+    val finishLookup = CompletableDeferred<Unit>()
+    val slow =
+      object : OutboxStore<String> by rows {
+        // The watcher hears of the first heads only, as while the store fails to list them
+        override fun heads(): Flow<List<OutboxEntry<String>>> = flow {
+          emit(rows.heads().first())
+          awaitCancellation()
+        }
+
+        // The handle stays not ready, so the drain reads the key's owed rows after the head
+        override suspend fun owed(): List<OutboxEntry<String>> {
+          attaching.await()
+          return rows.owed()
+        }
+
+        override suspend fun owed(key: String): List<OutboxEntry<String>> {
+          lookupReached.complete(Unit)
+          finishLookup.await()
+          return rows.owed(key)
+        }
+      }
+    val outbox = dataOver(slow, clock = clock).outbox(Rows, revert = send::revert)
+    // The drain read the backing-off row as the head and has not started its timer
+    lookupReached.await()
+
+    val discarded = outbox.discard(head)
+    runCurrent()
+    finishLookup.complete(Unit)
+    // No time passes and the watcher is silent, so only the discard can wake the key
+    runCurrent()
+
+    discarded.assertSucceeded()
+    assertThat(send.reverted).containsExactly("a")
+    assertThat(send.sent).containsExactly("b")
+    attaching.complete(Unit)
+  }
+
+  @Test
+  fun `a retry during the claim of a backing-off row leaves no deadline after an offline requeue`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      val id = rows.insertNew("k", "a")
+      // The row backs off with a deadline that has passed, as after a restart
+      val waiting =
+        checkNotNull(rows.entry(id).first()).copy(attempts = 1, retryAt = START - 1.minutes)
+      assertThat(rows.update(waiting, expected = OutboxStatus.Queued)).isTrue()
+      val online = MutableStateFlow(true)
+      val claimReached = CompletableDeferred<Unit>()
+      val finishClaim = CompletableDeferred<Unit>()
+      // Holds the claim after the drain read the head, and drops the network once it is written
+      val slowClaim =
+        object : OutboxStore<String> by rows {
+          override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+            if (entry.status != OutboxStatus.Sending || claimReached.isCompleted) {
+              return rows.update(entry, expected)
+            }
+            claimReached.complete(Unit)
+            finishClaim.await()
+            val wrote = rows.update(entry, expected)
+            online.value = false
+            return wrote
+          }
+        }
+      val outbox = outboxOver(slowClaim, online)
+
+      claimReached.await()
+      outbox.retry(id)
+      runCurrent()
+      assertThat(rows.entry(id).first()?.retryAt).isNull()
+      finishClaim.complete(Unit)
+      runCurrent()
+
+      // The requeue keeps the deadline the retry cleared
+      val row = checkNotNull(rows.entry(id).first())
+      assertThat(row.status).isEqualTo(OutboxStatus.Queued)
+      assertThat(row.retryAt).isNull()
+      assertThat(send.attempts).isEmpty()
+    }
+
+  @Test
+  fun `a row left sending with a later deadline sends at once after a drop during its claim`() =
+    runTest {
+      val rows = inMemoryOutboxStore<String>()
+      val id = rows.insertNew("k", "a")
+      // A process claimed the row with a deadline ahead, as after the clock moved back, and died
+      val left =
+        checkNotNull(rows.entry(id).first())
+          .copy(status = OutboxStatus.Sending, attempts = 1, retryAt = START + 5.minutes)
+      assertThat(rows.update(left, expected = OutboxStatus.Queued)).isTrue()
+
+      val sentIds = assertSendsAtOnceAfterDropDuringClaim(rows)
+
+      assertThat(sentIds).containsExactly(id)
+      // The time offline counted no attempt
+      assertThat(rows.entry(id).first()?.attempts).isEqualTo(1)
+    }
+
+  @Test
+  fun `a queued row sends at once after a drop during its claim`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insertNew("k", "a")
+
+    val sentIds = assertSendsAtOnceAfterDropDuringClaim(rows)
+
+    assertThat(sentIds).containsExactly(id)
+    assertThat(rows.entry(id).first()?.attempts).isEqualTo(0)
+  }
+
+  /**
+   * Starts an outbox over [rows] whose network drops right after its first claim is written, checks
+   * that the row went back to Queued unsent, then reconnects with no virtual time passing. Returns
+   * the ids sent, in order.
+   */
+  private suspend fun TestScope.assertSendsAtOnceAfterDropDuringClaim(
+    rows: OutboxStore<String>
+  ): List<EntryId> {
+    val online = MutableStateFlow(true)
+    var claimed = false
+    val dropOnClaim =
+      object : OutboxStore<String> by rows {
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean {
+          val wrote = rows.update(entry, expected)
+          if (entry.status == OutboxStatus.Sending && !claimed) {
+            claimed = true
+            online.value = false
+          }
+          return wrote
+        }
+      }
+    val sentIds = mutableListOf<EntryId>()
+    DataScope.Factory(onFailure = TestFailures(), online = online, clock = testClock(START))
+      .create(
+        backgroundScope,
+        setOf(
+          Rows.sender(store = dropOnClaim) { payload, id ->
+            sentIds += id
+            send(payload, id)
+          }
+        ),
+      )
+    runCurrent()
+    assertThat(claimed).isTrue()
+    assertThat(rows.entries().first().single().status).isEqualTo(OutboxStatus.Queued)
+    assertThat(sentIds).isEmpty()
+
+    online.value = true
+    runCurrent()
+    assertThat(rows.entries().first().single().status).isEqualTo(OutboxStatus.Sent)
+    return sentIds
+  }
+
+  @Test
+  fun `a recheck that read a queued row never moves a sending row's handle back`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    val id = rows.insertNew("k", "a")
+    val named = MutableSharedFlow<OutboxChange>(extraBufferCapacity = 1)
+    var holdNextRead = false
+    val readHeld = CompletableDeferred<Unit>()
+    val finishRead = CompletableDeferred<Unit>()
+    // Holds a row read after it read the row, and lets the test name a row as changed
+    val slowRead =
+      object : OutboxStore<String> by rows {
+        override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = flow {
+          val row = rows.entry(id).first()
+          if (holdNextRead) {
+            holdNextRead = false
+            readHeld.complete(Unit)
+            finishRead.await()
+          }
+          emit(row)
+        }
+
+        override fun changes(): Flow<OutboxChange> = merge(rows.changes(), named)
+      }
+    val online = MutableStateFlow(false)
+    val handle = outboxOver(slowRead, online).operation(id)
+    val states = statesOf(handle)
+    runCurrent()
+
+    // A change names the row, and its recheck reads it Queued and waits
+    holdNextRead = true
+    named.emit(OutboxChange.Rows(setOf(id)))
+    readHeld.await()
+    // The drain claims the row and holds in its send
+    send.hold("a")
+    online.value = true
+    runCurrent()
+    assertThat(handle.state.value).isEqualTo(OperationState.Running)
+    finishRead.complete(Unit)
+    runCurrent()
+    assertThat(handle.state.value).isEqualTo(OperationState.Running)
+    send.release("a")
+    runCurrent()
+
+    assertThat(states)
+      .containsExactly(OperationState.Queued, OperationState.Running, OperationState.Succeeded)
+  }
+
+  @Test
+  fun `a handle shows queued again while its row backs off`() = runTest {
+    send.failTransiently()
+    val handle = outbox().enqueue("a")
+    val states = statesOf(handle)
+    runCurrent()
+    assertThat(handle.state.value).isEqualTo(OperationState.Queued)
+
+    advanceTimeBy(1.seconds)
+    runCurrent()
+
+    assertThat(states)
+      .containsExactly(
+        OperationState.Queued,
+        OperationState.Running,
+        OperationState.Queued,
+        OperationState.Running,
+        OperationState.Succeeded,
+      )
+  }
+
+  /** Every state [handle] shows from now on, collected at once in the test's background. */
+  private fun TestScope.statesOf(handle: Operation): List<OperationState> {
+    val states = mutableListOf<OperationState>()
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+      handle.state.collect { states += it }
+    }
+    return states
+  }
+
+  /** The handle on outbox [Rows] over [rows] in a data scope that reads [online], at [START]. */
+  private fun TestScope.outboxOver(
+    rows: OutboxStore<String>,
+    online: MutableStateFlow<Boolean>,
+  ): Outbox<String> =
+    DataScope.Factory(onFailure = TestFailures(), online = online, clock = testClock(START))
+      .create(backgroundScope, setOf(Rows.sender(store = rows, send = send)))
+      .outbox(Rows, revert = send::revert)
+
   /** A rejection that says when to try again, like a 429 with a `Retry-After` header. */
   private class RateLimited(val retryAfter: Duration) : Exception("429 Too Many Requests")
+
+  /**
+   * [state] with one read of [value] that reports the network down, as a drain reads it during a
+   * drop that ends before any collector runs. Collectors follow [state] alone.
+   */
+  @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
+  private class DropOnce(private val state: StateFlow<Boolean>) : StateFlow<Boolean> by state {
+    @Volatile var drop = false
+
+    override val value: Boolean
+      get() =
+        if (drop) {
+          drop = false
+          false
+        } else {
+          state.value
+        }
+  }
 
   private companion object {
     val START = Instant.parse("2026-06-10T12:00:00Z")
     val Changes = OutboxKey<String>("changes")
     val Notes = OutboxKey<String>("notes")
+    val Broken = OutboxKey<String>("broken")
     /** The outbox of tests that keep its rows in a store of their own. */
     val Rows = OutboxKey<String>("rows")
   }

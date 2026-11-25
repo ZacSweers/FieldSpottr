@@ -27,6 +27,7 @@ import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.OLD_CHANGE
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OutboxChange
+import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxKey
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
 import dev.zacsweers.fieldspottr.data.core.OutboxStore
@@ -36,6 +37,9 @@ import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.assertOneTypePerName
 import dev.zacsweers.fieldspottr.data.core.assertUnreadableRowIsHandled
+import dev.zacsweers.fieldspottr.data.core.exchangingSender
+import dev.zacsweers.fieldspottr.data.core.impl.UNKNOWN_REPLY
+import dev.zacsweers.fieldspottr.data.core.replying
 import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.OutboxStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
@@ -48,9 +52,12 @@ import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.metro.suspendLazy
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -58,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -175,10 +183,73 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
   }
 
   @Test
+  fun `a status a newer version wrote is owed on its key like a failed row`() = runTest {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    val store = newStore(1.minutes)
+    val id = store.insertNew("k", "a")
+    store.insertNew("j", "b")
+    // As a newer version would write it, with a readable payload and no revert run yet
+    queries.compareAndSet(
+      status = "archived",
+      cause = null,
+      attempts = 0,
+      lastError = null,
+      reverted = 0,
+      retryAt = null,
+      settledAt = null,
+      committed = 0,
+      sentAt = null,
+      reply = null,
+      outbox = "test",
+      id = id.value,
+      expectedStatus = "queued",
+      expectedCause = null,
+    )
+
+    assertThat(store.entry(id).first()?.status).isNotNull().isInstanceOf<OutboxStatus.Failed>()
+    assertThat(store.owed().map { it.id }).isEqualTo(listOf(id))
+    assertThat(store.owed("k").map { it.id }).isEqualTo(listOf(id))
+    assertThat(store.owed("j")).isEmpty()
+    // It reads as Failed, so it never sends
+    assertThat(store.head("k")).isNull()
+    assertThat(store.heads().first().map { it.payload }).isEqualTo(listOf("b"))
+  }
+
+  @Test
+  fun `every read opens the queries on the io dispatcher`() = runTest {
+    // A dispatcher object of its own, so the queries can tell whether they run on it
+    val io = Dispatchers.IO.limitedParallelism(4)
+    val outside = AtomicLong()
+    val store =
+      SqlDelightOutboxStore(
+        queries = {
+          if (currentCoroutineContext()[ContinuationInterceptor] !== io) {
+            outside.incrementAndGet()
+          }
+          temporaryDatabase.db().outboxRowQueries
+        },
+        outbox = "test",
+        codec = String.serializer().asCodec(Json),
+        io = io,
+      )
+    val id = store.insertNew("k", "a")
+    val row = checkNotNull(store.entry(id).first())
+
+    store.update(row.copy(status = OutboxStatus.Sending), OutboxStatus.Queued)
+    store.entries().first()
+    store.heads().first()
+    store.head("k")
+    store.owed()
+    store.owed("k")
+
+    assertThat(outside.get()).isEqualTo(0L)
+  }
+
+  @Test
   fun `an insert whose caller is cancelled during the write still stores the row`() = runTest {
     val db = suspendLazy { temporaryDatabase.db() }
     lateinit var caller: Job
-    // Cancels the caller from inside the transaction, which still commits
+    // Cancels the caller from inside the insert, which still commits
     val cancelling =
       object : PayloadCodec<String> {
         override fun encode(payload: String) = payload.also { caller.cancel() }
@@ -335,6 +406,15 @@ class SqlDelightOutboxScaleTest {
     assertThat(plan).doesNotContain("SCAN outboxRow")
   }
 
+  @Test
+  fun `a key's owed rows are read through the key's index entries`() = runBlocking {
+    val queries = temporaryDatabase.db().outboxRowQueries
+    val plan = driver.planOf { queries.owedOnKey("a", "k") }
+
+    assertThat(plan).contains("USING INDEX outboxRow_key (outbox=? AND orderingKey=?)")
+    assertThat(plan).doesNotContain("SCAN outboxRow")
+  }
+
   private companion object {
     const val ROWS = 300
   }
@@ -407,6 +487,83 @@ private class CountingDriver(private val driver: SqlDriver) : SqlDriver by drive
   }
 }
 
+/** What a [SqlDelightOutboxStore] reads back after its database is closed and opened again. */
+class SqlDelightOutboxStoreReopenTest {
+  @get:Rule val temporaryDatabase = TemporaryDatabase()
+
+  /** A store over whatever database [temporaryDatabase] has open when each call runs. */
+  private fun store(clock: TestClock): OutboxStore<String> =
+    SqlDelightOutboxStore(
+      queries = { temporaryDatabase.db().outboxRowQueries },
+      outbox = "test",
+      codec = String.serializer().asCodec(Json),
+      io = Dispatchers.IO,
+      clock = clock,
+    )
+
+  @Test
+  fun `every read returns the same rows after a reopen`() = runTest {
+    val clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
+    val before = store(clock)
+    val queued = before.insertNew("a", "queued")
+    val sending = before.insertNew("b", "sending")
+    val sent = before.insertNew("c", "sent")
+    val failed = before.insertNew("d", "failed")
+    val done = before.insertNew("e", "done")
+    val now = clock.now()
+    before.write(queued) {
+      it.copy(attempts = 2, lastError = "timeout", retryAt = now + 30.seconds)
+    }
+    before.write(sending) { it.copy(status = OutboxStatus.Sending, attempts = 1) }
+    before.write(sent) { it.copy(status = OutboxStatus.Sent, sentAt = now, reply = "\"answer\"") }
+    before.write(failed) { it.copy(status = OutboxStatus.Failed("rejected"), attempts = 3) }
+    before.write(done) { it.copy(status = OutboxStatus.Sent, sentAt = now, committed = true) }
+    val ids = listOf(queued, sending, sent, failed, done)
+    val entries = before.entries().first()
+    val owed = before.owed()
+    val owedOnKey = before.owed("c")
+    val heads = before.heads().first()
+    val rows = ids.map { before.entry(it).first() }
+    assertThat(entries.map { it.id }).isEqualTo(listOf(queued, sending, sent, failed))
+    assertThat(owed.map { it.id }).isEqualTo(listOf(sent, failed))
+    assertThat(heads.map { it.id }).isEqualTo(listOf(queued, sending))
+    assertThat(rows.last()?.committed).isEqualTo(true)
+
+    temporaryDatabase.reopen()
+
+    val after = store(clock)
+    assertThat(after.entries().first()).isEqualTo(entries)
+    assertThat(after.owed()).isEqualTo(owed)
+    assertThat(after.owed("c")).isEqualTo(owedOnKey)
+    assertThat(after.heads().first()).isEqualTo(heads)
+    assertThat(ids.map { after.entry(it).first() }).isEqualTo(rows)
+  }
+
+  @Test
+  fun `a retry deadline between seconds reads back to the millisecond after a reopen`() = runTest {
+    val clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
+    val before = store(clock)
+    val id = before.insertNew("k", "a")
+    val retryAt = Instant.parse("2026-06-10T12:00:30.123456789Z")
+    before.write(id) { it.copy(attempts = 1, retryAt = retryAt) }
+
+    temporaryDatabase.reopen()
+
+    val after = store(clock).entry(id).first()
+    // The store keeps epoch milliseconds, so the nanoseconds below them are dropped
+    assertThat(after?.retryAt).isEqualTo(Instant.parse("2026-06-10T12:00:30.123Z"))
+  }
+
+  /** Writes what [change] makes of row [id] over the status it has. */
+  private suspend fun OutboxStore<String>.write(
+    id: EntryId,
+    change: (OutboxEntry<String>) -> OutboxEntry<String>,
+  ) {
+    val row = checkNotNull(entry(id).first())
+    assertThat(update(change(row), expected = row.status)).isTrue()
+  }
+}
+
 /** [SqlDelightOutboxStores.clearAll], which one statement does for every outbox in the table. */
 class SqlDelightOutboxStoresClearAllTest {
   @get:Rule val temporaryDatabase = TemporaryDatabase()
@@ -425,6 +582,21 @@ class SqlDelightOutboxStoresClearAllTest {
     assertThat(notes.entries().first()).isEmpty()
     // A handle that follows the row reads it as absent, and settles Cancelled through that
     assertThat(tags.entry(id).first()).isNull()
+  }
+
+  @Test
+  fun `clearing a set that opened no outbox deletes the rows an earlier set stored`() = runTest {
+    val earlier =
+      SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+    earlier.open("tags", String.serializer()).insertNew("k", "a")
+    earlier.open("notes", String.serializer()).insertNew("k", "b")
+    // Like the set of a new process, which has opened neither outbox
+    val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
+
+    stores.clearAll()
+
+    assertThat(stores.open("tags", String.serializer()).entries().first()).isEmpty()
+    assertThat(stores.open("notes", String.serializer()).entries().first()).isEmpty()
   }
 
   @Test
@@ -448,6 +620,88 @@ class SqlDelightOutboxStoresClearAllTest {
     scope.cancel()
 
     assertThat(settled).isEqualTo(List(3) { OperationState.Cancelled })
+    failures.assertNone()
+  }
+}
+
+/** The size limits that keep every outbox row readable through a cursor window. */
+class SqlDelightOutboxStoreSizeTest {
+  @get:Rule val temporaryDatabase = TemporaryDatabase()
+
+  @Test
+  fun `an insert above the size cap throws and stores nothing`() = runTest {
+    val store =
+      SqlDelightOutboxStores(
+          { temporaryDatabase.db().outboxRowQueries },
+          Dispatchers.IO,
+          maxTextBytes = 64,
+        )
+        .open("notes", String.serializer())
+    // 61 chars, the two JSON quotes and the one-byte key are exactly the cap
+    store.insertNew("k", "a".repeat(61))
+    // The same payload under a key one byte longer is over it
+    assertFailsWith<IllegalArgumentException> {
+      store.insert(EntryId("keyed"), "kk", "a".repeat(61))
+    }
+
+    // Fewer chars than the cap, but two UTF-8 bytes each
+    val failure =
+      assertFailsWith<IllegalArgumentException> {
+        store.insert(EntryId("big"), "k", "é".repeat(40))
+      }
+
+    assertThat(failure.message.orEmpty()).contains("notes")
+    assertThat(failure.message.orEmpty()).contains("big")
+    assertThat(failure.message.orEmpty()).contains("64")
+    assertThat(failure.message.orEmpty()).doesNotContain("é")
+    assertThat(store.entries().first().map { it.payload }).isEqualTo(listOf("a".repeat(61)))
+  }
+
+  @Test
+  fun `an update stores an answer above the size cap as unknown`() = runTest {
+    val store =
+      SqlDelightOutboxStores(
+          { temporaryDatabase.db().outboxRowQueries },
+          Dispatchers.IO,
+          maxTextBytes = 64,
+        )
+        .open("notes", String.serializer())
+    val id = store.insertNew("k", "a")
+    val queued = checkNotNull(store.entry(id).first())
+
+    // From a sender with a store of its own, whose answers never pass the set's codec
+    val sent = queued.copy(status = OutboxStatus.Sent, reply = "x".repeat(65))
+    assertThat(store.update(sent, expected = OutboxStatus.Queued)).isTrue()
+
+    assertThat(store.entry(id).first()?.reply).isEqualTo(UNKNOWN_REPLY)
+  }
+
+  @Test
+  fun `an answer above the size cap is stored as unknown and reported`() = runBlocking {
+    val stores =
+      SqlDelightOutboxStores(
+        { temporaryDatabase.db().outboxRowQueries },
+        Dispatchers.IO,
+        maxTextBytes = 64,
+      )
+    val echo = OutboxKey.replying<String, String>("echo")
+    val rows = stores.open(echo.name, String.serializer())
+    val id = rows.insertNew("k", "a")
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failures = TestFailures()
+    val senderFailures = TestFailures()
+
+    // No handle is attached, so the row is written Sent with its answer
+    DataScope.Factory(onFailure = failures, stores = stores)
+      .create(
+        scope,
+        setOf(echo.exchangingSender(onFailure = senderFailures) { _, _ -> "é".repeat(40) }),
+      )
+    val sent = withTimeout(10.seconds) { rows.entry(id).first { it?.status == OutboxStatus.Sent } }
+    scope.cancel()
+
+    assertThat(sent?.reply).isEqualTo(UNKNOWN_REPLY)
+    senderFailures.assertSingle<IllegalArgumentException>()
     failures.assertNone()
   }
 }

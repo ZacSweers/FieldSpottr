@@ -10,6 +10,8 @@ import androidx.datastore.core.okio.OkioSerializer
 import androidx.datastore.core.okio.OkioStorage
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -32,6 +34,7 @@ import kotlinx.serialization.json.Json
 import okio.BufferedSink
 import okio.BufferedSource
 import okio.FileSystem
+import okio.IOException
 import okio.Path
 import okio.SYSTEM
 
@@ -99,7 +102,7 @@ private object OutboxLogSerializer : OkioSerializer<OutboxLog> {
  * A file that does not parse as a log at all, like one cut short by a full disk, is replaced with
  * an empty log. Its rows are lost then, so their changes never send and their reverts never run.
  * The rest of the outbox keeps working. A single row whose payload no longer decodes is kept, as
- * [DataStoreOutboxStore] describes.
+ * [OutboxStore.onUndecodable] describes.
  */
 fun outboxDataStore(
   scope: CoroutineScope,
@@ -116,15 +119,18 @@ fun outboxDataStore(
  * One DataStore file per outbox under [directory]. Suits an outbox of a few dozen rows that rewrite
  * as a whole. [scope] needs a dispatcher that suits blocking I/O, as with [outboxDataStore]. A name
  * becomes one file name in [directory], with any character but letters, digits, `-`, `_` and `.`
- * written as `%XX`, so no name reaches outside it.
+ * written as `%XX`, so no name reaches outside it. Names that differ only in case would share one
+ * file on a file system that ignores case, like on iOS and macOS, so [open] throws
+ * [IllegalArgumentException] for the second such name.
  *
- * DataStore allows one active instance per file, so build one set per directory. Each name gets one
- * store for as long as this set lives, and an outbox built again for that name gets the same store.
+ * Build one set per directory, since DataStore allows one active instance per file, as
+ * [outboxDataStore] describes. Each name gets one store for as long as this set lives, and an
+ * outbox built again for that name gets the same store.
  *
  * Rows outlive app updates, so change a payload class with care. A new field needs a default value.
  * A renamed field needs `@JsonNames` with the old name, or a default. The default format ignores
- * fields the class no longer has. A row that still fails to decode is left out of every read and
- * reported once, and it stays stored until [clearAll].
+ * fields the class no longer has. A row that still fails to decode is handled as
+ * [OutboxStore.onUndecodable] describes.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class DataStoreOutboxStores(
@@ -141,7 +147,7 @@ class DataStoreOutboxStores(
   override fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
     serializer.asCodec(payloadFormat)
 
-  // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
+  // Nothing observes it, so it needs no StateFlow
   private val opened =
     AtomicReference(persistentHashMapOf<String, OpenedStore<Lazy<DataStoreOutboxStore<*>>>>())
 
@@ -151,6 +157,12 @@ class DataStoreOutboxStores(
       current[name]?.let {
         @Suppress("UNCHECKED_CAST")
         return it.checked(name, serializer).value as OutboxStore<E>
+      }
+      val clash =
+        current.keys.firstOrNull { fileName(it).equals(fileName(name), ignoreCase = true) }
+      require(clash == null) {
+        "Outbox $name differs from outbox $clash only in case, so both would use one file on a " +
+          "file system that ignores case, like on iOS and macOS"
       }
       val store = lazy {
         DataStoreOutboxStore(
@@ -167,21 +179,79 @@ class DataStoreOutboxStores(
   }
 
   /**
-   * Clears every outbox file under [directory]. A store this set has built in this process owns its
-   * file through a DataStore, and only that DataStore may write the file, so such a store is
-   * cleared through it. A file left behind by an earlier process, which no store here has opened,
-   * has no DataStore and is deleted directly. The deletes run on the caller's dispatcher.
+   * Clears every outbox file under [directory]. A store this set has opened in this process owns
+   * its file through a DataStore, and only that DataStore may write the file, so such a store is
+   * cleared through it, also when it opens while the clear runs. A file left behind by an earlier
+   * process, which no store here has opened, is deleted directly. The directory reads and the
+   * deletes run on the dispatcher of [scope], since they block.
+   *
+   * A [directory] that does not exist holds no files, so only the opened stores are cleared. It
+   * counts as missing only when the nearest ancestor that can be listed does not list it. Any other
+   * failure to list it throws the listing's [IOException] before anything is deleted or cleared, so
+   * every row stays.
    */
   override suspend fun clearAll() {
-    val built = opened.load().mapValues { it.value.store }.filterValues { it.isInitialized() }
-    val ownedFiles = built.keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
-    for (path in fileSystem.listOrNull(directory).orEmpty()) {
-      if (path.name.endsWith(".outbox") && path.name !in ownedFiles) {
-        fileSystem.delete(path, mustExist = false)
+    // Only the dispatcher, so the work stays part of the caller's job
+    val io = scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext
+    // Thrown after the block, so the caller gets the listing's own exception. One that leaves
+    // withContext can arrive as a copy.
+    var listingError: IOException? = null
+    val files =
+      withContext(io) {
+        try {
+          fileSystem.list(directory)
+        } catch (e: IOException) {
+          if (!isMissing(directory)) {
+            listingError = e
+          }
+          emptyList()
+        }
+      }
+    listingError?.let { throw it }
+    // First, since a direct delete beside a live DataStore leaves its rows in memory
+    clearOpened()
+    withContext(io) {
+      for (path in files) {
+        // Read for each file, so a store opened meanwhile keeps its file
+        if (path.name.endsWith(".outbox") && path.name !in ownedFiles()) {
+          fileSystem.delete(path, mustExist = false)
+        }
       }
     }
-    for (entry in built.values) {
-      entry.value.clear()
+    // A store opened during the deletes kept its file, so it is cleared here
+    clearOpened()
+  }
+
+  /** Clears every store this set has opened, built or not, through its DataStore. */
+  private suspend fun clearOpened() {
+    for (entry in opened.load().values) {
+      entry.store.value.clear()
+    }
+  }
+
+  /** The file names of every registered name, built or not. */
+  private fun ownedFiles(): Set<String> =
+    opened.load().keys.mapTo(HashSet()) { "${fileName(it)}.outbox" }
+
+  /**
+   * Whether the nearest ancestor that can be listed shows that [path] does not exist. Okio reports
+   * a missing directory and one it cannot read alike, and on JVM and Android its metadata is null
+   * for both, so only a listing tells them apart.
+   */
+  private fun isMissing(path: Path): Boolean {
+    var child = path
+    while (true) {
+      val parent = child.parent ?: return false
+      val entries =
+        try {
+          fileSystem.list(parent)
+        } catch (e: IOException) {
+          null
+        }
+      if (entries != null) {
+        return entries.none { it.name.equals(child.name, ignoreCase = true) }
+      }
+      child = parent
     }
   }
 }
@@ -212,8 +282,7 @@ private const val HEX = "0123456789ABCDEF"
 
 /**
  * Outbox rows in a DataStore file, kept across process death. Each row's payload decodes on its
- * own. A row that does not decode, like one stored before its payload class changed, is left out of
- * [entries], [entry] and [heads], and handed on through [onUndecodable]. It stays in the file.
+ * own, so a row that does not decode is handled as [OutboxStore.onUndecodable] describes.
  */
 class DataStoreOutboxStore<E>(
   /** From [outboxDataStore], or one the app wires itself. */
@@ -226,7 +295,7 @@ class DataStoreOutboxStore<E>(
   private val undecodable = UndecodableRows()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
-    // List order is send order. The id identifies the row everywhere.
+    // List order is send order
     val row =
       OutboxLog.Row(
         id = id.value,
@@ -236,8 +305,7 @@ class DataStoreOutboxStore<E>(
       )
     currentCoroutineContext().ensureActive()
     // updateData runs one transform at a time, so the whole log changes atomically. It runs to the
-    // end once started, so a caller cancelled meanwhile still stored its row, and a throw always
-    // means nothing was stored.
+    // end once started, as OutboxStore.insert requires.
     withContext(NonCancellable) {
       dataStore.updateData { log ->
         val kept = log.rows.filterNot { it.isExpired() }
@@ -253,10 +321,10 @@ class DataStoreOutboxStore<E>(
     dataStore.updateData { log ->
       val index = log.rows.indexOfFirst { it.id == entry.id.value }
       val row = log.rows.getOrNull(index)
-      // Compares the decoded OutboxStatus, not the raw columns: a Failed row whose cause changed
-      // since the expectation was built no longer matches, and a status written by a newer app
-      // version still matches the Failed it decodes to. On a mismatch the log is left as it is.
-      if (row == null || OutboxStatus(row.status, row.cause) != expected) {
+      // Compares the decoded OutboxStatus. So a Failed row whose cause changed since the
+      // expectation was built no longer matches, and a status written by a newer app version still
+      // matches the Failed it decodes to.
+      if (row == null || row.isExpired() || OutboxStatus(row.status, row.cause) != expected) {
         written = false
         return@updateData log
       }
@@ -302,7 +370,7 @@ class DataStoreOutboxStore<E>(
 
   /**
    * DataStore reads and parses the whole log on each change either way, so this walks it and
-   * decodes only each key's head. A row known not to decode is skipped without decoding.
+   * decodes only each key's head.
    */
   override fun heads(): Flow<List<OutboxEntry<E>>> =
     dataStore.data.map { log -> headsOf(log, key = null) }.distinctUntilChanged()
@@ -315,7 +383,7 @@ class DataStoreOutboxStore<E>(
 
   /**
    * The head of each key in [log], or of [key] alone when it is not null. A row that fails to
-   * decode is skipped, and one known not to decode is skipped without decoding.
+   * decode is skipped.
    */
   private fun headsOf(log: OutboxLog, key: String?): List<OutboxEntry<E>> {
     val heads = LinkedHashMap<String, OutboxEntry<E>>()
@@ -332,8 +400,13 @@ class DataStoreOutboxStore<E>(
 
   /** Drops every row, settled ones included, so each handle reads its row as absent. */
   suspend fun clear() {
-    dataStore.updateData { OutboxLog() }
-    undecodable.clear()
+    // A started clear runs to the end, also when its caller is cancelled meanwhile. It forgets the
+    // rows found not to decode only once its write lands.
+    currentCoroutineContext().ensureActive()
+    withContext(NonCancellable) {
+      dataStore.updateData { OutboxLog() }
+      undecodable.clear()
+    }
   }
 
   /** Settled more than keepSettledFor ago. It reads as absent until the next insert drops it. */

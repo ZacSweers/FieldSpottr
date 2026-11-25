@@ -23,11 +23,11 @@ import kotlinx.serialization.serializer
  * The factory supplies the failure handlers, clock, outbox stores and network state.
  *
  * Each outbox has two halves that an [OutboxKey] joins. The [OutboxSender]s handed to
- * [Factory.create] send rows, and this scope drains them from its creation, before any repository
- * exists. A repository then builds the handle that writes rows with the same key, and the handle
- * keeps the local state: the optimistic change, the commit of a sent change and the revert of a
- * failed one. A handle needs a sender for its key in this data scope, and each key takes one handle
- * per data scope.
+ * [Factory.create] send entries, and this scope drains them from its creation, before any
+ * repository exists. A repository then builds the handle that writes entries with the same key, and
+ * the handle keeps the local state: the optimistic change, the commit of a sent change and the
+ * revert of a failed one. A handle needs a sender for its key in this data scope, and each key
+ * takes one handle per data scope.
  *
  * These docs use three words. An action is a repository function like `star(id)`. A command is the
  * block that action submits to [ActionRunner.run]. An [Operation] is the handle the caller gets
@@ -54,7 +54,7 @@ interface DataScope {
    * moves that part to an I/O dispatcher with `withContext`.
    *
    * @param retry sets how long the fetches the query starts on its own hold off after failures, as
-   *   [DataQuery.state] describes. Null uses the factory's `fetchRetry` policy.
+   *   [DataQuery.stateAutoFetch] describes. Null uses the factory's `fetchRetry` policy.
    * @param onFailure hears every failure this query reports, failed fetches included. Null uses the
    *   factory's handlers.
    */
@@ -95,16 +95,16 @@ interface DataScope {
   ): KeyedDataQueries<K, T> = keyed(store, { freshness }, maxFetches, retry, onFailure, fetch)
 
   /**
-   * The handle on the outbox that [key] names: writes that must reach the server, kept as rows and
-   * sent in order per key, as [Outbox] describes. The sender for [key] in this data scope sends the
-   * rows, and this handle writes them and keeps their local state.
+   * The handle on the outbox that [key] names: writes that must reach the server, kept as entries
+   * and sent in order per key, as [Outbox] describes. The sender for [key] in this data scope sends
+   * the entries, and this handle writes them and keeps their local state.
    *
    * ```
-   * internal val NotesOutbox = OutboxKey<NoteChange>("notes")
+   * internal val NotesOutboxKey = OutboxKey<NoteChange>("notes")
    *
    * private val outbox =
    *   data.outbox(
-   *     NotesOutbox,
+   *     NotesOutboxKey,
    *     apply = { change, _ -> notes.update { it + change } },
    *     revert = { change, _ -> notes.update { it - change } },
    *   )
@@ -120,11 +120,15 @@ interface DataScope {
    * owner of this data. An owner that lives shorter than the data scope, like a screen, creates a
    * data scope of its own with [Factory.create] and its senders, and builds the handle there.
    *
-   * @param apply makes the optimistic change of each payload [Outbox.enqueue] takes, before its row
-   *   is inserted. A throw inserts nothing and fails the handle.
-   * @param revert undoes the optimistic change when a row fails for good or is discarded, at most
-   *   once per row. It reads only the payload and the row's id, so it works after a restart too. A
-   *   row that failed while no handle was attached reverts once a handle attaches.
+   * @param apply makes the optimistic change of each payload [Outbox.enqueue] takes, before its
+   *   entry is inserted. A throw inserts nothing and fails the handle. Once admitted, [apply] and
+   *   the entry insert finish together even when the owner stops, so [apply] must be able to finish
+   *   after the scope's other jobs are cancelled. Make the change as the last step of [apply],
+   *   since nothing undoes a change that [apply] made before it threw.
+   * @param revert undoes the optimistic change when an entry fails for good or is discarded, at
+   *   most once per entry. It reads only the payload and the entry's id, so it works after a
+   *   restart too. An entry that failed while no handle was attached reverts once a handle
+   *   attaches.
    * @param onFailure hears this handle's failures: an apply or revert that throws, and enqueue,
    *   retry and discard calls that fail. The sender's handler hears the drain's failures. Null uses
    *   the factory's handler.
@@ -138,16 +142,16 @@ interface DataScope {
 
   /**
    * An [OptimisticQueryStore] over [base], for the outbox that [key] names. [base] holds the truth,
-   * and each change that waits is a row of the outbox. The sender for [key] in this data scope
-   * sends the rows, and this store commits each sent change into [base]. `clear()` on the store
+   * and each change that waits is an entry of the outbox. The sender for [key] in this data scope
+   * sends the entries, and this store commits each sent change into [base]. `clear()` on the store
    * clears [base] and drops the changes that wait.
    *
    * ```
-   * internal val FavoritesOutbox = OutboxKey<FavoriteChange>("favorites")
+   * internal val FavoritesOutboxKey = OutboxKey<FavoriteChange>("favorites")
    *
    * private val store =
    *   data.optimisticStore(
-   *     FavoritesOutbox,
+   *     FavoritesOutboxKey,
    *     base = base,
    *     apply = { current, change ->
    *       if (change.on) {
@@ -170,8 +174,8 @@ interface DataScope {
    *
    * @param apply returns the value with [mutation] applied. A null input means nothing is stored,
    *   and a null result removes the value. It runs on the data scope's dispatcher each time the
-   *   truth or the rows change, so keep it cheap and pure. Its other rule depends on how the server
-   *   answers a send.
+   *   truth or the entries change, so keep it cheap and pure. Its other rule depends on how the
+   *   server answers a send.
    *
    *   With [Delivery.Acknowledged], the store commits a sent change by applying it to the truth. A
    *   fetch that overlapped the send, or a commit that runs again after a restart, can pass it a
@@ -195,7 +199,7 @@ interface DataScope {
    *   sender's handler hears the drain's failures. Null uses the factory's handler.
    */
   fun <T, M> optimisticStore(
-    key: OutboxKey<M, T>,
+    key: OutboxKey<M, out T>,
     base: QueryStore<T>,
     apply: (current: T?, mutation: M) -> T?,
     onFailure: ((Throwable) -> Unit)? = null,
@@ -203,28 +207,32 @@ interface DataScope {
 
   /**
    * [optimisticStore] per key, for a [keyed] query. Every key shares the outbox that [key] names,
-   * whose rows are [KeyedMutation]s, so the sender gets the key with the change.
+   * whose entries are [KeyedMutation]s, so the sender gets the key with the change.
    *
    * ```
-   * internal val PermitsOutbox = OutboxKey<KeyedMutation<String, PermitChange>>("permits")
+   * internal val PermitsOutboxKey = OutboxKey<KeyedMutation<String, PermitChange>>("permits")
    *
    * // The sender, contributed into the set the data scope is created with
-   * PermitsOutbox.sender { change, id -> api.set(change.key, change.mutation, id.value) }
+   * PermitsOutboxKey.sender { change, id -> api.set(change.key, change.mutation, id.value) }
    *
    * // The handle, in the repository
-   * private val stores = data.optimisticStores(PermitsOutbox, base = { area -> ... }, apply = ...)
+   * private val stores =
+   *   data.optimisticStores(PermitsOutboxKey, base = { area -> ... }, apply = ...)
    * ```
    *
    * [base] runs once per key, and its store serves that key for as long as this set lives. So the
    * set keeps one store object per key it has seen. For keys without bound, like thread ids, return
    * small views over one bounded source, like [QueryStore.inMemoryByKey] or a database table.
    *
-   * [keySerializer] encodes each key, and each key's encoded form orders its rows. Keys that are
-   * equal must encode to the same form, so they share one order. [apply] and [onFailure] work as in
-   * [optimisticStore].
+   * [keySerializer] encodes each key, and each key's encoded form orders its entries. Keys that are
+   * equal must encode to the same form, so they share one order. When equal keys can serialize
+   * differently, like a key with a `Set` field, pass a serializer that writes them the same way.
+   * [apply] and [onFailure] work as in [optimisticStore]. So an acknowledged change must give the
+   * same value when [apply] runs it twice, like setting a star, or adding an item only when its id
+   * is absent.
    */
   fun <K : Any, T, M> optimisticStores(
-    key: OutboxKey<KeyedMutation<K, M>, T>,
+    key: OutboxKey<KeyedMutation<K, M>, out T>,
     base: (key: K) -> QueryStore<T>,
     keySerializer: KSerializer<K>,
     apply: (current: T?, mutation: M) -> T?,
@@ -239,26 +247,26 @@ interface DataScope {
   interface Factory {
     /**
      * A data scope whose work runs in [scope] and stops when it is cancelled. It drains the outbox
-     * of each of [senders] from now on, so rows stored before a restart send before any repository
-     * builds a handle. A handle built later in the data scope joins its key's sender.
+     * of each of [senders] from now on, so entries stored before a restart send before any
+     * repository builds a handle. A handle built later in the data scope joins its key's sender.
      *
-     * Each sender's [OutboxKey.name] names its rows. Two senders with one name throw here. So does
-     * a name whose sender over the factory's [OutboxStores] already runs in another data scope from
-     * this factory, until that scope ends. A sender with a store of its own is checked only within
-     * this call, since nothing else knows its store. Rows under a name that has no sender wait in
-     * their store until a data scope is created with a sender for that name.
+     * Each sender's [OutboxKey.name] names its entries. Two senders with one name throw here. So
+     * does a name whose sender over the factory's [OutboxStores] already runs in another data scope
+     * from this factory, until that scope ends. A sender with a store of its own is checked only
+     * within this call, since nothing else knows its store. Entries under a name that has no sender
+     * wait in their store until a data scope is created with a sender for that name.
      */
     fun create(scope: CoroutineScope, senders: Set<OutboxSender<*>> = emptySet()): DataScope
 
     /**
      * What this factory's running outboxes still have to send. An outbox runs from the creation of
-     * a data scope with its sender until that scope ends. It is [OutboxBacklog.Ready] if any row
+     * a data scope with its sender until that scope ends. It is [OutboxBacklog.Ready] if any entry
      * can send now, including a backoff whose deadline has passed. Otherwise it is the earliest
      * [OutboxBacklog.BackingOff], or [OutboxBacklog.Empty].
      *
-     * It emits once every running outbox has read its rows, then on each change. Only running
-     * outboxes count, so rows under a name with no sender in a created data scope are left out.
-     * Rows that wait for a handle to commit or revert them count as sent. The factory's
+     * It emits once every running outbox has read its entries, then on each change. Only running
+     * outboxes count, so entries under a name with no sender in a created data scope are left out.
+     * Entries that wait for a handle to commit or revert them count as sent. The factory's
      * [OutboxScheduler] hears the same changes.
      */
     val backlog: Flow<OutboxBacklog>
@@ -268,7 +276,7 @@ interface DataScope {
        * Builds the factory an app or a test hands its repositories.
        *
        * Failed fetches go to [onFetchFailure], which defaults to [onFailure]. Every other failure
-       * that has no handler of its own goes to [onFailure]: failed commands, outbox drains, rows
+       * that has no handler of its own goes to [onFailure]: failed commands, outbox drains, entries
        * that fail for good or cannot be decoded, a store flow that fails while a query watches it,
        * an optimistic store's `apply` that throws, a retry policy or scheduler that throws, and
        * query work that fails without a fetch, like an `invalidate()` whose store throws. A query,
@@ -284,20 +292,29 @@ interface DataScope {
        * itself, like a scheduler that throws, always takes that uncaught path, since it belongs to
        * no data scope.
        *
-       * Outboxes open their rows on [stores], drain while [online] is true, and tell [scheduler]
-       * when rows wait. Create scopes on `Dispatchers.Default`, not Main, as [ActionRunner]
+       * Outboxes keep their entries in [stores], drain while [online] is true, and tell [scheduler]
+       * when entries wait. Create scopes on `Dispatchers.Default`, not Main, as [ActionRunner]
        * explains.
        *
+       * Each outbox collects [online] for as long as its data scope lives. A query collects it only
+       * while its `stateAutoFetch` has a collector, and checks again on each reconnect. Queries
+       * also read its value while nothing collects it, such as when one records whether a failed
+       * fetch ran offline. So its value must stay current with no collector, as a flow from
+       * `stateIn` with `SharingStarted.Eagerly` does. A flow shared with
+       * `SharingStarted.WhileSubscribed` keeps a stale value between subscribers, so a query can
+       * record a failure made offline as one made online and hold off after it.
+       *
        * [retry] decides for every sender built without a policy of its own whether a failed send
-       * may succeed later, like after a timeout, and how long its row waits first. When the policy
-       * declines, or send throws [PermanentFailure], the row fails at once: its undo runs, and the
-       * next row on its key sends. The default retries every failure with no attempt limit.
+       * may succeed later, like after a timeout, and how long its entry waits first. When the
+       * policy declines, or send throws [PermanentFailure], the entry fails at once: its undo runs,
+       * and the next entry on its key sends. The default retries every failure with no attempt
+       * limit.
        *
        * [fetchRetry] sets for every query built without a policy of its own how long the fetches it
-       * starts on its own hold off after failures, as [DataQuery.state] describes. When it declines
-       * a failure, the query fetches on its own again only after a requested fetch succeeds. The
-       * default waits 1 second after the first failure in a row, doubles the wait up to 1 minute,
-       * and never declines.
+       * starts on its own hold off after failures, as [DataQuery.stateAutoFetch] describes. When it
+       * declines a failure, the query fetches on its own again only after a requested fetch
+       * succeeds. The default waits 1 second after the first failure in a row, doubles the wait up
+       * to 1 minute, and never declines.
        */
       operator fun invoke(
         onFailure: (Throwable) -> Unit,
@@ -327,7 +344,7 @@ interface DataScope {
 
 /** [DataScope.optimisticStores] with the serializer for a `@Serializable` key. */
 inline fun <reified K : Any, T, M> DataScope.optimisticStores(
-  key: OutboxKey<KeyedMutation<K, M>, T>,
+  key: OutboxKey<KeyedMutation<K, M>, out T>,
   noinline base: (key: K) -> QueryStore<T>,
   noinline apply: (current: T?, mutation: M) -> T?,
   noinline onFailure: ((Throwable) -> Unit)? = null,

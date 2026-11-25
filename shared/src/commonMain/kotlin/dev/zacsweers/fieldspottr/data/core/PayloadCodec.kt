@@ -6,6 +6,7 @@ import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.fetchAndUpdate
 import kotlin.concurrent.atomics.update
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.encoding.Base64
 import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.PersistentSet
@@ -59,11 +60,15 @@ internal val DefaultPayloadFormat: SerialFormat = Json { ignoreUnknownKeys = tru
 
 /**
  * [decode] of [encoded], or the failure it threw. A durable store decodes each row on its own this
- * way, so one row that does not decode never hides the others.
+ * way, so one row that does not decode never hides the others. A [CancellationException] propagates
+ * to the caller. It says nothing about [encoded], so its row is never recorded as one that does not
+ * decode.
  */
 internal fun <E> PayloadCodec<E>.decodeCatching(encoded: String): Result<E> =
   try {
     Result.success(decode(encoded))
+  } catch (e: CancellationException) {
+    throw e
   } catch (e: Exception) {
     Result.failure(e)
   }

@@ -72,9 +72,9 @@ internal class RealKeyedDataQueries<K : Any, T>(
 ) : KeyedDataQueries<K, T> {
   // Updated by compare-and-set only. Nothing observes it, so it needs no StateFlow.
   private val entries = AtomicReference(persistentHashMapOf<K, KeyEntry<T>>())
-  // Each key whose automatic fetches failed and have not succeeded since. It outlives the key's
-  // query, so a query rebuilt inside the window or after a decline still holds off. Updated by
-  // compare-and-set only.
+  // Each key whose automatic fetches failed and have not succeeded since, with the failure. It
+  // outlives the key's query, so a query rebuilt inside the window or after a decline still holds
+  // off, and starts with that failure as its status. Updated by compare-and-set only.
   private val holdOffs = AtomicReference(HoldOffs<K>())
   // The newest invalidateAll() call, or null before the first. Updated by compare-and-set only.
   private val allInvalidated = AtomicReference<AllInvalidated<K>?>(null)
@@ -92,46 +92,34 @@ internal class RealKeyedDataQueries<K : Any, T>(
   val keysRemembered: Int
     get() = allInvalidated.load()?.refreshed?.size ?: 0
 
-  override fun state(key: K): Flow<QueryState<T>> = flow {
+  override fun state(key: K): Flow<QueryState<T>> = heldFlow(key) { it.state }
+
+  override fun stateAutoFetch(key: K): Flow<QueryState<T>> = heldFlow(key) { it.stateAutoFetch }
+
+  override fun data(key: K): Flow<Fetched<T>?> = heldFlow(key) { it.data }
+
+  override fun status(key: K): Flow<FetchStatus> = heldFlow(key) { it.status }
+
+  override fun requestFetch(key: K, force: Boolean): Operation =
+    command(key) { it.requestFetch(force) }
+
+  override fun invalidate(key: K): Operation = command(key) { it.invalidate() }
+
+  /** Collects the flow [select] picks from [key]'s query, holding its entry while collected. */
+  private fun <R> heldFlow(key: K, select: (RealDataQuery<T>) -> Flow<R>): Flow<R> = flow {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.state)
+      emitAll(select(entry.query))
     } finally {
       entry.release()
     }
   }
 
-  override fun stored(key: K): Flow<Fetched<T>?> = flow {
+  /** Starts [start] on [key]'s query, holding its entry until the operation settles. */
+  private inline fun command(key: K, start: (RealDataQuery<T>) -> Operation): Operation {
     val entry = acquire(key)
     try {
-      emitAll(entry.query.stored)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun status(key: K): Flow<FetchStatus> = flow {
-    val entry = acquire(key)
-    try {
-      emitAll(entry.query.status)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun requestFetch(key: K, force: Boolean): Operation {
-    val entry = acquire(key)
-    try {
-      return entry.query.requestFetch(force).also(entry::holdUntilSettled)
-    } finally {
-      entry.release()
-    }
-  }
-
-  override fun invalidate(key: K): Operation {
-    val entry = acquire(key)
-    try {
-      return entry.query.invalidate().also(entry::holdUntilSettled)
+      return start(entry.query).also(entry::holdUntilSettled)
     } finally {
       entry.release()
     }
@@ -355,7 +343,7 @@ private class KeyEntry<T>(
    * caller holds the entry, so it never revives a dropped one.
    */
   override fun holdUntilSettled(operation: Operation) {
-    holds.incrementAndFetch()
+    holds.update { it + 1 }
     operation.invokeOnSettled(::release)
   }
 

@@ -220,52 +220,6 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
     assertEquals(1, rows.size)
     assertEquals(rows.single().id, inserted?.getOrNull())
   }
-
-  /**
-   * [OutboxStores.clearAll] on the two in-process store sets. The SQLDelight set has a JVM test.
-   */
-  class OutboxStoresClearAllTest {
-    @Test
-    fun `clearing an in-memory set empties every store it opened`() = runTest {
-      val stores = InMemoryOutboxStores()
-      val tags = stores.open("tags", String.serializer())
-      val notes = stores.open("notes", String.serializer())
-      val id = tags.insertNew("k", "a")
-      notes.insertNew("k", "b")
-
-      stores.clearAll()
-
-      assertEquals(emptyList(), tags.entries().first())
-      assertEquals(emptyList(), notes.entries().first())
-      // A handle that follows the row reads it as absent, and settles Cancelled through that
-      assertNull(tags.entry(id).first())
-    }
-
-    @Test
-    fun `clearing a file set empties the stores it built and deletes the files no one opened`() =
-      runTest {
-        val fileSystem = FakeFileSystem()
-        val directory = "/outbox".toPath()
-        fileSystem.createDirectories(directory)
-        // An earlier process left rows for an outbox this one never builds
-        val earlier = CoroutineScope(Job())
-        DataStoreOutboxStores(earlier, directory, fileSystem = fileSystem)
-          .open("old", String.serializer())
-          .insertNew("k", "a")
-        earlier.cancel()
-        val stores = DataStoreOutboxStores(backgroundScope, directory, fileSystem = fileSystem)
-        val tags = stores.open("tags", String.serializer())
-        val id = tags.insertNew("k", "b")
-
-        stores.clearAll()
-
-        assertEquals(emptyList(), tags.entries().first())
-        assertNull(tags.entry(id).first())
-        assertFalse(fileSystem.exists(directory / "old.outbox"))
-        // The store this set built keeps its file, now empty, since its DataStore still owns it
-        assertTrue(fileSystem.exists(directory / "tags.outbox"))
-      }
-  }
 }
 
 /** [OutboxStores.clearAll] on the two in-process store sets. The SQLDelight set has a JVM test. */

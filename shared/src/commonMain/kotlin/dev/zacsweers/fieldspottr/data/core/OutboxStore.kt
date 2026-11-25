@@ -16,21 +16,25 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 
-/** Identifies one outbox row everywhere: in its store, in a handle and after a restart. */
+/** Identifies one outbox entry everywhere: in its store, in a handle and after a restart. */
 @JvmInline value class EntryId(val value: String)
 
 /**
- * Where an outbox row stands. [Sent] and [Discarded] are final. The store prunes a Discarded row,
- * and a Sent row once its handle has committed it, as [OutboxEntry.committed] describes.
+ * Where an outbox entry stands. [Sent] and [Discarded] are final. The store prunes an entry some
+ * time after [isDone] becomes true for it.
  */
 sealed interface OutboxStatus {
   /** Waiting for its turn, the network or a backoff. */
   data object Queued : OutboxStatus
 
-  /** In flight. A row found in this state at startup is sent again. */
+  /** In flight. An entry found in this state at startup is sent again. */
   data object Sending : OutboxStatus
 
-  /** Rejected or out of attempts. Needs [Outbox.retry] or [Outbox.discard]. */
+  /**
+   * Rejected or out of attempts. Needs [Outbox.retry] or [Outbox.discard]. [cause] is the text of
+   * the failure, which the outbox cuts to 16,384 chars so a long message cannot outgrow a stored
+   * row.
+   */
   data class Failed(val cause: String) : OutboxStatus
 
   /** Delivered. */
@@ -40,64 +44,75 @@ sealed interface OutboxStatus {
   data object Discarded : OutboxStatus
 }
 
-/** Whether the row has reached a final status, [OutboxStatus.Sent] or [OutboxStatus.Discarded]. */
+/**
+ * Whether the entry has reached a final status, [OutboxStatus.Sent] or [OutboxStatus.Discarded].
+ */
 val OutboxStatus.isSettled: Boolean
   get() = this == OutboxStatus.Sent || this == OutboxStatus.Discarded
 
-/** One row of an outbox: the payload to send, its place in the order and where its send stands. */
+/**
+ * One entry of an outbox: the payload to send, its place in the order and where its send stands.
+ */
 data class OutboxEntry<E>(
   val id: EntryId,
-  /** Rows with equal keys send in order. An empty key is the outbox-wide default. */
+  /** Entries with equal keys send in order. An empty key is the outbox-wide default. */
   val key: String,
   val payload: E,
   val status: OutboxStatus,
   /** Transient failures so far. */
   val attempts: Int = 0,
+  /** The text of the last transient failure, cut like [OutboxStatus.Failed.cause]. */
   val lastError: String? = null,
   /**
-   * Whether the outbox has run, or at least attempted, the revert of this row's optimistic change.
-   * A revert runs at most once per row. The outbox sets this flag and attempts the revert as one
-   * step that a cancelled scope cannot split, so only process death between the two can leave the
-   * flag set without the revert having run.
+   * Whether the outbox has run, or at least attempted, the revert of this entry's optimistic
+   * change. A revert runs at most once per entry. The outbox sets this flag and attempts the revert
+   * as one step that a cancelled scope cannot split, so only process death between the two can
+   * leave the flag set without the revert having run.
    */
   val reverted: Boolean = false,
-  /** When the current backoff ends. It lives on the row, so a restart waits it out. */
+  /** When the current backoff ends. It lives on the entry, so a restart waits it out. */
   val retryAt: Instant? = null,
   /**
-   * Whether the outbox's handle has taken this Sent row into its local state, like an optimistic
-   * store that writes the change into its truth. A row sent while its data scope had no handle for
-   * the outbox stays uncommitted until a handle attaches, so the store keeps it until then.
+   * Whether the outbox's handle has taken this Sent entry into its local state, like an optimistic
+   * store that writes the change into its truth. An entry sent while its data scope had no handle
+   * for the outbox stays uncommitted until a handle attaches, so the store keeps it until then.
    */
   val committed: Boolean = false,
-  /** When the send finished. Set on Sent rows only. A commit reads it to tell older fetches. */
+  /**
+   * When the send finished. Set on Sent entries only. A commit reads it to tell older fetches. An
+   * entry whose commit is owed gets a time later than every owed Sent entry on its key, so owed
+   * entries commit in the order they sent.
+   */
   val sentAt: Instant? = null,
   /**
-   * The server's answer to a Sent row that is not committed yet, encoded by the outbox's reply
-   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does. The write
-   * that marks the row committed also clears it, so a committed row keeps no answer, and a row
-   * whose commit write failed keeps it for the next commit.
+   * The server's answer to a Sent entry that is not committed yet, encoded by the outbox's reply
+   * codec. Null when the server answered with nothing, as [Delivery.Acknowledged] does. An answer
+   * that failed to encode leaves a marker that the JSON and Base64 codecs never write, and the
+   * commit then runs with the answer unknown. The write that marks the entry committed also clears
+   * it, so a committed entry keeps no answer, and an entry whose commit write failed keeps it for
+   * the next commit.
    */
   val reply: String? = null,
 )
 
 /**
- * Whether the row has no work left: it is Sent and committed, or Discarded. Only such a row gets a
- * settled time, and the store prunes it once that time is old enough.
+ * Whether the entry has no work left: it is Sent and committed, or Discarded. Only such an entry
+ * gets a settled time, and the store prunes it once that time is old enough.
  */
 val OutboxEntry<*>.isDone: Boolean
   get() = (status == OutboxStatus.Sent && committed) || status == OutboxStatus.Discarded
 
 /**
- * Whether the row waits for its outbox's handle: it is Sent and not committed, or Failed and its
- * revert has not run. A handle settles such rows when it attaches, oldest first per key.
+ * Whether the entry waits for its outbox's handle: it is Sent and not committed, or Failed and its
+ * revert has not run. A handle settles such entries when it attaches, oldest first per key.
  */
 val OutboxEntry<*>.isOwed: Boolean
   get() =
     (status == OutboxStatus.Sent && !committed) || (status is OutboxStatus.Failed && !reverted)
 
 /**
- * Durable rows for an [Outbox]. The in-memory store is the default, and [DataStoreOutboxStore]
- * keeps rows across process death.
+ * Durable rows for an [Outbox], one row for each entry. The in-memory store is the default, and
+ * [DataStoreOutboxStore] keeps rows across process death.
  *
  * The outbox drains each key on its own, so calls for different keys can run at the same time. A
  * store over a shared resource, like a database, must handle that.
@@ -118,7 +133,8 @@ interface OutboxStore<E> {
 
   /**
    * Compare-and-set. Writes status, attempts, lastError, reverted, retryAt, committed, sentAt and
-   * reply only if the row's status is still [expected]. Returns whether it wrote.
+   * reply only if the row's status is still [expected]. Returns whether it wrote. A row that is
+   * gone, or that expired as [entry] describes, is never written, so the update returns false.
    */
   suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean
 
@@ -341,7 +357,9 @@ interface OutboxStores {
 
   /**
    * Encodes the server's answers for [OutboxEntry.reply], for a row sent while no handle could
-   * commit it. A durable set encodes answers in its payload format. The default uses JSON.
+   * commit it. A durable set encodes answers in its payload format. The default uses JSON. A codec
+   * must never encode an answer as the text `} unknown reply`, since the outbox reads that back as
+   * an unknown answer.
    */
   fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
     serializer.asCodec(DefaultPayloadFormat)

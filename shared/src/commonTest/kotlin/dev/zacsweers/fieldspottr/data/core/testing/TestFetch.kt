@@ -6,7 +6,6 @@ import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.atomics.decrementAndFetch
 import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.concurrent.atomics.update
 import kotlinx.collections.immutable.persistentListOf
@@ -74,7 +73,7 @@ abstract class FetchRecorder<K> internal constructor() {
       cancelledCalls.update { it.adding(key) }
       throw e
     } finally {
-      inFlight.decrementAndFetch()
+      inFlight.update { it - 1 }
     }
   }
 }

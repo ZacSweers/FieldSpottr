@@ -18,14 +18,14 @@ import kotlinx.serialization.Serializable
  * The favorites outbox. [FavoritesRepository] builds its optimistic store with this key, and the
  * app data scope drains it with [favoritesSender]. "favorites" names the stored rows, so keep it.
  */
-internal val FavoritesOutbox = OutboxKey<FavoriteChange>("favorites")
+internal val FavoritesOutboxKey = OutboxKey<FavoriteChange>("favorites")
 
 /**
- * Sends each change to [api], with the row's id as the idempotency key. The server answers with
+ * Sends each change to [api], with the entry's id as the idempotency key. The server answers with
  * nothing, so the store applies the change to its truth itself once the send succeeds.
  */
 internal fun favoritesSender(api: FavoritesApi): OutboxSender<*> =
-  FavoritesOutbox.sender { change, id ->
+  FavoritesOutboxKey.sender { change, id ->
     api.setFavorite(change.group, change.on, idempotencyKey = id.value)
   }
 
