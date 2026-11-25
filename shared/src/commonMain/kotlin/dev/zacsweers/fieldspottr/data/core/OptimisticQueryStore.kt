@@ -80,8 +80,16 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * rejected for good or out of attempts, and settles Cancelled once discarded. Its
    * [OutboxOperation.stored] settles once the entry is written, for a caller that only needs the
    * change kept.
+   *
+   * [admission] applies among this value's changes and takes what [Outbox.enqueue] takes. A change
+   * that [Admission.Reject] rejects can show in [data] until the rejection is known. Then it leaves
+   * [data], and the handle fails with a [CommandRejectedException].
    */
-  fun mutate(mutation: M, ordering: Ordering = Ordering.Serial): OutboxOperation
+  fun mutate(
+    mutation: M,
+    ordering: Ordering = Ordering.Serial,
+    admission: CancellableAdmission = Admission.Queue,
+  ): OutboxOperation
 
   /**
    * Changes the server has not confirmed, oldest first: waiting, sending or failed. It lists stored
@@ -143,8 +151,16 @@ data class PendingMutation<M>(
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, M> {
-  /** [OptimisticQueryStore.mutate] on [key]'s store, with [ordering] among [key]'s changes. */
-  fun mutate(key: K, mutation: M, ordering: Ordering = Ordering.Serial): OutboxOperation
+  /**
+   * [OptimisticQueryStore.mutate] on [key]'s store, with [ordering] and [admission] among [key]'s
+   * changes. So a reject key on one key never rejects a change on another.
+   */
+  fun mutate(
+    key: K,
+    mutation: M,
+    ordering: Ordering = Ordering.Serial,
+    admission: CancellableAdmission = Admission.Queue,
+  ): OutboxOperation
 
   /**
    * [key]'s changes the server has not confirmed, oldest first, from stored entries only. A change

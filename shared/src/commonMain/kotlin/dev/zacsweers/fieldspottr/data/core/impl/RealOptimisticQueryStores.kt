@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
+import dev.zacsweers.fieldspottr.data.core.CancellableAdmission
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
@@ -310,9 +311,16 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * Gives the change its row id, records it as Pending, then enqueues its row and follows it. The
    * row's write is registered in [storing] before the change is recorded, so a clear that finds the
    * change also waits for its row, even while this call has not enqueued it yet. A refusal of
-   * [ordering] throws before the change is recorded, or from the enqueue, which forgets it.
+   * [ordering] throws before the change is recorded, or from the enqueue, which forgets it. So does
+   * a refused [admission]. A rejected change fails its stored milestone, so it is forgotten like a
+   * change whose row could not be stored.
    */
-  override fun mutate(key: K, mutation: M, ordering: Ordering): OutboxOperation {
+  override fun mutate(
+    key: K,
+    mutation: M,
+    ordering: Ordering,
+    admission: CancellableAdmission,
+  ): OutboxOperation {
     require(!replies || ordering == Ordering.Serial) {
       "This store's sender can answer with a value, so its changes take Ordering.Serial only. " +
         "Two lines could commit their answers out of order. Use Ordering.Serial."
@@ -324,7 +332,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     edit { it.knowing(id, Known(Kind.Pending, payload)) }
     val handle =
       try {
-        outbox.enqueue(id, payload, ordering, line = orderKey(key))
+        outbox.enqueue(id, payload, ordering, line = orderKey(key), admission)
       } catch (e: Throwable) {
         // No row will exist, so nothing waits for it and nothing shows the change
         write.started.complete(Operation.failed(e))
@@ -1138,8 +1146,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
     }
 
-    override fun mutate(mutation: M, ordering: Ordering): OutboxOperation =
-      this@RealOptimisticQueryStores.mutate(key, mutation, ordering)
+    override fun mutate(
+      mutation: M,
+      ordering: Ordering,
+      admission: CancellableAdmission,
+    ): OutboxOperation = this@RealOptimisticQueryStores.mutate(key, mutation, ordering, admission)
 
     override val pending: Flow<List<PendingMutation<M>>> =
       this@RealOptimisticQueryStores.pending(key)

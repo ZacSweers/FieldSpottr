@@ -95,7 +95,8 @@ data class OutboxEntry<E>(
   val reply: String? = null,
   /**
    * The reject key this entry was enqueued with, or null when it has none. Only the insert sets it,
-   * through the [OutboxStore.insert] that takes one, and no update changes it.
+   * through the [OutboxStore.insert] that takes one, and no update changes it. While its [status]
+   * is not [isSettled], [Outbox.enqueue] rejects a call with an equal reject key.
    */
   val rejectKey: String? = null,
 )

@@ -210,8 +210,23 @@ interface Outbox<E> {
    * even if the outbox's scope stops. [OutboxOperation.stored] settles once the entry is in, before
    * any send. The handle follows its entry from the moment the insert returns. So when the entry
    * was sent, failed and retried before then, the handle reports the retry's attempt.
+   *
+   * [admission] is [Admission.Queue], the default, or [Admission.Reject]. With `Reject(key)`, the
+   * call stores nothing while an entry enqueued with an equal reject key is Queued, Sending or
+   * Failed, on any line. The key is stored, so this holds across a restart. A rejected call runs no
+   * `apply` or `revert`, no failure handler hears of it, and its handle and its
+   * [OutboxOperation.stored] fail with a [CommandRejectedException] that holds `key`. A key that is
+   * not a `String` throws [IllegalArgumentException], and nothing runs or is stored. Each `Reject`
+   * call reads the outbox's entries once. The check is made inside one data scope, so a second data
+   * scope over the same store can admit an equal key at the same moment. It takes no
+   * [Admission.Join], since anyone with an entry's id can [discard] it for every caller that shares
+   * it.
    */
-  fun enqueue(payload: E, ordering: Ordering = Ordering.Serial): OutboxOperation
+  fun enqueue(
+    payload: E,
+    ordering: Ordering = Ordering.Serial,
+    admission: CancellableAdmission = Admission.Queue,
+  ): OutboxOperation
 
   /**
    * Requeues a failed entry with its attempts reset, or ends a backoff early. The handle follows
@@ -249,7 +264,8 @@ fun <E> Outbox<E>.enqueue(payload: E, key: String): OutboxOperation =
  * When the `apply` of [DataScope.outbox] or the insert throws, [stored] and the handle both settle
  * Failed with that failure. When the owner's scope stops before that `apply` starts, both settle
  * Cancelled. When it stops after the entry is stored, [stored] has succeeded, and the handle
- * settles Cancelled while the entry stays for the next data scope.
+ * settles Cancelled while the entry stays for the next data scope. When [Admission.Reject] rejects
+ * the call, both settle Failed with a [CommandRejectedException].
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OutboxOperation : Operation {

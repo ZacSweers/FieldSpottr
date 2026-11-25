@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
+import dev.zacsweers.fieldspottr.data.core.Admission
+import dev.zacsweers.fieldspottr.data.core.CancellableAdmission
+import dev.zacsweers.fieldspottr.data.core.CommandRejectedException
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
@@ -20,6 +23,7 @@ import dev.zacsweers.fieldspottr.data.core.PayloadCodec
 import dev.zacsweers.fieldspottr.data.core.PermanentFailure
 import dev.zacsweers.fieldspottr.data.core.RetryPolicy
 import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
+import dev.zacsweers.fieldspottr.data.core.isSettled
 import dev.zacsweers.fieldspottr.data.core.rollbackOnFailure
 import dev.zacsweers.fieldspottr.data.core.runCatchingCancellable
 import kotlin.concurrent.Volatile
@@ -117,7 +121,13 @@ internal interface RowOwner<E> {
  */
 internal interface OwnedRows<P> {
   /** [Outbox.enqueue] with the row id [id], on the receiver's default line [line]. */
-  fun enqueue(id: EntryId, payload: P, ordering: Ordering, line: String): OutboxOperation
+  fun enqueue(
+    id: EntryId,
+    payload: P,
+    ordering: Ordering,
+    line: String,
+    admission: CancellableAdmission,
+  ): OutboxOperation
 
   fun retry(id: EntryId): Operation
 
@@ -132,11 +142,20 @@ internal interface OwnedRows<P> {
 internal class AttachedOutbox<E>(val engine: RealOutbox<E>) : Outbox<E>, OwnedRows<E> {
   override val entries: Flow<List<OutboxEntry<E>>> = engine.entries
 
-  override fun enqueue(payload: E, ordering: Ordering): OutboxOperation =
-    engine.enqueue(EntryId(Uuid.random().toString()), payload, ordering, WHOLE_QUEUE)
+  override fun enqueue(
+    payload: E,
+    ordering: Ordering,
+    admission: CancellableAdmission,
+  ): OutboxOperation =
+    engine.enqueue(EntryId(Uuid.random().toString()), payload, ordering, WHOLE_QUEUE, admission)
 
-  override fun enqueue(id: EntryId, payload: E, ordering: Ordering, line: String): OutboxOperation =
-    engine.enqueue(id, payload, ordering, line)
+  override fun enqueue(
+    id: EntryId,
+    payload: E,
+    ordering: Ordering,
+    line: String,
+    admission: CancellableAdmission,
+  ): OutboxOperation = engine.enqueue(id, payload, ordering, line, admission)
 
   override fun retry(id: EntryId): Operation = engine.retry(id)
 
@@ -407,16 +426,50 @@ internal class RealOutbox<E>(
    * Runs the handle's apply for [payload], then inserts it as row [id], in one command. The id
    * comes first, so the handle knows it before the row exists. The row key comes from [ordering]
    * and the receiver's default [line], as [rowKeyOf] gives it.
+   *
+   * With [Admission.Reject], the stored reject key is its key on [line], as [onLine] gives it. The
+   * runner rejects the call while an earlier command with that key has not settled, which covers a
+   * row whose insert has not returned. The command then reads the rows once and records a rejection
+   * while an unsettled row holds the key, which covers a stored row and a restart.
    */
-  fun enqueue(id: EntryId, payload: E, ordering: Ordering, line: String): OutboxOperation {
+  fun enqueue(
+    id: EntryId,
+    payload: E,
+    ordering: Ordering,
+    line: String,
+    admission: CancellableAdmission,
+  ): OutboxOperation {
     val owner = checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner
     val rowKey = rowKeyOf(ordering, line, id)
-    return tracked(id, Ordering.Keyed(Enqueue(rowKey))) { attempt ->
+    val rejection = (admission as? Admission.Reject)?.let { CommandRejectedException(it.key) }
+    val rejectKey = rejection?.let {
+      val key =
+        requireNotNull(it.key as? String) {
+          "Outbox $name takes only a String reject key, since the key is stored. Use a " +
+            "String key."
+        }
+      onLine(line, key)
+    }
+    return tracked(id, Ordering.Keyed(Enqueue(rowKey)), rejectKey, rejection) { attempt ->
+      if (
+        rejection != null &&
+          store.entries().first().any { it.rejectKey == rejectKey && !it.status.isSettled }
+      ) {
+        // Recorded on the attempt, so no failure handler hears of it
+        attempt.rejected(rejection)
+        return@tracked
+      }
       // Once the change is applied, the row goes in or the change is undone, as RowOwner.apply
       // promises. An insert that throws stored nothing, so no send or revert would reach it.
       withContext(NonCancellable) {
         owner.apply(payload, id)
-        rollbackOnFailure({ owner.revert(payload, id) }) { store.insert(id, rowKey, payload) }
+        rollbackOnFailure({ owner.revert(payload, id) }) {
+          if (rejectKey == null) {
+            store.insert(id, rowKey, payload)
+          } else {
+            store.insert(id, rowKey, payload, rejectKey)
+          }
+        }
         // The watcher's list can lag the insert, so a waiter that subscribes once the row is
         // stored still sees work owed
         onBacklog(OutboxBacklog.Ready)
@@ -451,12 +504,16 @@ internal class RealOutbox<E>(
             "Outbox $name takes only a String key, since the key is stored and the toString of " +
               "${ordering.key::class} can differ after a restart. Use a String key."
           }
-        if (line.isEmpty()) {
-          key
-        } else {
-          "$line/$key"
-        }
+        onLine(line, key)
       }
+    }
+
+  /** [key] on the default line [line]: [key] itself when [line] is empty, else after `/`. */
+  private fun onLine(line: String, key: String): String =
+    if (line.isEmpty()) {
+      key
+    } else {
+      "$line/$key"
     }
 
   /**
@@ -1137,14 +1194,27 @@ internal class RealOutbox<E>(
    * A handle on row [id]: Queued until [write] reports the row through [Attempt.started], then the
    * outcome of that row's current attempt. A command that settles Cancelled after its row was
    * written still follows the row.
+   *
+   * With a [rejectKey], the command runs with it as its reject key. A call the runner rejects
+   * returns a handle that has already failed with [rejection], the caller's form of the key.
    */
   private fun tracked(
     id: EntryId,
     ordering: Ordering,
+    rejectKey: String? = null,
+    rejection: CommandRejectedException? = null,
     write: suspend (attempt: Attempt) -> Unit,
   ): OutboxOperation {
     val attempt = Attempt(id, MutableStateFlow(OperationState.Queued))
-    val written = actions.run(ordering) { write(attempt) }
+    val admission = rejectKey?.let(Admission::Reject) ?: Admission.Queue
+    val written = actions.run(ordering, admission) { write(attempt) }
+    // A rejected handle is not the runner's, so it has no command to settle
+    val refused = (written.state.value as? OperationState.Failed)?.cause
+    if (rejection != null && (refused as? CommandRejectedException)?.key == rejectKey) {
+      attempt.rejected(rejection)
+      val stored = Operation.of(attempt.stored.asStateFlow())
+      return RowOperation(id, attempt.state.asStateFlow(), stored)
+    }
     // A write that ends without reporting a row stored nothing, whether it failed or was cancelled
     // before the insert. The state is terminal by the time the command settles.
     written.invokeOnSettled {
@@ -1174,6 +1244,16 @@ internal class RealOutbox<E>(
     fun started() {
       follow(id, state)
       stored.value = OperationState.Succeeded
+    }
+
+    /**
+     * Fails the handle and [stored] with [cause] for a call that stored nothing. Both are terminal,
+     * so nothing that settles the write later changes them.
+     */
+    fun rejected(cause: CommandRejectedException) {
+      val failed = OperationState.Failed(cause)
+      stored.value = failed
+      state.value = failed
     }
   }
 

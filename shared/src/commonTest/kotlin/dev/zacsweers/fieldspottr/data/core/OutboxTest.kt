@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.doesNotContain
 import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
@@ -193,6 +194,183 @@ class OutboxTest {
     testScheduler.runCurrent()
     assertThat(applied).isEqualTo(0)
     assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  @Test
+  fun `a reject key refuses a call while its entry is queued, sending or failed`() = runTest {
+    var applied = 0
+    val outbox = outbox(online = false, apply = { _, _ -> applied++ })
+    val holder = outbox.enqueue("a", admission = Admission.Reject("k"))
+    holder.stored.awaitSucceeded()
+
+    assertRefused(outbox, "queued")
+    send.hold("a")
+    send.failPermanently()
+    data.online.value = true
+    outbox.entries.first { it.single().status == OutboxStatus.Sending }
+    assertRefused(outbox, "sending")
+    send.release("a")
+    holder.awaitFailed<PermanentFailure>()
+    assertRefused(outbox, "failed")
+    runCurrent()
+
+    assertThat(applied).isEqualTo(1)
+    assertThat(send.reverted).containsExactly("a")
+    assertThat(outbox.entries.first().map { it.payload }).containsExactly("a")
+    assertThat(data.actionFailures.take().single()).isInstanceOf<PermanentFailure>()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key is free again once its entry is discarded or sent`() = runTest {
+    val outbox = outbox(online = false)
+    val discarded = outbox.enqueue("a", admission = Admission.Reject("k"))
+    discarded.stored.awaitSucceeded()
+    outbox.discard(discarded.id).awaitSucceeded()
+
+    val sent = outbox.enqueue("b", admission = Admission.Reject("k"))
+    sent.stored.awaitSucceeded()
+    data.online.value = true
+    sent.awaitSucceeded()
+    outbox.enqueue("c", admission = Admission.Reject("k")).awaitSucceeded()
+
+    assertThat(send.sent).containsExactly("b", "c")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key refuses a call on another line`() = runTest {
+    val outbox = outbox(online = false)
+    outbox.enqueue("a", Ordering.Keyed("x"), Admission.Reject("k")).stored.awaitSucceeded()
+
+    assertRefused(outbox, "serial")
+    assertRefused(outbox, "keyed", Ordering.Keyed("y"))
+
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key refuses a call in a new data scope over the same rows`() = runTest {
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val first = scopes.create(owner, setOf(Notes.sender(send = send))).outbox(Notes)
+    first.enqueue("a", admission = Admission.Reject("k")).stored.awaitSucceeded()
+    owner.cancel()
+    runCurrent()
+
+    val later = scopes.create(backgroundScope, setOf(Notes.sender(send = send))).outbox(Notes)
+    assertRefused(later, "b")
+
+    assertThat(scopes.outboxStore<String>("notes").entries().first().map { it.payload })
+      .containsExactly("a")
+    scopes.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key refuses a call at once while the holder's insert has not returned`() = runTest {
+    val stores = LaggingOutboxStores(insertReturnsAfter = 10.seconds)
+    val rows = stores.open(Rows.name, Rows.serializer)
+    val outbox = dataOver(rows, online = false).outbox(Rows)
+    val holder = outbox.enqueue("a", admission = Admission.Reject("k"))
+    runCurrent()
+
+    val refused = outbox.enqueue("b", admission = Admission.Reject("k"))
+
+    assertThat(refused.assertFailed<CommandRejectedException>().key).isEqualTo("k")
+    assertThat(refused.stored.assertFailed<CommandRejectedException>().key).isEqualTo("k")
+    holder.stored.awaitSucceeded()
+    runCurrent()
+    assertThat(rows.entries().first().map { it.payload }).containsExactly("a")
+  }
+
+  @Test
+  fun `a reject key that is not a String throws and runs and stores nothing`() = runTest {
+    var applied = 0
+    val outbox = outbox(online = false, apply = { _, _ -> applied++ })
+
+    assertFailsWith<IllegalArgumentException> {
+      outbox.enqueue("a", admission = Admission.Reject(42))
+    }
+
+    testScheduler.runCurrent()
+    assertThat(applied).isEqualTo(0)
+    assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  @Test
+  fun `a store without reject keys fails a reject write and stores a queue write`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    // Overrides only the members without a default body, so the insert with a reject key throws
+    val plain =
+      object : OutboxStore<String> {
+        override suspend fun insert(id: EntryId, key: String, payload: String) =
+          rows.insert(id, key, payload)
+
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus) =
+          rows.update(entry, expected)
+
+        override fun entries() = rows.entries()
+
+        override fun entry(id: EntryId) = rows.entry(id)
+      }
+    var applied = 0
+    val scope = dataOver(plain, online = false)
+    val outbox = scope.outbox(Rows, apply = { _, _ -> applied++ }, revert = { _, _ -> applied-- })
+
+    val rejecting = outbox.enqueue("a", admission = Admission.Reject("k"))
+    rejecting.awaitFailed<UnsupportedOperationException>()
+    rejecting.stored.assertFailed<UnsupportedOperationException>()
+    assertThat(applied).isEqualTo(0)
+    outbox.enqueue("b").stored.awaitSucceeded()
+    runCurrent()
+
+    assertThat(applied).isEqualTo(1)
+    assertThat(rows.entries().first().map { it.payload }).containsExactly("b")
+    assertThat(scope.actionFailures.take().single()).isInstanceOf<UnsupportedOperationException>()
+  }
+
+  @Test
+  fun `a queue write and a reject write never refuse each other`() = runTest {
+    val outbox = outbox(online = false)
+
+    outbox.enqueue("a").stored.awaitSucceeded()
+    outbox.enqueue("b", admission = Admission.Reject("k")).stored.awaitSucceeded()
+    outbox.enqueue("c").stored.awaitSucceeded()
+    runCurrent()
+
+    assertThat(outbox.entries.first().map { it.payload }).containsExactly("a", "b", "c")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an apply that throws its own CommandRejectedException is reported`() = runTest {
+    val own = CommandRejectedException("k")
+    val outbox = outbox(online = false, apply = { _, _ -> throw own })
+
+    val handle = outbox.enqueue("a", admission = Admission.Reject("k"))
+
+    assertThat(handle.awaitFailed<CommandRejectedException>()).isSameInstanceAs(own)
+    runCurrent()
+    assertThat(data.actionFailures.take()).containsExactly(own)
+    assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  /**
+   * Enqueues [payload] in [outbox] with reject key "k" on [ordering], and passes when the call is
+   * refused: its handle and its stored milestone fail with that key, and no entry for [payload] is
+   * stored.
+   */
+  private suspend fun TestScope.assertRefused(
+    outbox: Outbox<String>,
+    payload: String,
+    ordering: Ordering = Ordering.Serial,
+  ) {
+    val handle = outbox.enqueue(payload, ordering, Admission.Reject("k"))
+    assertThat(handle.awaitFailed<CommandRejectedException>().key).isEqualTo("k")
+    assertThat(handle.stored.awaitFailed<CommandRejectedException>().key).isEqualTo("k")
+    runCurrent()
+    assertThat(outbox.entries.first().map { it.payload }).doesNotContain(payload)
   }
 
   @Test

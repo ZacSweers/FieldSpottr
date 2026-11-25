@@ -59,6 +59,12 @@ class LaggingOutboxStores(
         delay(insertReturnsAfter)
       }
 
+      override suspend fun insert(id: EntryId, key: String, payload: E, rejectKey: String) {
+        delay(insertStartsAfter)
+        rows.insert(id, key, payload, rejectKey)
+        delay(insertReturnsAfter)
+      }
+
       override suspend fun update(entry: OutboxEntry<E>, expected: OutboxStatus): Boolean {
         delay(updateTakes)
         check(!failCommittedWrite || entry.status != OutboxStatus.Sent || !entry.committed) {

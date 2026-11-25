@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
+import dev.zacsweers.fieldspottr.data.core.CancellableAdmission
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
@@ -98,7 +99,8 @@ internal fun <M> OwnedRows<M>.keyedByUnit(): OwnedRows<KeyedMutation<Unit, M>> {
       payload: KeyedMutation<Unit, M>,
       ordering: Ordering,
       line: String,
-    ): OutboxOperation = outbox.enqueue(id, payload.mutation, ordering, line)
+      admission: CancellableAdmission,
+    ): OutboxOperation = outbox.enqueue(id, payload.mutation, ordering, line, admission)
 
     override fun retry(id: EntryId): Operation = outbox.retry(id)
 

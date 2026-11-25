@@ -1643,6 +1643,64 @@ class OptimisticQueryStoreTest {
     data.assertNoFailures()
   }
 
+  @Test
+  fun `a rejected change leaves data and pending as they were and fails its handle`() = runTest {
+    val (store, _) = tags(online = false)
+    store.mutate(Add("b"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+    runCurrent()
+    val before = store.data.first()
+    val pendingBefore = store.pending.first()
+
+    val rejected = store.mutate(Add("c"), admission = Admission.Reject("k"))
+
+    assertThat(rejected.awaitFailed<CommandRejectedException>().key).isEqualTo("k")
+    runCurrent()
+    assertThat(store.data.first()).isEqualTo(before)
+    assertThat(store.pending.first()).isEqualTo(pendingBefore)
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a sent change whose commit is owed frees its reject key`() = runTest {
+    data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val base =
+      QueryStore.of(truth.data, write = { _, _ -> error("Disk full") }, clear = truth::clearFetched)
+    val store = data.optimisticStore(Tags, base = base, apply = ::addOnce)
+    val sent = store.mutate(Add("b"), admission = Admission.Reject("k"))
+    sent.awaitSucceeded()
+    assertOwed(sent.id)
+
+    store.mutate(Add("c"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+
+    val failures = data.actionFailures.take()
+    assertThat(failures.map { it.message }.distinct()).containsExactly("Disk full")
+    data.fetchFailures.assertNone()
+  }
+
+  @Test
+  fun `a keyed change rejects only within its key and stores its key's reject key`() = runTest {
+    data =
+      testDataScope(clock = testClock(START), online = false, senders = setOf(tagsByItemSender()))
+    val stores =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+      )
+
+    stores.mutate("x", Add("b"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+    stores.mutate("y", Add("c"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map {
+          it.rejectKey
+        }
+      )
+      .containsExactly("\"x\"/k", "\"y\"/k")
+    data.assertNoFailures()
+  }
+
   /** Adds [by] to a count, which is not idempotent. */
   @Serializable data class Bump(val by: Int)
 
