@@ -31,6 +31,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.append
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
+import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
@@ -1628,12 +1629,7 @@ class OptimisticQueryStoreTest {
     val (store, _) = tags(online = false)
     val before = store.data.first()
 
-    for (ordering in
-      listOf(
-        Ordering.Keyed("x", OnPrevious.Cancel),
-        Ordering.Keyed("x", OnPrevious.Supersede),
-        Ordering.Keyed(42),
-      )) {
+    for (ordering in listOf(Ordering.Keyed("x", OnPrevious.Cancel), Ordering.Keyed(42))) {
       assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), ordering) }
     }
     runCurrent()
@@ -1641,6 +1637,87 @@ class OptimisticQueryStoreTest {
     assertThat(store.data.first()).isEqualTo(before)
     assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
     data.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseded change in a set leaves data and pending once its discard landed`() = runTest {
+    val sets =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = MutableStateFlow(false),
+          stores = LaggingOutboxStores(firstListOnly = true),
+          clock = testClock(START),
+        )
+        .create(backgroundScope, setOf(TagsByItem.sender { _, _ -> }))
+        .optimisticStores<String, List<String>, Add>(
+          TagsByItem,
+          base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
+          apply = ::addOnce,
+        )
+    val tags = sets("item")
+    val first = sets.mutate("item", Add("b"), Superseding)
+
+    assertSupersededLeaves(tags, first) { sets.mutate("item", Add("c"), Superseding) }
+  }
+
+  @Test
+  fun `a superseded change in a single store leaves data and pending once its discard landed`() =
+    runTest {
+      val tags = factoryTags(LaggingOutboxStores(firstListOnly = true), online = false) { _, _ -> }
+      val first = tags.mutate(Add("b"), Superseding)
+
+      assertSupersededLeaves(tags, first) { tags.mutate(Add("c"), Superseding) }
+    }
+
+  /**
+   * Holds the row list of [tags] on the stored row of [first], which adds "b", then supersedes it
+   * with [supersede], which adds "c". Passes when "b" leaves `data` and `pending` once its discard
+   * landed and never shows again, also after its handle settles Cancelled, while "c" shows
+   * throughout.
+   */
+  private suspend fun TestScope.assertSupersededLeaves(
+    tags: OptimisticQueryStore<List<String>, Add>,
+    first: OutboxOperation,
+    supersede: () -> OutboxOperation,
+  ) {
+    first.stored.awaitSucceeded()
+    val seen = mutableListOf<List<String>?>()
+    // The one list the views ever get shows the first change's row Queued
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    assertThat(tags.pending.first().map { it.mutation }).containsExactly(Add("b"))
+    assertThat(seen.last()).isEqualTo(listOf("a", "b"))
+
+    val withC = seen.size
+    val second = supersede()
+    first.awaitCancelled()
+    val discarded = seen.size
+    runCurrent()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+
+    assertThat(seen.drop(discarded).filter { "b" in it.orEmpty() }).isEmpty()
+    assertThat(seen.drop(withC).all { "c" in it.orEmpty() }).isTrue()
+    assertThat(seen.last()).isEqualTo(listOf("a", "c"))
+    assertThat(tags.pending.first()).isEmpty()
+    second.assertPending()
+  }
+
+  @Test
+  fun `a store whose sender answers with a value refuses a superseding change`() = runTest {
+    data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(ReplyingTags.exchangingSender { _, _ -> listOf("a") }),
+      )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(ReplyingTags, base = truth, apply = ::addOnce)
+
+    assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), Superseding) }
+    runCurrent()
+
+    assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
+    assertThat(store.data.first()?.value).isEqualTo(listOf("a"))
   }
 
   @Test
@@ -1657,12 +1734,7 @@ class OptimisticQueryStoreTest {
     backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
     runCurrent()
 
-    for (ordering in
-      listOf(
-        Ordering.Keyed(42),
-        Ordering.Keyed("x", OnPrevious.Cancel),
-        Ordering.Keyed("x", OnPrevious.Supersede),
-      )) {
+    for (ordering in listOf(Ordering.Keyed(42), Ordering.Keyed("x", OnPrevious.Cancel))) {
       assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), ordering) }
     }
     runCurrent()
@@ -2499,6 +2571,9 @@ private val START = Instant.fromEpochSeconds(1_700_000_000)
 
 /** The tag list's outbox, whose server answers nothing. */
 private val Tags = OutboxKey<Add>("tags")
+
+/** The line "x", where each change supersedes a waiting one before it that did the same. */
+private val Superseding = Ordering.Keyed("x", OnPrevious.Supersede)
 
 /** The tag list's outbox, whose server answers with the list it holds. */
 private val ReplyingTags = OutboxKey.replying<Add, List<String>>("tags")

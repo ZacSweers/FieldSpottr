@@ -71,6 +71,10 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * fetch. A store whose sender answers with a value takes [Ordering.Serial] only. A refused
    * [ordering] throws [IllegalArgumentException], stores nothing and leaves [data] as it was.
    *
+   * A change that a newer one superseded through [OnPrevious.Supersede] leaves [data] like a
+   * discarded one. So use `Supersede` for a change that sets a value, since a superseded change
+   * that adds to a value is lost.
+   *
    * From the moment this returns, each value [data] computes holds the change until it is sent,
    * fails or is dropped, also before its entry is stored. A value computed before this call can
    * still arrive after it. If the entry cannot be stored, the change leaves [data] and the handle

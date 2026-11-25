@@ -89,15 +89,15 @@ import kotlinx.coroutines.sync.withLock
  * | Sent      | an attempt that sent, no record    | the change   | passed                    |
  * | Committed | the commit after a send (a record) | the record   | expired                   |
  * | Failed    | an attempt that failed for good    | nothing      | list shows Failed, passed |
- * | Dropped   | [discard], [clear], or a commit    | nothing      | passed                    |
- * |           | whose [apply] threw                |              |                           |
+ * | Dropped   | [discard], [clear], a supersede,   | nothing      | passed                    |
+ * |           | or a commit whose [apply] threw    |              |                           |
  *
  * "Passed" means the list showed the row and a later list lacks it. Pending moves on when its
- * commit records it, when its attempt ends, or when [discard] or [clear] drops it. Dropped is
- * final. HandedOff means the owner's scope stopped and the row waits for the next owner. Sent means
- * the server has the change and its commit has not landed, like a commit that failed on a store
- * error and runs again later. A change whose insert failed, or whose owner stopped before the
- * insert, has no row, and the set forgets it at once.
+ * commit records it, when its attempt ends, or when [discard], [clear] or a newer change that
+ * supersedes it drops it. Dropped is final. HandedOff means the owner's scope stopped and the row
+ * waits for the next owner. Sent means the server has the change and its commit has not landed,
+ * like a commit that failed on a store error and runs again later. A change whose insert failed, or
+ * whose owner stopped before the insert, has no row, and the set forgets it at once.
  *
  * A running [retry] or [discard] call puts a provisional [Mark] over the settled state, as [Known]
  * describes. A change with a mark is never forgotten. When its last mark goes, its forget rule
@@ -244,6 +244,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
 
     override fun committed(id: EntryId) {
       landed.update { it.removing(id) }
+    }
+
+    /**
+     * Settles the change Dropped, so no view shows it again however late the list is. The watcher
+     * in [mutate] then finds it settled and leaves it Dropped when its handle settles Cancelled.
+     */
+    override fun superseded(id: EntryId, payload: KeyedMutation<K, M>) {
+      val now = clock.now()
+      edit { it.dropping(id, payload, now) }
     }
   }
 

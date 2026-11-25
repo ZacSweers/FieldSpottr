@@ -202,8 +202,8 @@ interface Outbox<E> {
    * entry will have. The entry joins the line [ordering] picks, as [Ordering] describes.
    *
    * [ordering] must be [Ordering.Serial], [Ordering.Concurrent], or [Ordering.Keyed] with a
-   * `String` key and [OnPrevious.Wait]. Any other throws [IllegalArgumentException], and nothing
-   * runs or is stored.
+   * `String` key and [OnPrevious.Wait] or [OnPrevious.Supersede]. Any other throws
+   * [IllegalArgumentException], and nothing runs or is stored.
    *
    * If apply throws, nothing is inserted and the handle fails. If the insert throws, the handle's
    * `revert` undoes the change and the handle fails. Once apply starts, it and the insert finish

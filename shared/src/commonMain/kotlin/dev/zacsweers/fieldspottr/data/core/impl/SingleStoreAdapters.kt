@@ -126,5 +126,8 @@ internal fun <M> RowOwner<KeyedMutation<Unit, M>>.forChange(): RowOwner<M> {
     ) = owner.commit(entry.keyed(), delivery, sentAt, expected)
 
     override fun committed(id: EntryId) = owner.committed(id)
+
+    override fun superseded(id: EntryId, payload: M) =
+      owner.superseded(id, KeyedMutation(Unit, payload))
   }
 }

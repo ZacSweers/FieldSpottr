@@ -113,6 +113,14 @@ internal interface RowOwner<E> {
    * process. A handle that kept state for a commit that may repeat lets it go here.
    */
   fun committed(id: EntryId) {}
+
+  /**
+   * Row [id] was discarded because a newer entry on its line superseded it. The engine calls this
+   * once the write that discards the row landed, before the row's handles settle and before
+   * [revert] runs for it. A handle that hides a discarded change only when it discards the row
+   * itself hides this one here.
+   */
+  fun superseded(id: EntryId, payload: E) {}
 }
 
 /**
@@ -252,6 +260,10 @@ internal class RealOutbox<E>(
   private val owedPauses = AtomicReference(persistentMapOf<String, Duration>())
   // Keys with a commit retry due, so each key has at most one
   private val retryDue = AtomicReference(persistentHashSetOf<String>())
+  // The newest row on each key that was enqueued with OnPrevious.Supersede, until a row with
+  // another ordering joins the key or a drain finds no head on it. Only the key's enqueue lane puts
+  // a row here. It lives in memory, so no row stored before a restart is superseded.
+  private val superseding = AtomicReference(persistentHashMapOf<String, EntryId>())
   // The policy's bound on a wait, read once. A policy that throws here is reported and unbounded.
   private val maxWait: Duration =
     try {
@@ -431,6 +443,9 @@ internal class RealOutbox<E>(
    * runner rejects the call while an earlier command with that key has not settled, which covers a
    * row whose insert has not returned. The command then reads the rows once and records a rejection
    * while an unsettled row holds the key, which covers a stored row and a restart.
+   *
+   * With [OnPrevious.Supersede], once the row is in, the command discards the row before it on its
+   * key through [discardRow] when [superseding] holds that row.
    */
   fun enqueue(
     id: EntryId,
@@ -469,6 +484,19 @@ internal class RealOutbox<E>(
         onBacklog(OutboxBacklog.Ready)
         attempt.started()
       }
+      // This key's enqueues run in order on this lane, so the map holds the key's newest
+      // superseding row. The earlier one is discarded on its own lane, and nothing waits for it.
+      val supersedes = (ordering as? Ordering.Keyed)?.onPrevious == OnPrevious.Supersede
+      val earlier =
+        if (supersedes) {
+          superseding.fetchAndUpdate { it.putting(rowKey, id) }[rowKey]
+        } else {
+          superseding.update { it.removing(rowKey) }
+          null
+        }
+      if (earlier != null) {
+        actions.run(Ordering.Keyed(Row(earlier))) { discardRow(earlier, superseded = true) }
+      }
       // Without waiting for the watcher, which may be pausing after a store failure
       drain(rowKey)
     }
@@ -477,8 +505,8 @@ internal class RealOutbox<E>(
   /**
    * The row key of row [id] enqueued with [ordering] on the default line [line]: [line] itself for
    * [Ordering.Serial], the id for [Ordering.Concurrent], and for [Ordering.Keyed] its key, after
-   * [line] and `/` unless [line] is empty. Stored rows keep their keys, so these formats never
-   * change. [requireEntryCanTake] has checked [ordering].
+   * [line] and `/` unless [line] is empty, whatever its mode. Stored rows keep their keys, so these
+   * formats never change. [requireEntryCanTake] has checked [ordering].
    */
   private fun rowKeyOf(ordering: Ordering, line: String, id: EntryId): String =
     when (ordering) {
@@ -525,33 +553,51 @@ internal class RealOutbox<E>(
 
   // Its caller does not own the command, so the handle cannot cancel it
   fun discard(id: EntryId): Operation =
-    actions.run(Ordering.Keyed(Row(id))) {
-      val row = checkNotNull(store.entry(id).first()) { "$id is gone" }
-      val pending = row.status == OutboxStatus.Queued || row.status is OutboxStatus.Failed
-      // The reverted mark and the revert are one step, as OutboxEntry.reverted requires
-      withContext(NonCancellable) {
-        val discarded =
-          pending &&
-            store.update(
-              row.copy(status = OutboxStatus.Discarded, reverted = true),
-              expected = row.status,
-            )
-        check(discarded) { "$id is no longer pending" }
-        forget(id)
-        settleFollowers(id, OperationState.Cancelled)
-        // A head that was backing off takes its timer along, so the next row sends now. The key
-        // drains without a timer too, since a drain that read this row as the head may be about to
-        // start one for it.
-        cancelTimer(row.key, id)
-        drain(row.key)
-        // A throw fails this handle and reaches the handle's handler. The row stays Discarded.
-        if (!row.reverted) {
-          checkNotNull(attached.load()) { "Outbox $name has no handle" }
-            .owner
-            .revert(row.payload, id)
-        }
+    actions.run(Ordering.Keyed(Row(id))) { discardRow(id, superseded = false) }
+
+  /**
+   * Discards row [id] and reverts its change, unless that already happened. It runs on the row's
+   * lane. A row that is gone or no longer pending throws.
+   *
+   * With [superseded], a newer row on the key replaced this one. Then only a Queued row is
+   * discarded, a row that is gone or no longer waits is left as it is, and [RowOwner.superseded]
+   * hears of the row once its discard landed.
+   */
+  private suspend fun discardRow(id: EntryId, superseded: Boolean) {
+    val row = store.entry(id).first()
+    if (superseded && row?.status != OutboxStatus.Queued) {
+      return
+    }
+    checkNotNull(row) { "$id is gone" }
+    val pending = row.status == OutboxStatus.Queued || row.status is OutboxStatus.Failed
+    // The reverted mark and the revert are one step, as OutboxEntry.reverted requires
+    withContext(NonCancellable) {
+      val discarded =
+        pending &&
+          store.update(
+            row.copy(status = OutboxStatus.Discarded, reverted = true),
+            expected = row.status,
+          )
+      if (superseded && !discarded) {
+        return@withContext
+      }
+      check(discarded) { "$id is no longer pending" }
+      if (superseded) {
+        attached.load()?.owner?.superseded(id, row.payload)
+      }
+      forget(id)
+      settleFollowers(id, OperationState.Cancelled)
+      // A head that was backing off takes its timer along, so the next row sends now. The key
+      // drains without a timer too, since a drain that read this row as the head may be about to
+      // start one for it.
+      cancelTimer(row.key, id)
+      drain(row.key)
+      // A throw fails this handle and reaches the handle's handler. The row stays Discarded.
+      if (!row.reverted) {
+        checkNotNull(attached.load()) { "Outbox $name has no handle" }.owner.revert(row.payload, id)
       }
     }
+  }
 
   fun operation(id: EntryId): Operation {
     val state = MutableStateFlow<OperationState>(OperationState.Queued)
@@ -637,6 +683,7 @@ internal class RealOutbox<E>(
         offlineKeys.update { it.adding(key) }
         break
       }
+      val seen = superseding.load()[key]
       val head = store.head(key)
       if (head == null) {
         // Nothing waits on the key, so a timer left for a row that was discarded or sent
@@ -644,6 +691,16 @@ internal class RealOutbox<E>(
         waking.load()[key]?.let { timer ->
           timer.job.cancel()
           dropTimer(key, timer)
+        }
+        // A row put in the map before the head read was inserted before that read, so it no longer
+        // waits. A row put after the read may still wait, so the key goes only while it maps to
+        // the row seen before the read.
+        superseding.update {
+          if (it[key] == seen) {
+            it.removing(key)
+          } else {
+            it
+          }
         }
         break
       }
@@ -1492,6 +1549,10 @@ internal class RealOutbox<E>(
   internal val rowsFollowed: Int
     get() = follows.load().byRow.size
 
+  /** How many keys hold a row that a newer row may supersede. For tests, like [timersHeld]. */
+  internal val keysSuperseding: Int
+    get() = superseding.load().size
+
   /** Follows row [id] with [state]. After the scope stopped, [state] settles Cancelled at once. */
   private fun follow(id: EntryId, state: MutableStateFlow<OperationState>) {
     follows.update { it.following(id, state) }
@@ -1599,20 +1660,17 @@ private const val WHOLE_QUEUE = ""
 
 /**
  * Throws [IllegalArgumentException] for an [ordering] or an [admission] that an entry cannot take.
- * It refuses [OnPrevious.Cancel], since a send in flight may have reached the server, and
- * [OnPrevious.Supersede]. It refuses an [Ordering.Keyed] key and an [Admission.Reject] key that is
- * not a `String`, since the key is stored and another type's `toString` can differ after a restart.
- * [RealOutbox.enqueue] and an optimistic store's mutate run it before they change anything, so a
- * refused call leaves nothing for a collector to see.
+ * It refuses [OnPrevious.Cancel], since a send in flight may have reached the server. It refuses an
+ * [Ordering.Keyed] key and an [Admission.Reject] key that is not a `String`, since the key is
+ * stored and another type's `toString` can differ after a restart. [RealOutbox.enqueue] and an
+ * optimistic store's mutate run it before they change anything, so a refused call leaves nothing
+ * for a collector to see.
  */
 internal fun requireEntryCanTake(ordering: Ordering, admission: CancellableAdmission) {
   if (ordering is Ordering.Keyed) {
     require(ordering.onPrevious != OnPrevious.Cancel) {
       "An outbox cannot cancel an earlier entry, since a send in flight may have reached the " +
         "server. Use OnPrevious.Wait, and discard the earlier entry while it is queued."
-    }
-    require(ordering.onPrevious != OnPrevious.Supersede) {
-      "An outbox cannot supersede an earlier entry. Use OnPrevious.Wait."
     }
     require(ordering.key is String) {
       "An outbox takes only a String key, since the key is stored and the toString of " +
@@ -1724,3 +1782,7 @@ internal val Outbox<*>.timersHeld: Int
 /** [RealOutbox.rowsFollowed] of this outbox's engine. */
 internal val Outbox<*>.rowsFollowed: Int
   get() = (this as AttachedOutbox<*>).engine.rowsFollowed
+
+/** [RealOutbox.keysSuperseding] of this outbox's engine. */
+internal val Outbox<*>.keysSuperseding: Int
+  get() = (this as AttachedOutbox<*>).engine.keysSuperseding
