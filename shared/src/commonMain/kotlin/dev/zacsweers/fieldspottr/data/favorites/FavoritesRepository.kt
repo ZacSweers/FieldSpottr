@@ -25,12 +25,12 @@ import kotlinx.serialization.json.Json
 
 /**
  * The user's favorite field groups, changed locally first and sent to [FavoritesApi] after. The
- * truth is the last set fetched from the server, in a DataStore file, and each change is a row of
- * the [FavoritesOutbox] beside it until the server takes it. [favorites] shows the truth with the
- * waiting changes on top, so a tap shows at once, offline too, and a restart shows the same.
+ * truth is the last set fetched from the server, in a DataStore file, and each change is an entry
+ * of the [FavoritesOutbox] beside it until the server takes it. [favorites] shows the truth with
+ * the waiting changes on top, so a tap shows at once, offline too, and a restart shows the same.
  *
  * This repository holds the handle on the outbox. Its sender, [favoritesSender], belongs to the app
- * data scope, so rows stored before a restart send before this repository exists, like in a
+ * data scope, so entries stored before a restart send before this repository exists, like in a
  * WorkManager drain on Android. A change sent then reaches the truth when this repository is built.
  *
  * It is the app's first use of [DataScope.optimisticStore], and it exercises the whole path: outbox

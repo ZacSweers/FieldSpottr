@@ -21,7 +21,7 @@ import kotlinx.serialization.Serializable
 internal val FavoritesOutbox = OutboxKey<FavoriteChange>("favorites")
 
 /**
- * Sends each change to [api], with the row's id as the idempotency key. The server answers with
+ * Sends each change to [api], with the entry's id as the idempotency key. The server answers with
  * nothing, so the store applies the change to its truth itself once the send succeeds.
  */
 internal fun favoritesSender(api: FavoritesApi): OutboxSender<*> =

@@ -9,31 +9,31 @@ import kotlinx.serialization.Serializable
 /**
  * A [QueryStore] that shows a change before the server confirms it.
  *
- * The store keeps the truth, which is the last value the server sent, and a durable row for each
+ * The store keeps the truth, which is the last value the server sent, and a durable entry for each
  * change that waits. It shows the truth with the waiting changes applied on top. A change shows at
  * once, stays on top of a fetch that lands while it waits, and drops out when the server rejects
  * it. A query over this store sees a plain [QueryStore]. [data] emits its first value once the
- * outbox's rows have been read, and a failed read is reported and retried.
+ * outbox's entries have been read, and a failed read is reported and retried.
  *
  * ```
  * mutate(m2)                 data = apply(apply(truth, m1), m2)
  *    |                                   ^
  *    v                                   |
- * row m2 --> rows [m1, m2] --------------+--> the sender sends m1, then m2, in order per key
+ * entry m2 --> entries [m1, m2] ---------+--> the sender sends m1, then m2, in order per key
  *                                                |
  *                       sent: the store commits it, so the truth takes the server's answer, or
  *                             apply(truth, m) when the server answered with nothing
- *                       rejected: the row fails, so data shows the truth without it
+ *                       rejected: the entry fails, so data shows the truth without it
  * ```
  *
- * Before the server confirms a change, its row is its only write. The truth changes only when a
+ * Before the server confirms a change, its entry is its only write. The truth changes only when a
  * fetch lands or a sent change is committed, so it always holds something the server said. After a
- * restart, the store shows the truth plus the rows that still wait. A row that the sender sent
- * before this store existed, like in a background drain, keeps showing until the store commits it,
- * which happens once the store is built and a send in flight on the same key has finished.
+ * restart, the store shows the truth plus the entries that still wait. An entry that the sender
+ * sent before this store existed, like in a background drain, keeps showing until the store commits
+ * it, which happens once the store is built and a send in flight on the same key has finished.
  *
- * `apply` runs on the data scope's dispatcher each time the truth or the rows change. Keep it cheap
- * and pure, and idempotent where [DataScope.optimisticStore] asks. The first commits check
+ * `apply` runs on the data scope's dispatcher each time the truth or the entries change. Keep it
+ * cheap and pure, and idempotent where [DataScope.optimisticStore] asks. The first commits check
  * idempotence, and the first failure goes once to the store's `onFailure` handler, or to the
  * factory's when it has none. An `apply` that throws goes there too, and [data] leaves that change
  * out. It is reported once for as long as the store remembers the change, which lasts until the
@@ -41,19 +41,20 @@ import kotlinx.serialization.Serializable
  * that forgot a change, like after a restart, reports it again.
  *
  * A commit that fails on a store error, like a base store write on a full disk, is reported there
- * too, once per attempt. The change still counts as sent, since the server has it, so its row stays
- * sent and waits, and the commit runs again after a pause that doubles from 1 second to 1 minute
- * and resets once the key's commits all land. The change keeps showing meanwhile. When the base
- * write of a server answer keeps failing for more than ten minutes, [data] shows the `apply`
+ * too, once per attempt. The change still counts as sent, since the server has it, so its entry
+ * stays sent and waits, and the commit runs again after a pause that doubles from 1 second to 1
+ * minute and resets once the key's commits all land. The change keeps showing meanwhile. When the
+ * base write of a server answer keeps failing for more than ten minutes, [data] shows the `apply`
  * estimate between commit retries. Within one process, a commit whose truth write landed never
- * applies the change again: when only the write that marks the row committed fails, it is reported
- * to the sender's handler, and a retry repeats that write alone, after the same doubling pause.
+ * applies the change again: when only the write that marks the entry committed fails, it is
+ * reported to the sender's handler, and a retry repeats that write alone, after the same doubling
+ * pause.
  *
- * On the live path, right after the send, the row is still Sending when that write runs. If it
- * fails there, the row stays Sending, and [Outbox] sends it again with the same id.
+ * On the live path, right after the send, the entry is still Sending when that write runs. If it
+ * fails there, the entry stays Sending, and [Outbox] sends it again with the same id.
  *
  * Across a restart that guarantee cannot hold. A process that dies after a commit wrote the truth
- * and before the row was marked committed leaves the row owed, and the next process commits it
+ * and before the entry was marked committed leaves the entry owed, and the next process commits it
  * again on top of a truth that already holds it. That window, and a fetch that read the server
  * after it took the change but landed before the commit, are why `apply` must be idempotent for a
  * change the store commits itself.
@@ -63,22 +64,25 @@ import kotlinx.serialization.Serializable
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStore<T, M> : QueryStore<T> {
   /**
-   * Shows [mutation] in [data] now, stores it as a row, and sends it after the rows before it.
+   * Shows [mutation] in [data] now, stores it as an entry, and sends it after the entries before
+   * it.
    *
    * From the moment this returns, each value [data] computes holds the change until it is sent,
-   * fails or is dropped, also before its row is stored. A value computed before this call can still
-   * arrive after it. If the row cannot be stored, the change leaves [data] and the handle fails.
+   * fails or is dropped, also before its entry is stored. A value computed before this call can
+   * still arrive after it. If the entry cannot be stored, the change leaves [data] and the handle
+   * fails.
    *
-   * The handle follows the row, and a restart keeps it. It succeeds once sent, fails once rejected
-   * for good or out of attempts, and settles Cancelled once discarded. Its [OutboxOperation.stored]
-   * settles once the row is written, for a caller that only needs the change kept.
+   * The handle follows the entry, and a restart keeps it. It succeeds once sent, fails once
+   * rejected for good or out of attempts, and settles Cancelled once discarded. Its
+   * [OutboxOperation.stored] settles once the entry is written, for a caller that only needs the
+   * change kept.
    */
   fun mutate(mutation: M): OutboxOperation
 
   /**
    * Changes the server has not confirmed, oldest first: waiting, sending or failed. It lists stored
-   * rows only, so a change shows here once its row is stored, a moment after it shows in [data]. A
-   * sent change that waits for its commit is left out, since the server has it.
+   * entries only, so a change shows here once its entry is stored, a moment after it shows in
+   * [data]. A sent change that waits for its commit is left out, since the server has it.
    */
   val pending: Flow<List<PendingMutation<M>>>
 
@@ -88,15 +92,16 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * requeue itself fails, like on a store error, [data] shows the change as it stood without this
    * call. A change the server already has, whose commit waits, sends nothing again: the handle
    * succeeds, and [data] keeps showing the change until its commit lands. The handle fails, and
-   * nothing changes, for a row this store knows is another key's.
+   * nothing changes, for an entry this store knows is another key's.
    */
   fun retry(id: EntryId): Operation
 
   /**
-   * Drops a waiting or failed change. For a change this store made or a row it has listed, each
-   * value [data] computes from the moment this returns lacks it. If the row cannot be discarded, as
-   * when it already sends, the change shows again and the handle fails. The handle fails, and
-   * nothing changes, for a row this store knows is another key's.
+   * Drops a waiting or failed change. For a change this store made or an entry it has listed, each
+   * value [data] computes from the moment this returns lacks it. If the entry cannot be discarded,
+   * as when it already sends, the change shows again and the handle fails. The handle fails, and
+   * nothing changes, for an entry this store knows is another key's. The store owns the undo, so a
+   * discarded change leaves [data] and no caller reverts anything.
    */
   fun discard(id: EntryId): Operation
 
@@ -126,35 +131,35 @@ data class PendingMutation<M>(
 )
 
 /**
- * One [OptimisticQueryStore] per key, all sharing one set of rows. Pass it as the store of a
- * [DataScope.keyed] query, and call [mutate] with the key. Rows for one key send in order, and keys
- * do not wait on each other.
+ * One [OptimisticQueryStore] per key, all sharing one set of entries. Pass it as the store of a
+ * [DataScope.keyed] query, and call [mutate] with the key. Entries for one key send in order, and
+ * keys do not wait on each other.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, M> {
   /** [OptimisticQueryStore.mutate] on [key]'s store. */
   fun mutate(key: K, mutation: M): OutboxOperation
 
-  /** [key]'s changes the server has not confirmed, oldest first, from stored rows only. */
+  /** [key]'s changes the server has not confirmed, oldest first, from stored entries only. */
   fun pending(key: K): Flow<List<PendingMutation<M>>>
 
   /**
    * How many changes across every key the server has not confirmed, for a sync badge. It counts
-   * stored rows only, and no sent change that waits for its commit.
+   * stored entries only, and no sent change that waits for its commit.
    */
   val pendingCount: Flow<Int>
 
-  /** [OptimisticQueryStore.retry] for a row from any key. */
+  /** [OptimisticQueryStore.retry] for an entry from any key. */
   fun retry(id: EntryId): Operation
 
-  /** [OptimisticQueryStore.discard] for a row from any key. */
+  /** [OptimisticQueryStore.discard] for an entry from any key. */
   fun discard(id: EntryId): Operation
 }
 
 /**
- * One row of the outbox of an [OptimisticQueryStores] set: the key and the change. The set's
+ * One entry of the outbox of an [OptimisticQueryStores] set: the key and the change. The set's
  * [OutboxKey] has this as its payload type, so its sender gets the key with the change. A single
- * [OptimisticQueryStore] has no key, and its rows hold the change itself.
+ * [OptimisticQueryStore] has no key, and its entries hold the change itself.
  */
 @Serializable data class KeyedMutation<K, M>(val key: K, val mutation: M)
 
