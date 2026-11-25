@@ -53,7 +53,7 @@ import okio.utf8Size
  * [DataStoreOutboxStores][dev.zacsweers.fieldspottr.data.core.DataStoreOutboxStores] describes.
  *
  * Android reads each row through a cursor window of about 2 MB, and no query can read a row larger
- * than the window. So no row holds a payload with its key, or an answer, larger than
+ * than the window. So no row holds a payload with its keys, or an answer, larger than
  * [maxTextBytes]. An insert above that throws, so the outbox undoes its change and fails its
  * handle. A larger answer fails to encode, so the outbox reports it and stores the answer as
  * unknown. A row an older version stored above the cap still cannot be read on Android until
@@ -67,7 +67,7 @@ class SqlDelightOutboxStores(
    * Encodes each payload into its row. A binary format is stored as Base64, as [asCodec] describes.
    */
   private val payloadFormat: SerialFormat = DefaultPayloadFormat,
-  /** The largest payload with its key, and the largest answer, a row holds, in UTF-8 bytes. */
+  /** The largest payload with its keys, and the largest answer, a row holds, in UTF-8 bytes. */
   private val maxTextBytes: Int = MAX_OUTBOX_TEXT_BYTES,
 ) : OutboxStores {
   /** Over a database that is already open. */
@@ -151,9 +151,9 @@ class SqlDelightOutboxStores(
  * [changes] names only the writes made through this store, as [OutboxChangeLog] describes, so build
  * one [SqlDelightOutboxStores] per database.
  *
- * [insert] throws for a payload and key larger than [maxTextBytes], and [update] stores a larger
- * answer as unknown, so no row outgrows Android's cursor window, as [SqlDelightOutboxStores]
- * describes.
+ * [insert] throws when the payload, key and reject key together are larger than [maxTextBytes], and
+ * [update] stores a larger answer as unknown, so no row outgrows Android's cursor window, as
+ * [SqlDelightOutboxStores] describes.
  */
 class SqlDelightOutboxStore<E>(
   private val queries: suspend () -> OutboxRowQueries,
@@ -163,7 +163,9 @@ class SqlDelightOutboxStore<E>(
   private val io: CoroutineDispatcher,
   private val keepSettledFor: Duration = 1.minutes,
   private val clock: Clock = Clock.System,
-  /** The largest payload with its key, and the largest answer, this store keeps, in UTF-8 bytes. */
+  /**
+   * The largest payload with its keys, and the largest answer, this store keeps, in UTF-8 bytes.
+   */
   private val maxTextBytes: Int = MAX_OUTBOX_TEXT_BYTES,
 ) : OutboxStore<E> {
   // The rows this store cannot decode, found by its reads
@@ -172,6 +174,15 @@ class SqlDelightOutboxStore<E>(
   private val ended = OutboxChangeLog()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
+    insertRow(id, key, payload, rejectKey = null)
+  }
+
+  override suspend fun insert(id: EntryId, key: String, payload: E, rejectKey: String) {
+    insertRow(id, key, payload, rejectKey)
+  }
+
+  /** The one insert path of both [insert]s. */
+  private suspend fun insertRow(id: EntryId, key: String, payload: E, rejectKey: String?) {
     currentCoroutineContext().ensureActive()
     // seq orders the rows. A stored id fails the UNIQUE constraint, which rolls the transaction
     // back. The insert runs to the end once started, as OutboxStore.insert requires.
@@ -179,15 +190,15 @@ class SqlDelightOutboxStore<E>(
       withContext(io) {
         val encoded = codec.encode(payload)
         // Before any database work, so a row too large to read back stores nothing
-        val size = encoded.utf8Size() + key.utf8Size()
+        val size = encoded.utf8Size() + key.utf8Size() + (rejectKey?.utf8Size() ?: 0L)
         require(size <= maxTextBytes) {
-          "Outbox $outbox cannot store entry ${id.value}. Its payload and key are $size UTF-8 " +
+          "Outbox $outbox cannot store entry ${id.value}. Its payload and keys are $size UTF-8 " +
             "bytes, and the limit is $maxTextBytes."
         }
         val queries = queries()
         queries.transaction {
           queries.pruneSettled(outbox, cutoff())
-          queries.insert(id.value, outbox, key, encoded)
+          queries.insert(id.value, outbox, key, encoded, rejectKey)
         }
       }
     }
@@ -372,6 +383,7 @@ class SqlDelightOutboxStore<E>(
       committed = committed != 0L,
       sentAt = sentAt?.let { Instant.fromEpochMilliseconds(it) },
       reply = reply,
+      rejectKey = rejectKey,
     )
   }
 }

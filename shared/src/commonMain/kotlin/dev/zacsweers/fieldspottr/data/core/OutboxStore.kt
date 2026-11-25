@@ -93,6 +93,11 @@ data class OutboxEntry<E>(
    * the next commit.
    */
   val reply: String? = null,
+  /**
+   * The reject key this entry was enqueued with, or null when it has none. Only the insert sets it,
+   * through the [OutboxStore.insert] that takes one, and no update changes it.
+   */
+  val rejectKey: String? = null,
 )
 
 /**
@@ -130,6 +135,18 @@ interface OutboxStore<E> {
    * insert that starts runs to the end, also when its caller is cancelled meanwhile.
    */
   suspend fun insert(id: EntryId, key: String, payload: E)
+
+  /**
+   * Inserts a Queued row as the other [insert] does, for an entry enqueued with [rejectKey]. The
+   * store keeps the key, and every read of the row returns it in [OutboxEntry.rejectKey]. The other
+   * insert's rules hold here too.
+   *
+   * The default throws [UnsupportedOperationException] and stores nothing, since such a store keeps
+   * no reject keys. So a custom store keeps compiling and fails only these inserts.
+   */
+  suspend fun insert(id: EntryId, key: String, payload: E, rejectKey: String) {
+    throw UnsupportedOperationException("This outbox store keeps no reject keys")
+  }
 
   /**
    * Compare-and-set. Writes status, attempts, lastError, reverted, retryAt, committed, sentAt and

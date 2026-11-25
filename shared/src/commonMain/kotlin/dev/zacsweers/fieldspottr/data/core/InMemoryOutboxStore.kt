@@ -74,7 +74,16 @@ internal class InMemoryOutboxStore<E>(
   private val ended = OutboxChangeLog()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
-    val row = OutboxEntry(id, key, payload, OutboxStatus.Queued)
+    insertRow(id, key, payload, rejectKey = null)
+  }
+
+  override suspend fun insert(id: EntryId, key: String, payload: E, rejectKey: String) {
+    insertRow(id, key, payload, rejectKey)
+  }
+
+  /** The one insert path of both [insert]s. */
+  private fun insertRow(id: EntryId, key: String, payload: E, rejectKey: String?) {
+    val row = OutboxEntry(id, key, payload, OutboxStatus.Queued, rejectKey = rejectKey)
     rows.update { current ->
       val pruned = current.pruned()
       require(id !in pruned.all) { "Row ${id.value} is already stored" }

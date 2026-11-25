@@ -25,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -157,6 +158,50 @@ class DataStoreOutboxStoreTest : OutboxStoreContract() {
       )
 
     assertEquals(listOf("a"), store.entries().first().map { it.payload })
+  }
+
+  @Test
+  fun `a reject key reads back from a store reopened over the same file`() = runTest {
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    val codec = String.serializer().asCodec(Json)
+    // DataStore allows one active instance per file, so the first scope ends before the reopen
+    val earlier = CoroutineScope(Job())
+    val before =
+      DataStoreOutboxStore(
+        outboxDataStore(earlier, { directory / "reopen.outbox" }, fileSystem),
+        codec,
+      )
+    before.insert(EntryId("rejecting"), "k", "a", rejectKey = "r")
+    earlier.cancel()
+
+    val store =
+      DataStoreOutboxStore(
+        outboxDataStore(backgroundScope, { directory / "reopen.outbox" }, fileSystem),
+        codec,
+      )
+
+    assertEquals("r", store.entry(EntryId("rejecting")).first()?.rejectKey)
+  }
+
+  @Test
+  fun `a log written before rows kept a reject key reads with none`() = runTest {
+    val directory = "/outbox".toPath()
+    fileSystem.createDirectories(directory)
+    val codec = String.serializer().asCodec(Json)
+    val payload = Json.encodeToString(codec.encode("a"))
+    fileSystem.write(directory / "older.outbox") {
+      writeUtf8("""{"rows":[{"id":"row","key":"k","payload":$payload,"status":"queued"}]}""")
+    }
+    val store =
+      DataStoreOutboxStore(
+        outboxDataStore(backgroundScope, { directory / "older.outbox" }, fileSystem),
+        codec,
+      )
+
+    val row = checkNotNull(store.entry(EntryId("row")).first())
+    assertEquals("a", row.payload)
+    assertNull(row.rejectKey)
   }
 
   @Test
@@ -297,6 +342,46 @@ internal fun assertOneTypePerName(stores: OutboxStores) {
   assertContains(failure.message.orEmpty(), "notes")
   assertContains(failure.message.orEmpty(), "kotlin.String")
   assertContains(failure.message.orEmpty(), "kotlin.Int")
+}
+
+/** A custom [OutboxStore] that keeps the default [OutboxStore.insert] for reject keys. */
+class OutboxStoreRejectKeyDefaultTest {
+  @Test
+  fun `an insert with a reject key throws and stores nothing`() = runTest {
+    val store = WithoutRejectKeys(inMemoryOutboxStore())
+
+    assertFailsWith<UnsupportedOperationException> {
+      store.insert(EntryId("rejecting"), "k", "a", rejectKey = "r")
+    }
+
+    assertNull(store.entry(EntryId("rejecting")).first())
+    assertEquals(emptyList(), store.entries().first())
+  }
+
+  @Test
+  fun `an insert without a reject key still stores the row`() = runTest {
+    val store = WithoutRejectKeys(inMemoryOutboxStore())
+
+    store.insert(EntryId("plain"), "k", "a")
+
+    assertEquals(listOf("a"), store.entries().first().map { it.payload })
+  }
+
+  /**
+   * Overrides only the members without a default body. Delegation with `by` would forward the
+   * default ones to [rows] too.
+   */
+  private class WithoutRejectKeys(private val rows: OutboxStore<String>) : OutboxStore<String> {
+    override suspend fun insert(id: EntryId, key: String, payload: String) =
+      rows.insert(id, key, payload)
+
+    override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus): Boolean =
+      rows.update(entry, expected)
+
+    override fun entries(): Flow<List<OutboxEntry<String>>> = rows.entries()
+
+    override fun entry(id: EntryId): Flow<OutboxEntry<String>?> = rows.entry(id)
+  }
 }
 
 /** [UndecodableRows], which both durable stores use to hand on rows that do not decode. */

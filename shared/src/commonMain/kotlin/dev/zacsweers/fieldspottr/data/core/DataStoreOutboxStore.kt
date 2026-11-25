@@ -61,6 +61,8 @@ data class OutboxLog(val rows: List<Row> = emptyList()) {
     val sentAt: Long? = null,
     /** The server's encoded answer, kept until the row is committed. */
     val reply: String? = null,
+    /** The reject key of the insert. Absent in a file written before rows kept one. */
+    val rejectKey: String? = null,
   )
 }
 
@@ -295,6 +297,15 @@ class DataStoreOutboxStore<E>(
   private val undecodable = UndecodableRows()
 
   override suspend fun insert(id: EntryId, key: String, payload: E) {
+    insertRow(id, key, payload, rejectKey = null)
+  }
+
+  override suspend fun insert(id: EntryId, key: String, payload: E, rejectKey: String) {
+    insertRow(id, key, payload, rejectKey)
+  }
+
+  /** The one insert path of both [insert]s. */
+  private suspend fun insertRow(id: EntryId, key: String, payload: E, rejectKey: String?) {
     // List order is send order
     val row =
       OutboxLog.Row(
@@ -302,6 +313,7 @@ class DataStoreOutboxStore<E>(
         key = key,
         payload = codec.encode(payload),
         status = OutboxStatus.Queued.storedName,
+        rejectKey = rejectKey,
       )
     currentCoroutineContext().ensureActive()
     // updateData runs one transform at a time, so the whole log changes atomically. It runs to the
@@ -443,6 +455,7 @@ class DataStoreOutboxStore<E>(
       committed = committed,
       sentAt = sentAt?.let { Instant.fromEpochMilliseconds(it) },
       reply = reply,
+      rejectKey = rejectKey,
     )
   }
 }

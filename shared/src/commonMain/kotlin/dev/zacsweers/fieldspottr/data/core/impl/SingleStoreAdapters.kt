@@ -41,6 +41,7 @@ private fun <E, P> OutboxEntry<E>.withPayload(payload: P): OutboxEntry<P> =
     committed = committed,
     sentAt = sentAt,
     reply = reply,
+    rejectKey = rejectKey,
   )
 
 /** These rows of changes as rows of [KeyedMutation]s with a `Unit` key. */
@@ -49,6 +50,13 @@ internal fun <M> OutboxStore<M>.keyedByUnit(): OutboxStore<KeyedMutation<Unit, M
   return object : OutboxStore<KeyedMutation<Unit, M>> {
     override suspend fun insert(id: EntryId, key: String, payload: KeyedMutation<Unit, M>) =
       rows.insert(id, key, payload.mutation)
+
+    override suspend fun insert(
+      id: EntryId,
+      key: String,
+      payload: KeyedMutation<Unit, M>,
+      rejectKey: String,
+    ) = rows.insert(id, key, payload.mutation, rejectKey)
 
     override suspend fun update(
       entry: OutboxEntry<KeyedMutation<Unit, M>>,
