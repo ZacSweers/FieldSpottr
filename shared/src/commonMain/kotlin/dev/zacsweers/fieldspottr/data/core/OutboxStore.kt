@@ -30,7 +30,11 @@ sealed interface OutboxStatus {
   /** In flight. An entry found in this state at startup is sent again. */
   data object Sending : OutboxStatus
 
-  /** Rejected or out of attempts. Needs [Outbox.retry] or [Outbox.discard]. */
+  /**
+   * Rejected or out of attempts. Needs [Outbox.retry] or [Outbox.discard]. [cause] is the text of
+   * the failure, which the outbox cuts to 16,384 chars so a long message cannot outgrow a stored
+   * row.
+   */
   data class Failed(val cause: String) : OutboxStatus
 
   /** Delivered. */
@@ -57,6 +61,7 @@ data class OutboxEntry<E>(
   val status: OutboxStatus,
   /** Transient failures so far. */
   val attempts: Int = 0,
+  /** The text of the last transient failure, cut like [OutboxStatus.Failed.cause]. */
   val lastError: String? = null,
   /**
    * Whether the outbox has run, or at least attempted, the revert of this entry's optimistic

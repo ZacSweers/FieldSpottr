@@ -655,7 +655,7 @@ internal class RealOutbox<E>(
           head.copy(
             status = OutboxStatus.Queued,
             attempts = attempts,
-            lastError = failure.toString(),
+            lastError = failure.errorText(),
             retryAt = nextAt,
           )
         endAttempt(head.id) { store.update(waiting, expected = OutboxStatus.Sending) }
@@ -945,7 +945,7 @@ internal class RealOutbox<E>(
    * reverts it in its turn among the key's owed rows.
    */
   private suspend fun fail(head: OutboxEntry<E>, failure: Throwable, attempts: Int) {
-    val status = OutboxStatus.Failed(failure.toString())
+    val status = OutboxStatus.Failed(failure.errorText())
     val outcome = OperationState.Failed(failure as? PermanentFailure ?: PermanentFailure(failure))
     val handle = liveHandle(head.key)
     // One step, so the reverted mark and the revert stay together, as OutboxEntry.reverted
@@ -1505,6 +1505,28 @@ private const val WHOLE_QUEUE = ""
  * so it takes the same unknown-answer path.
  */
 internal const val UNKNOWN_REPLY = "} unknown reply"
+
+/**
+ * How many chars of a failure's text an entry keeps. A longer text is cut, so an error message
+ * never makes a stored row too large to read back.
+ */
+internal const val MAX_ERROR_CHARS = 16384
+
+/**
+ * The text an entry keeps of this failure, its `toString` cut to [MAX_ERROR_CHARS]. A cut inside a
+ * surrogate pair drops the whole pair. Half a pair may not read back as it was stored, and the
+ * outbox matches a stored failure by its text.
+ */
+private fun Throwable.errorText(): String {
+  val text = toString()
+  return if (text.length <= MAX_ERROR_CHARS) {
+    text
+  } else if (text[MAX_ERROR_CHARS - 1].isHighSurrogate()) {
+    text.take(MAX_ERROR_CHARS - 1)
+  } else {
+    text.take(MAX_ERROR_CHARS)
+  }
+}
 
 // How long any work that failed on the store waits before it tries again, like the watcher, a
 // drain, a commit retry or a handle's read. The pause doubles while the work keeps failing, up to

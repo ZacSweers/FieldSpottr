@@ -18,6 +18,7 @@ import dev.zacsweers.fieldspottr.data.core.PayloadCodec
 import dev.zacsweers.fieldspottr.data.core.UndecodableRows
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.decodeCatching
+import dev.zacsweers.fieldspottr.data.core.impl.UNKNOWN_REPLY
 import dev.zacsweers.fieldspottr.data.core.isDone
 import dev.zacsweers.fieldspottr.data.core.isSendable
 import dev.zacsweers.fieldspottr.data.core.storedCause
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialFormat
+import okio.utf8Size
 
 /**
  * Every outbox's rows in the app's database, one partition of the `outboxRow` table per name.
@@ -49,6 +51,13 @@ import kotlinx.serialization.SerialFormat
  *
  * Rows outlive app updates, so change a payload class with care, as
  * [DataStoreOutboxStores][dev.zacsweers.fieldspottr.data.core.DataStoreOutboxStores] describes.
+ *
+ * Android reads each row through a cursor window of about 2 MB, and no query can read a row larger
+ * than the window. So no row holds a payload with its key, or an answer, larger than
+ * [maxTextBytes]. An insert above that throws, so the outbox undoes its change and fails its
+ * handle. A larger answer fails to encode, so the outbox reports it and stores the answer as
+ * unknown. A row an older version stored above the cap still cannot be read on Android until
+ * [clearAll] deletes it.
  */
 @OptIn(ExperimentalAtomicApi::class)
 class SqlDelightOutboxStores(
@@ -58,17 +67,36 @@ class SqlDelightOutboxStores(
    * Encodes each payload into its row. A binary format is stored as Base64, as [asCodec] describes.
    */
   private val payloadFormat: SerialFormat = DefaultPayloadFormat,
+  /** The largest payload with its key, and the largest answer, a row holds, in UTF-8 bytes. */
+  private val maxTextBytes: Int = MAX_OUTBOX_TEXT_BYTES,
 ) : OutboxStores {
   /** Over a database that is already open. */
   constructor(
     queries: OutboxRowQueries,
     io: CoroutineDispatcher,
     payloadFormat: SerialFormat = DefaultPayloadFormat,
-  ) : this({ queries }, io, payloadFormat)
+    maxTextBytes: Int = MAX_OUTBOX_TEXT_BYTES,
+  ) : this({ queries }, io, payloadFormat, maxTextBytes)
 
-  // Answers live in the same rows as payloads, so they use the same format
-  override fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> =
-    serializer.asCodec(payloadFormat)
+  /**
+   * Answers live in the same rows as payloads, so they use the same format and cap. An answer above
+   * the cap fails to encode, and the outbox then stores it as unknown.
+   */
+  override fun <R> replyCodec(serializer: KSerializer<R>): PayloadCodec<R> {
+    val codec = serializer.asCodec(payloadFormat)
+    return object : PayloadCodec<R> {
+      override fun encode(payload: R): String {
+        val encoded = codec.encode(payload)
+        require(encoded.utf8Size() <= maxTextBytes) {
+          "An answer of type ${serializer.descriptor.serialName} is larger than the outbox " +
+            "row limit of $maxTextBytes UTF-8 bytes"
+        }
+        return encoded
+      }
+
+      override fun decode(encoded: String): R = codec.decode(encoded)
+    }
+  }
 
   // One store per name, so every outbox over a name shares what its store knows about rows that do
   // not decode, and each such row is reported once. Nothing observes it, so it needs no StateFlow.
@@ -83,7 +111,14 @@ class SqlDelightOutboxStores(
         return it.checked(name, serializer) as OutboxStore<E>
       }
       // A store holds no resources until used, so the copy that loses this race is dropped
-      val created = SqlDelightOutboxStore(queries, name, serializer.asCodec(payloadFormat), io)
+      val created =
+        SqlDelightOutboxStore(
+          queries,
+          name,
+          serializer.asCodec(payloadFormat),
+          io,
+          maxTextBytes = maxTextBytes,
+        )
       val entry = OpenedStore<SqlDelightOutboxStore<*>>(serializer.descriptor, created)
       if (opened.compareAndSet(current, current.putting(name, entry))) {
         return created
@@ -115,6 +150,10 @@ class SqlDelightOutboxStores(
  *
  * [changes] names only the writes made through this store, as [OutboxChangeLog] describes, so build
  * one [SqlDelightOutboxStores] per database.
+ *
+ * [insert] throws for a payload and key larger than [maxTextBytes], and [update] stores a larger
+ * answer as unknown, so no row outgrows Android's cursor window, as [SqlDelightOutboxStores]
+ * describes.
  */
 class SqlDelightOutboxStore<E>(
   private val queries: suspend () -> OutboxRowQueries,
@@ -124,6 +163,8 @@ class SqlDelightOutboxStore<E>(
   private val io: CoroutineDispatcher,
   private val keepSettledFor: Duration = 1.minutes,
   private val clock: Clock = Clock.System,
+  /** The largest payload with its key, and the largest answer, this store keeps, in UTF-8 bytes. */
+  private val maxTextBytes: Int = MAX_OUTBOX_TEXT_BYTES,
 ) : OutboxStore<E> {
   // The rows this store cannot decode, found by its reads
   private val undecodable = UndecodableRows()
@@ -136,10 +177,17 @@ class SqlDelightOutboxStore<E>(
     // back. The insert runs to the end once started, as OutboxStore.insert requires.
     withContext(NonCancellable) {
       withContext(io) {
+        val encoded = codec.encode(payload)
+        // Before any database work, so a row too large to read back stores nothing
+        val size = encoded.utf8Size() + key.utf8Size()
+        require(size <= maxTextBytes) {
+          "Outbox $outbox cannot store entry ${id.value}. Its payload and key are $size UTF-8 " +
+            "bytes, and the limit is $maxTextBytes."
+        }
         val queries = queries()
         queries.transaction {
           queries.pruneSettled(outbox, cutoff())
-          queries.insert(id.value, outbox, key, codec.encode(payload))
+          queries.insert(id.value, outbox, key, encoded)
         }
       }
     }
@@ -156,6 +204,14 @@ class SqlDelightOutboxStore<E>(
       if (row == null || row.isExpired() || OutboxStatus(row.status, row.cause) != expected) {
         return@withContext false
       }
+      // The set's codec refuses a larger answer before it gets here. A sender with a store of its
+      // own encodes its answers itself, so a larger one is stored as unknown here.
+      val reply =
+        if (entry.reply != null && entry.reply.utf8Size() > maxTextBytes) {
+          UNKNOWN_REPLY
+        } else {
+          entry.reply
+        }
       val written = queries.transactionWithResult {
         // Deletes the expired rows first, so a row that expired since the read is gone and the
         // write below finds nothing
@@ -181,7 +237,7 @@ class SqlDelightOutboxStore<E>(
               0L
             },
           sentAt = entry.sentAt?.toEpochMilliseconds(),
-          reply = entry.reply,
+          reply = reply,
           outbox = outbox,
           id = entry.id.value,
           expectedStatus = row.status,
@@ -319,3 +375,9 @@ class SqlDelightOutboxStore<E>(
     )
   }
 }
+
+/**
+ * The default largest payload or answer an outbox row holds, in UTF-8 bytes. Both at this size,
+ * with the longest error text the outbox keeps, still fit in Android's cursor window of about 2 MB.
+ */
+internal const val MAX_OUTBOX_TEXT_BYTES = 900 * 1024

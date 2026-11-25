@@ -37,6 +37,9 @@ import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.assertOneTypePerName
 import dev.zacsweers.fieldspottr.data.core.assertUnreadableRowIsHandled
+import dev.zacsweers.fieldspottr.data.core.exchangingSender
+import dev.zacsweers.fieldspottr.data.core.impl.UNKNOWN_REPLY
+import dev.zacsweers.fieldspottr.data.core.replying
 import dev.zacsweers.fieldspottr.data.core.sender
 import dev.zacsweers.fieldspottr.data.core.testing.OutboxStoreContract
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
@@ -51,6 +54,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -245,7 +249,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
   fun `an insert whose caller is cancelled during the write still stores the row`() = runTest {
     val db = suspendLazy { temporaryDatabase.db() }
     lateinit var caller: Job
-    // Cancels the caller from inside the transaction, which still commits
+    // Cancels the caller from inside the insert, which still commits
     val cancelling =
       object : PayloadCodec<String> {
         override fun encode(payload: String) = payload.also { caller.cancel() }
@@ -601,6 +605,88 @@ class SqlDelightOutboxStoresClearAllTest {
     scope.cancel()
 
     assertThat(settled).isEqualTo(List(3) { OperationState.Cancelled })
+    failures.assertNone()
+  }
+}
+
+/** The size limits that keep every outbox row readable through a cursor window. */
+class SqlDelightOutboxStoreSizeTest {
+  @get:Rule val temporaryDatabase = TemporaryDatabase()
+
+  @Test
+  fun `an insert above the size cap throws and stores nothing`() = runTest {
+    val store =
+      SqlDelightOutboxStores(
+          { temporaryDatabase.db().outboxRowQueries },
+          Dispatchers.IO,
+          maxTextBytes = 64,
+        )
+        .open("notes", String.serializer())
+    // 61 chars, the two JSON quotes and the one-byte key are exactly the cap
+    store.insertNew("k", "a".repeat(61))
+    // The same payload under a key one byte longer is over it
+    assertFailsWith<IllegalArgumentException> {
+      store.insert(EntryId("keyed"), "kk", "a".repeat(61))
+    }
+
+    // Fewer chars than the cap, but two UTF-8 bytes each
+    val failure =
+      assertFailsWith<IllegalArgumentException> {
+        store.insert(EntryId("big"), "k", "é".repeat(40))
+      }
+
+    assertThat(failure.message.orEmpty()).contains("notes")
+    assertThat(failure.message.orEmpty()).contains("big")
+    assertThat(failure.message.orEmpty()).contains("64")
+    assertThat(failure.message.orEmpty()).doesNotContain("é")
+    assertThat(store.entries().first().map { it.payload }).isEqualTo(listOf("a".repeat(61)))
+  }
+
+  @Test
+  fun `an update stores an answer above the size cap as unknown`() = runTest {
+    val store =
+      SqlDelightOutboxStores(
+          { temporaryDatabase.db().outboxRowQueries },
+          Dispatchers.IO,
+          maxTextBytes = 64,
+        )
+        .open("notes", String.serializer())
+    val id = store.insertNew("k", "a")
+    val queued = checkNotNull(store.entry(id).first())
+
+    // From a sender with a store of its own, whose answers never pass the set's codec
+    val sent = queued.copy(status = OutboxStatus.Sent, reply = "x".repeat(65))
+    assertThat(store.update(sent, expected = OutboxStatus.Queued)).isTrue()
+
+    assertThat(store.entry(id).first()?.reply).isEqualTo(UNKNOWN_REPLY)
+  }
+
+  @Test
+  fun `an answer above the size cap is stored as unknown and reported`() = runBlocking {
+    val stores =
+      SqlDelightOutboxStores(
+        { temporaryDatabase.db().outboxRowQueries },
+        Dispatchers.IO,
+        maxTextBytes = 64,
+      )
+    val echo = OutboxKey.replying<String, String>("echo")
+    val rows = stores.open(echo.name, String.serializer())
+    val id = rows.insertNew("k", "a")
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failures = TestFailures()
+    val senderFailures = TestFailures()
+
+    // No handle is attached, so the row is written Sent with its answer
+    DataScope.Factory(onFailure = failures, stores = stores)
+      .create(
+        scope,
+        setOf(echo.exchangingSender(onFailure = senderFailures) { _, _ -> "é".repeat(40) }),
+      )
+    val sent = withTimeout(10.seconds) { rows.entry(id).first { it?.status == OutboxStatus.Sent } }
+    scope.cancel()
+
+    assertThat(sent?.reply).isEqualTo(UNKNOWN_REPLY)
+    senderFailures.assertSingle<IllegalArgumentException>()
     failures.assertNone()
   }
 }

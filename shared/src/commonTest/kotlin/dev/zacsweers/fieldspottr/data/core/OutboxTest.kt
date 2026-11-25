@@ -14,6 +14,7 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
+import dev.zacsweers.fieldspottr.data.core.impl.MAX_ERROR_CHARS
 import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
 import dev.zacsweers.fieldspottr.data.core.impl.timersHeld
 import dev.zacsweers.fieldspottr.data.core.testing.TestClock
@@ -1019,6 +1020,27 @@ class OutboxTest {
     assertThat(failure.cause).isSameInstanceAs(flaky)
     assertThat(data.actionFailures.take()).containsExactly(flaky)
     assertThat(send.reverted).containsExactly("a")
+  }
+
+  /**
+   * A failure text longer than an entry keeps, with an emoji across the cut. The emoji goes whole,
+   * and a handle attached later still gets the exception, which the outbox matches by that text.
+   */
+  @Test
+  fun `a long failure text is cut and a later handle still carries the exception`() = runTest {
+    val prefix = IllegalStateException("").toString().length
+    val flaky =
+      IllegalStateException("x".repeat(MAX_ERROR_CHARS - 1 - prefix) + "😀" + "y".repeat(100))
+    send.failure = { _, _ -> flaky }
+    val outbox = outbox(retry = RetryPolicy(maxAttempts = 2) { 1.seconds })
+
+    val failure = outbox.enqueue("a").awaitFailed<PermanentFailure>()
+
+    val kept = flaky.toString().take(MAX_ERROR_CHARS - 1)
+    val entry = outbox.entries.first().single()
+    assertThat(entry.status).isEqualTo(OutboxStatus.Failed(kept))
+    assertThat(entry.lastError).isEqualTo(kept)
+    assertThat(outbox.operation(entry.id).awaitFailed<PermanentFailure>()).isSameInstanceAs(failure)
   }
 
   @Test
