@@ -3,6 +3,7 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isTrue
@@ -362,6 +363,181 @@ class OptimisticQueryStoreLinesTest {
       assertThat(sets.landedCommits).isEqualTo(0)
       assertThat(sets.knownChanges).isEqualTo(0)
     }
+
+  /**
+   * C sends on ordering [c], and its commit fails once on its base write. A forced fetch from after
+   * C's send lands with c. P sends on ordering [p] and fails its first write too, so P's record
+   * holds a value whose write is owed. C's retry lands first and writes nothing, since the truth
+   * was fetched after C's send. B on ordering [b] commits last. Every value the view emits from
+   * each send on must hold that send's change, and once the truth holds every change the set
+   * forgets them all.
+   */
+  private suspend fun TestScope.assertThreeCommitsKeepEveryChange(
+    c: Ordering,
+    p: Ordering,
+    b: Ordering,
+  ) {
+    val data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(UnitTags.sender { change, id -> send(change.mutation, id) }),
+      )
+    val sets =
+      data.optimisticStores<Unit, List<String>, Add>(UnitTags, base = { base }, apply = ::addOnce)
+    val store = sets(Unit)
+    val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+    val seen = mutableListOf<Set<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
+    runCurrent()
+
+    failWrites["c"] = 1
+    failWrites["p"] = 1
+    val fromC = seen.size
+    store.mutate(Add("c"), c).awaitSucceeded()
+    advanceTimeBy(1.milliseconds)
+    runCurrent()
+    fetch.respond = { listOf("a", "c") }
+    query.requestFetch(force = true).awaitSucceeded()
+    advanceTimeBy(1.milliseconds)
+    val fromP = seen.size
+    store.mutate(Add("p"), p).awaitSucceeded()
+    runCurrent()
+    // C's retry, which writes nothing, lands before P's
+    advanceTimeBy(998.milliseconds)
+    runCurrent()
+    val fromB = seen.size
+    store.mutate(Add("b"), b).awaitSucceeded()
+    runCurrent()
+    advanceTimeBy(10.seconds)
+    runCurrent()
+
+    assertThat(seen.drop(fromC).filter { "c" !in it.orEmpty() }).isEmpty()
+    assertThat(seen.drop(fromP).filter { "p" !in it.orEmpty() }).isEmpty()
+    assertThat(seen.drop(fromB).filter { "b" !in it.orEmpty() }).isEmpty()
+    val expected = setOf("a", "b", "c", "p")
+    // Every retry lands in the end
+    advanceTimeBy(2.minutes)
+    runCurrent()
+    assertThat(truth.data.value?.value?.toSet()).isEqualTo(expected)
+    assertThat(store.data.first()?.value?.toSet()).isEqualTo(expected)
+    assertThat(data.outboxStore<KeyedMutation<Unit, Add>>("tags").owed()).isEmpty()
+    advanceTimeBy(15.minutes)
+    // A fetch write prunes records
+    store.writeFetched(Fetched(expected.toList(), data.clock.now())) { _, _ -> false }
+    runCurrent()
+    assertThat(sets.committedRecords).isEqualTo(0)
+    assertThat(sets.landedCommits).isEqualTo(0)
+    assertThat(sets.knownChanges).isEqualTo(0)
+  }
+
+  @Test
+  fun `three lines where the middle commit writes nothing keep every change`() = runTest {
+    assertThreeCommitsKeepEveryChange(Ordering.Keyed("y"), Ordering.Keyed("x"), Ordering.Keyed("z"))
+  }
+
+  @Test
+  fun `on one line the three-commit sequence keeps every change`() = runTest {
+    assertThreeCommitsKeepEveryChange(Ordering.Serial, Ordering.Serial, Ordering.Serial)
+  }
+
+  /**
+   * C on line y sends and its commit write keeps failing, then the owner stops with C's commit
+   * owed. A new data scope over the same rows and truth sends B on line x. Every value the new view
+   * emits must hold c, every value from B's send on must hold b, and the truth must end with both.
+   */
+  @Test
+  fun `an owner that stops between two lines' sends keeps both changes after a restart`() =
+    runTest {
+      val scopes = testDataScopeFactory(clock = testClock(START))
+      val owner = CoroutineScope(backgroundScope.coroutineContext + Job())
+      val sender = UnitTags.sender { change, id -> send(change.mutation, id) }
+      val earlier =
+        scopes
+          .create(owner, setOf(sender))
+          .optimisticStores<Unit, List<String>, Add>(UnitTags, base = { base }, apply = ::addOnce)
+      backgroundScope.launch { earlier(Unit).data.collect {} }
+      runCurrent()
+      failWrites["c"] = 100
+      earlier(Unit).mutate(Add("c"), Ordering.Keyed("y")).awaitSucceeded()
+      runCurrent()
+      owner.cancel()
+      runCurrent()
+      failWrites["c"] = 0
+
+      val later = scopes.create(backgroundScope, setOf(sender))
+      val sets =
+        later.optimisticStores<Unit, List<String>, Add>(
+          UnitTags,
+          base = { base },
+          apply = ::addOnce,
+        )
+      val seen = mutableListOf<Set<String>?>()
+      backgroundScope.launch { sets(Unit).data.collect { seen += it?.value?.toSet() } }
+      runCurrent()
+      val fromB = seen.size
+      sets(Unit).mutate(Add("b"), Ordering.Keyed("x")).awaitSucceeded()
+      runCurrent()
+      advanceTimeBy(2.minutes)
+      runCurrent()
+
+      assertThat(seen.filter { "c" !in it.orEmpty() }).isEmpty()
+      assertThat(seen.drop(fromB).filter { "b" !in it.orEmpty() }).isEmpty()
+      assertThat(truth.data.value?.value?.toSet()).isEqualTo(setOf("a", "b", "c"))
+      advanceTimeBy(15.minutes)
+      // A fetch write prunes records
+      sets(Unit).writeFetched(Fetched(listOf("a", "b", "c"), later.clock.now())) { _, _ -> false }
+      runCurrent()
+      assertThat(sets.committedRecords).isEqualTo(0)
+      assertThat(sets.landedCommits).isEqualTo(0)
+      assertThat(sets.knownChanges).isEqualTo(0)
+    }
+
+  /**
+   * B on line x fails its first base write. Boom on line y throws in apply while it commits, so the
+   * set drops it and reports the failure. C on line y then sends. Every value from C's send on must
+   * hold b and c, and the truth must end with both.
+   */
+  @Test
+  fun `a commit whose apply throws on one line leaves the other line's changes`() = runTest {
+    val data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(UnitTags.sender { change, id -> send(change.mutation, id) }),
+      )
+    var throwing = false
+    val store =
+      data.optimisticStores<Unit, List<String>, Add>(
+        UnitTags,
+        base = { base },
+        apply = { current, add ->
+          if (add.tag == "boom" && throwing) {
+            error("boom")
+          }
+          addOnce(current, add)
+        },
+      )(Unit)
+    val seen = mutableListOf<Set<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
+    runCurrent()
+
+    failWrites["b"] = 1
+    store.mutate(Add("b"), Ordering.Keyed("x")).awaitSucceeded()
+    throwing = true
+    store.mutate(Add("boom"), Ordering.Keyed("y")).awaitSucceeded()
+    runCurrent()
+    throwing = false
+    val fromC = seen.size
+    store.mutate(Add("c"), Ordering.Keyed("y")).awaitSucceeded()
+    runCurrent()
+    advanceTimeBy(2.minutes)
+    runCurrent()
+
+    assertThat(seen.drop(fromC).filter { !it.orEmpty().containsAll(setOf("b", "c")) }).isEmpty()
+    assertThat(truth.data.value?.value?.toSet()).isEqualTo(setOf("a", "b", "c"))
+    // B's failed write, and boom's apply, which the set reports with apply's exception as the cause
+    assertThat(data.actionFailures.take().map { it.cause?.message ?: it.message })
+      .containsExactly("Disk full", "boom")
+  }
 }
 
 private val START = Instant.fromEpochSeconds(1_700_000_000)

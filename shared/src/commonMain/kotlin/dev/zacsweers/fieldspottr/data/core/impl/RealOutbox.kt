@@ -1174,8 +1174,10 @@ internal class RealOutbox<E>(
    * outcome of that row's current attempt. A command that settles Cancelled after its row was
    * written still follows the row.
    *
-   * With a [rejectKey], the command runs with it as its reject key. A call the runner rejects
-   * returns a handle that has already failed with [rejection], the caller's form of the key.
+   * With a [rejectKey], the command runs with a [RejectKey] of it as its reject key. A call the
+   * runner rejects returns a handle that has already failed with [rejection], the caller's form of
+   * the key. No caller can build a [RejectKey], so an apply's own [CommandRejectedException] never
+   * reads as a rejection.
    */
   private fun tracked(
     id: EntryId,
@@ -1185,11 +1187,12 @@ internal class RealOutbox<E>(
     write: suspend (attempt: Attempt) -> Unit,
   ): OutboxOperation {
     val attempt = Attempt(id, MutableStateFlow(OperationState.Queued))
-    val admission = rejectKey?.let(Admission::Reject) ?: Admission.Queue
+    val runnerKey = rejectKey?.let(::RejectKey)
+    val admission = runnerKey?.let(Admission::Reject) ?: Admission.Queue
     val written = actions.run(ordering, admission) { write(attempt) }
     // A rejected handle is not the runner's, so it has no command to settle
     val refused = (written.state.value as? OperationState.Failed)?.cause
-    if (rejection != null && (refused as? CommandRejectedException)?.key == rejectKey) {
+    if (rejection != null && (refused as? CommandRejectedException)?.key == runnerKey) {
       attempt.rejected(rejection)
       val stored = Operation.of(attempt.stored.asStateFlow())
       return RowOperation(id, attempt.state.asStateFlow(), stored)
@@ -1548,6 +1551,9 @@ internal class RealOutbox<E>(
   private data class Drain(val key: String)
 
   private data class Row(val id: EntryId)
+
+  /** A stored reject key as the runner's reject key, so only the runner's rejection carries it. */
+  private data class RejectKey(val key: String)
 
   /** A row's Failed [status] as written, and the outcome with the exception send threw. */
   private class FailedRow(val status: OutboxStatus.Failed, val outcome: OperationState.Failed)
