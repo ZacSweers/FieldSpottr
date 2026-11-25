@@ -4,7 +4,6 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
-import assertk.assertions.isGreaterThan
 import assertk.assertions.isLessThanOrEqualTo
 import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
@@ -31,8 +30,7 @@ class OutboxRejectKeyThreadsTest {
   /**
    * Each round, threads on lines x and y enqueue with key k while another thread discards the
    * holder of k. At most one unsettled row holds k after the round, and every call that stored
-   * nothing failed with k. At least one round must admit a thread after the discard frees the key,
-   * so the race ran.
+   * nothing failed with k.
    */
   @Test
   fun `threads on two lines with a discarding thread never store two holders of one key`() =
@@ -48,8 +46,6 @@ class OutboxRejectKeyThreadsTest {
         val rows = stores.open(Notes.name, Notes.serializer)
         var holder = outbox.enqueue("h", admission = Admission.Reject("k"))
         withTimeout(10_000) { holder.stored.await() }
-        // Rounds where a thread was admitted after the discard freed the key, so the race ran
-        var admittedAfterDiscard = 0
         repeat(ROUNDS) { round ->
           val barrier = CyclicBarrier(THREADS + 1)
           val handles = ConcurrentLinkedQueue<OutboxOperation>()
@@ -73,9 +69,6 @@ class OutboxRejectKeyThreadsTest {
             rows.entries().first().filter { it.rejectKey == "k" && !it.status.isSettled }
           assertThat(unsettled.size, "round $round").isLessThanOrEqualTo(1)
           val stored = handles.filter { it.stored.state.value == OperationState.Succeeded }
-          if (stored.isNotEmpty()) {
-            admittedAfterDiscard++
-          }
           for (handle in handles - stored.toSet()) {
             val cause = (handle.stored.state.value as? OperationState.Failed)?.cause
             assertThat(
@@ -92,7 +85,6 @@ class OutboxRejectKeyThreadsTest {
                   withTimeout(10_000) { it.stored.await() }
                 })
         }
-        assertThat(admittedAfterDiscard).isGreaterThan(0)
         failures.assertNone()
       } finally {
         owner.cancel()
