@@ -82,7 +82,8 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
   /**
    * Changes the server has not confirmed, oldest first: waiting, sending or failed. It lists stored
    * entries only, so a change shows here once its entry is stored, a moment after it shows in
-   * [data]. A sent change that waits for its commit is left out, since the server has it.
+   * [data]. A sent change that waits for its commit is left out, since the server has it. A change
+   * that [discard] or [clear] dropped leaves the list at once.
    */
   val pending: Flow<List<PendingMutation<M>>>
 
@@ -109,7 +110,8 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * Removes the truth and drops every change the server has not confirmed, so nothing sends later,
    * as on logout. Once this returns, each value [data] computes lacks the dropped changes. A send
    * already in flight may still reach the server, but its result is ignored and its handle settles
-   * Cancelled. A change still being stored is dropped once it is in.
+   * Cancelled. A change still being stored is dropped once it is in. When a store write fails part
+   * way, this throws, and the changes dropped so far stay dropped.
    */
   override suspend fun clear()
 }
@@ -140,12 +142,16 @@ interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, 
   /** [OptimisticQueryStore.mutate] on [key]'s store. */
   fun mutate(key: K, mutation: M): OutboxOperation
 
-  /** [key]'s changes the server has not confirmed, oldest first, from stored entries only. */
+  /**
+   * [key]'s changes the server has not confirmed, oldest first, from stored entries only. A change
+   * that [discard] or [OptimisticQueryStore.clear] dropped leaves the list at once.
+   */
   fun pending(key: K): Flow<List<PendingMutation<M>>>
 
   /**
    * How many changes across every key the server has not confirmed, for a sync badge. It counts
-   * stored entries only, and no sent change that waits for its commit.
+   * stored entries only, and no sent change that waits for its commit. A change that [discard] or
+   * [OptimisticQueryStore.clear] dropped leaves the count at once.
    */
   val pendingCount: Flow<Int>
 

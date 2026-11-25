@@ -434,15 +434,23 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           .slice(key)
           ?.rows
           .orEmpty()
-          .filter { it.status != OutboxStatus.Sent }
+          .filter { state.listsPending(it) }
           .map { row -> row.toPending() }
       }
       .distinctUntilChanged()
 
   override val pendingCount: Flow<Int> =
     snapshots
-      .map { state -> state.rows.orEmpty().count { it.status != OutboxStatus.Sent } }
+      .map { state -> state.rows.orEmpty().count { state.listsPending(it) } }
       .distinctUntilChanged()
+
+  /**
+   * Whether [pending] and [pendingCount] list [row]: the server has not confirmed its change, and
+   * the set does not know the change as Dropped. So a discard hides the row as it hides the change
+   * in views.
+   */
+  private fun SetState<K, T, M>.listsPending(row: OutboxEntry<KeyedMutation<K, M>>): Boolean =
+    row.status != OutboxStatus.Sent && known[row.id]?.kind != Kind.Dropped
 
   /**
    * Puts a provisional Pending mark of this call on row [id]'s change, so views show it from now,
@@ -738,9 +746,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Discards [key]'s unconfirmed rows, sending ones included, by writing their status, and returns
-   * the changes it discarded. That works whether or not the outbox still runs, like after a logout
-   * cancelled its scope. Handles settle Cancelled through the row, and the outbox moves the key on.
+   * Discards [key]'s unconfirmed rows, sending ones included, by writing their status. It adds each
+   * row to [discarded] once its write landed or it found the row done or gone, so a caller still
+   * knows which rows went when this throws part way. That works whether or not the outbox still
+   * runs, like after a logout cancelled its scope. Handles settle Cancelled through the row, and
+   * the outbox moves the key on.
    *
    * A row left sending by a stopped owner would send again under the next owner, so it goes too. A
    * drain still sending it finds the row discarded, and its [commit] does nothing. The drainer can
@@ -750,15 +760,16 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * change never reaches the cleared truth. The same write drops the row's stored answer, since no
    * commit reads it now.
    */
-  private suspend fun discardPending(key: K): Map<EntryId, OutboxEntry<KeyedMutation<K, M>>> {
-    val discarded = HashMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>()
+  private suspend fun discardPending(
+    key: K,
+    discarded: MutableMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>,
+  ) {
     // From the store itself: a row stored a moment ago may not have reached the shared rows yet,
     // and a row missed here would still send after the clear
     for (row in rows.entries().first()) {
       if (row.payload.key != key) {
         continue
       }
-      discarded[row.id] = row
       var current: OutboxEntry<KeyedMutation<K, M>>? = row
       while (current != null && !current.isDone) {
         val dropped =
@@ -772,8 +783,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         }
         current = rows.entry(row.id).first()
       }
+      discarded[row.id] = row
     }
-    return discarded
   }
 
   /**
@@ -1043,6 +1054,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      *
      * Each change the set knew of when this began goes too, also when the store no longer holds its
      * row, like after a logout deleted every row.
+     *
+     * When a row write fails or the caller is cancelled part way, each change whose row it already
+     * discarded settles Dropped before this throws. The key's records, the other changes and the
+     * truth stay as they are, and a second clear finishes the job.
      */
     override suspend fun clear() {
       // Before the wait, so the row write of each of these changes is in storing already, and a row
@@ -1051,7 +1066,20 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       // A change still being stored would land after the rows below were read and then send
       awaitStored(key)
       base.lock.withLock {
-        val discarded = discardPending(key)
+        val discarded = HashMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>()
+        try {
+          discardPending(key, discarded)
+        } catch (e: Throwable) {
+          // The rows discarded so far stay discarded, so their changes leave the views now,
+          // however late the list is
+          val now = clock.now()
+          edit { s ->
+            discarded.entries.fold(s) { next, (change, row) ->
+              next.dropping(change, row.payload, now)
+            }
+          }
+          throw e
+        }
         val now = clock.now()
         edit { s ->
           var next = s.updatingRecords(key) { null }

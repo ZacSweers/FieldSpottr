@@ -1951,6 +1951,47 @@ class OptimisticQueryStoreTest {
   }
 
   /**
+   * A collector holds the only row list, which shows the row as Queued. A discard hides the row
+   * from the pending rows and the count from the moment the call returns, while its status write
+   * takes a second. The row starts to send meanwhile, so the discard fails and the row comes back.
+   */
+  @Test
+  fun `a discard hides a row from pending until the discard fails`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds, firstListOnly = true)
+    val sets =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = MutableStateFlow(false),
+          stores = stores,
+          clock = testClock(START),
+        )
+        .create(backgroundScope, setOf(UnitTags.sender { _, _ -> }))
+        .optimisticStores<Unit, List<String>, Add>(
+          UnitTags,
+          base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
+          apply = ::addOnce,
+        )
+    val tags = sets(Unit)
+    tags.mutate(Add("b")).stored.await()
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    val id = tags.pending.first().single().id
+    assertThat(sets.pendingCount.first()).isEqualTo(1)
+
+    val discarding = tags.discard(id)
+    assertThat(tags.pending.first()).isEmpty()
+    assertThat(sets.pendingCount.first()).isEqualTo(0)
+
+    val rows = stores.delegate.open(UnitTags.name, UnitTags.serializer)
+    val row = checkNotNull(rows.entry(id).first())
+    check(rows.update(row.copy(status = OutboxStatus.Sending), OutboxStatus.Queued))
+    discarding.awaitFailed<IllegalStateException>()
+    runCurrent()
+    assertThat(tags.pending.first().map { it.id }).containsExactly(id)
+    assertThat(sets.pendingCount.first()).isEqualTo(1)
+  }
+
+  /**
    * Another writer stores a change that this store's lagging list has not shown yet. A discard
    * cannot hide a row the store has neither made nor listed, so the change shows once the list
    * does, until the discard's write lands.
