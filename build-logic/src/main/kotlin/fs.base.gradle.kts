@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Zac Sweers
 // SPDX-License-Identifier: Apache-2.0
+import dev.zacsweers.metro.gradle.DelicateMetroGradleApi
 import dev.zacsweers.metro.gradle.MetroPluginExtension
+import dev.zacsweers.metro.gradle.RequiresIdeSupport
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 
@@ -28,6 +30,7 @@ pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") {
       compilerOptions { optIn.add("dev.zacsweers.metro.ExperimentalMetroCoroutinesApi") }
       afterEvaluate {
         configure<MetroPluginExtension> {
+          @OptIn(DelicateMetroGradleApi::class, RequiresIdeSupport::class)
           enableTopLevelFunctionInjection.set(true)
         }
       }

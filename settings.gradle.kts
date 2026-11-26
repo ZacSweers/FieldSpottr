@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 dependencyResolutionManagement {
   repositories {
+    maven("https://maven-central.storage-download.googleapis.com/maven2/")
     mavenCentral()
     google()
     maven("https://oss.sonatype.org/content/repositories/snapshots") {
@@ -19,6 +20,7 @@ dependencyResolutionManagement {
 pluginManagement {
   includeBuild("build-logic")
   repositories {
+    maven("https://maven-central.storage-download.googleapis.com/maven2/")
     mavenCentral()
     google()
     maven("https://oss.sonatype.org/content/repositories/snapshots") {
@@ -32,8 +34,10 @@ pluginManagement {
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     // Gradle's plugin portal proxies jcenter, which we don't want. To avoid this, we specify
     // exactly which dependencies to pull from here.
+    val pluginPortalMirror = maven("https://cache-redirector.jetbrains.com/plugins.gradle.org/m2")
+    val pluginPortal = gradlePluginPortal()
     exclusiveContent {
-      forRepository(::gradlePluginPortal)
+      forRepositories(pluginPortalMirror, pluginPortal)
       filter {
         includeGroup("com.github.gmazzo.buildconfig")
         includeGroup("com.mikepenz.aboutlibraries.plugin")
