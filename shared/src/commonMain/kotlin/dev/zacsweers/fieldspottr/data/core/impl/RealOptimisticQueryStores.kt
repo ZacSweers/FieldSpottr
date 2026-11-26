@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
+import dev.zacsweers.fieldspottr.data.core.CancellableAdmission
 import dev.zacsweers.fieldspottr.data.core.DelicateDataLayerApi
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
@@ -12,6 +13,7 @@ import dev.zacsweers.fieldspottr.data.core.Operation
 import dev.zacsweers.fieldspottr.data.core.OperationState
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStore
 import dev.zacsweers.fieldspottr.data.core.OptimisticQueryStores
+import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
 import dev.zacsweers.fieldspottr.data.core.OutboxStatus
@@ -87,15 +89,15 @@ import kotlinx.coroutines.sync.withLock
  * | Sent      | an attempt that sent, no record    | the change   | passed                    |
  * | Committed | the commit after a send (a record) | the record   | expired                   |
  * | Failed    | an attempt that failed for good    | nothing      | list shows Failed, passed |
- * | Dropped   | [discard], [clear], or a commit    | nothing      | passed                    |
- * |           | whose [apply] threw                |              |                           |
+ * | Dropped   | [discard], [clear], a supersede,   | nothing      | passed                    |
+ * |           | or a commit whose [apply] threw    |              |                           |
  *
  * "Passed" means the list showed the row and a later list lacks it. Pending moves on when its
- * commit records it, when its attempt ends, or when [discard] or [clear] drops it. Dropped is
- * final. HandedOff means the owner's scope stopped and the row waits for the next owner. Sent means
- * the server has the change and its commit has not landed, like a commit that failed on a store
- * error and runs again later. A change whose insert failed, or whose owner stopped before the
- * insert, has no row, and the set forgets it at once.
+ * commit records it, when its attempt ends, or when [discard], [clear] or a newer change that
+ * supersedes it drops it. Dropped is final. HandedOff means the owner's scope stopped and the row
+ * waits for the next owner. Sent means the server has the change and its commit has not landed,
+ * like a commit that failed on a store error and runs again later. A change whose insert failed, or
+ * whose owner stopped before the insert, has no row, and the set forgets it at once.
  *
  * A running [retry] or [discard] call puts a provisional [Mark] over the settled state, as [Known]
  * describes. A change with a mark is never forgotten. When its last mark goes, its forget rule
@@ -113,7 +115,8 @@ import kotlinx.coroutines.sync.withLock
  * store makes them atomic. Meanwhile a fetch that started before the send can land with a value
  * that lacks the change. So a view shows the change from its [Committed] record in place of its
  * row. Two cases fall outside the records, which is why [apply] must be idempotent, as
- * [checkIdempotent] describes.
+ * [checkIdempotent] describes. With several lines on one value, a change whose commit write failed
+ * can be carried into the truth by another line's commit and then applied again by its own retry.
  *
  * The query's fetch and the outbox's commit both write a key's truth, and they take turns on the
  * key's [Base.lock].
@@ -124,10 +127,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   /** Joins this set to the outbox engine over [rows] as its handle, once, to build [outbox]. */
   attach: (RowOwner<KeyedMutation<K, M>>) -> OwnedRows<KeyedMutation<K, M>>,
   /**
-   * The ordering key of a key's rows. Keys that are equal must give the same ordering key, so they
-   * share one order however their `toString` reads.
+   * The default line of a key's rows, which a [Ordering.Keyed] change extends. Keys that are equal
+   * must give the same line, so they share one order however their `toString` reads.
    */
   private val orderKey: (K) -> String,
+  /**
+   * Whether the sender can answer with a value. Such a set takes [Ordering.Serial] only, since two
+   * lines could commit their answers out of order and an older answer would replace a newer one.
+   */
+  private val replies: Boolean,
   private val base: (key: K) -> QueryStore<T>,
   private val apply: (current: T?, mutation: M) -> T?,
   /** The clock the queries' fetch times come from, so a send time compares against them. */
@@ -237,6 +245,15 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     override fun committed(id: EntryId) {
       landed.update { it.removing(id) }
     }
+
+    /**
+     * Settles the change Dropped, so no view shows it again however late the list is. The watcher
+     * in [mutate] then finds it settled and leaves it Dropped when its handle settles Cancelled.
+     */
+    override fun superseded(id: EntryId, payload: KeyedMutation<K, M>) {
+      val now = clock.now()
+      edit { it.dropping(id, payload, now) }
+    }
   }
 
   /** Forgets each landed commit whose row [list] no longer shows after it showed it. */
@@ -302,9 +319,22 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   /**
    * Gives the change its row id, records it as Pending, then enqueues its row and follows it. The
    * row's write is registered in [storing] before the change is recorded, so a clear that finds the
-   * change also waits for its row, even while this call has not enqueued it yet.
+   * change also waits for its row, even while this call has not enqueued it yet. A refused
+   * [ordering] or [admission] throws before the change is recorded, so no collector sees it. An
+   * enqueue that throws anyway forgets the change. A rejected change fails its stored milestone, so
+   * it is forgotten like a change whose row could not be stored.
    */
-  override fun mutate(key: K, mutation: M): OutboxOperation {
+  override fun mutate(
+    key: K,
+    mutation: M,
+    ordering: Ordering,
+    admission: CancellableAdmission,
+  ): OutboxOperation {
+    require(!replies || ordering == Ordering.Serial) {
+      "This store's sender can answer with a value, so its changes take Ordering.Serial only. " +
+        "Two lines could commit their answers out of order. Use Ordering.Serial."
+    }
+    requireEntryCanTake(ordering, admission)
     val id = EntryId(Uuid.random().toString())
     val payload = KeyedMutation(key, mutation)
     val write = Storing(key)
@@ -312,7 +342,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
     edit { it.knowing(id, Known(Kind.Pending, payload)) }
     val handle =
       try {
-        outbox.enqueue(id, payload, key = orderKey(key))
+        outbox.enqueue(id, payload, ordering, line = orderKey(key), admission)
       } catch (e: Throwable) {
         // No row will exist, so nothing waits for it and nothing shows the change
         write.started.complete(Operation.failed(e))
@@ -434,15 +464,23 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           .slice(key)
           ?.rows
           .orEmpty()
-          .filter { it.status != OutboxStatus.Sent }
+          .filter { state.listsPending(it) }
           .map { row -> row.toPending() }
       }
       .distinctUntilChanged()
 
   override val pendingCount: Flow<Int> =
     snapshots
-      .map { state -> state.rows.orEmpty().count { it.status != OutboxStatus.Sent } }
+      .map { state -> state.rows.orEmpty().count { state.listsPending(it) } }
       .distinctUntilChanged()
+
+  /**
+   * Whether [pending] and [pendingCount] list [row]: the server has not confirmed its change, and
+   * the set does not know the change as Dropped. So a discard hides the row as it hides the change
+   * in views.
+   */
+  private fun SetState<K, T, M>.listsPending(row: OutboxEntry<KeyedMutation<K, M>>): Boolean =
+    row.status != OutboxStatus.Sent && known[row.id]?.kind != Kind.Dropped
 
   /**
    * Puts a provisional Pending mark of this call on row [id]'s change, so views show it from now,
@@ -526,7 +564,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * A server answer replaces the truth as fresh data. Otherwise the change is applied to the truth
    * with the earlier sent changes a fetch may have dropped put back, and the truth keeps its fetch
-   * time. A truth fetched after the send already holds the change, so it stays as it is.
+   * time. A truth fetched after the send already holds the change, so it stays as it is, and the
+   * record keeps no value, since that truth may lack another line's change whose write is owed.
    *
    * Two failures end the commit without the change written, since a retry cannot fix them, and both
    * mark the truth stale, so the next fetch brings the server's value with the change in it. An
@@ -600,7 +639,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       val next =
         when {
           result is Delivery.Replaced -> Fetched(result.value, sentAt, invalidated = stale)
-          alreadyFetched -> current
+          // The record keeps no value. The stored truth may lack a change of another line whose
+          // commit write is still owed, and a record with a value tells views that the truth holds
+          // every record before it. Without one, views judge the other records as they did before
+          // this commit.
+          alreadyFetched -> null
           else -> {
             val folded =
               try {
@@ -628,6 +671,7 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
           sentAt = sentAt,
           truth = next,
           replaced = replaced,
+          hasValue = replaced || !alreadyFetched,
         )
       // Views show this in place of the row and the change's known state from here, so the writes
       // below never show as a gap
@@ -640,14 +684,18 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         }
       }
       landed.update { it.putting(change, false) }
-      // The store holds this record's value now, which tells views that it holds every change
-      // before it too. So the key's older records need only what a slow fetch folds back in.
-      edit { s ->
-        s.updatingRecords(key) {
-          if (it.change != change) {
-            it.withoutValue(newerAnswer = replaced)
-          } else {
-            it
+      // This record's value tells views that the store holds every change before it too, so the
+      // key's older records need only what a slow fetch folds back in. A record without a value
+      // comes from a commit that wrote nothing, so it changes no other record, and an older record
+      // whose write landed stays held by its own value.
+      if (record.hasValue) {
+        edit { s ->
+          s.updatingRecords(key) {
+            if (it.change != change) {
+              it.withoutValue(newerAnswer = replaced)
+            } else {
+              it
+            }
           }
         }
       }
@@ -662,9 +710,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * Two cases fall outside the records and pass [apply] such a value, and the store cannot tell: a
    * fetch that overlapped the send but read the server after it took the change, and a restart
-   * between the truth write and the row's status. So a change that fails this would show twice. A
-   * change the server answers with a value is never folded, so nothing checks it, and a counter
-   * shows twice until a server answer replaces the truth.
+   * between the truth write and the row's status. With several lines on one value, a change whose
+   * commit write failed can be carried into the truth by another line's commit and then applied
+   * again by its own retry. So a change that fails this would show twice. A change the server
+   * answers with a value is never folded, so nothing checks it, and a counter shows twice until a
+   * server answer replaces the truth.
    */
   private fun checkIdempotent(folded: Fetched<T>?, mutation: M, change: EntryId) {
     if (reportedApply.load() || idempotenceChecks.fetchAndIncrement() >= IDEMPOTENCE_CHECKS) {
@@ -738,9 +788,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
   }
 
   /**
-   * Discards [key]'s unconfirmed rows, sending ones included, by writing their status, and returns
-   * the changes it discarded. That works whether or not the outbox still runs, like after a logout
-   * cancelled its scope. Handles settle Cancelled through the row, and the outbox moves the key on.
+   * Discards [key]'s unconfirmed rows, sending ones included, by writing their status. It adds each
+   * row to [discarded] once its write landed or it found the row done or gone, so a caller still
+   * knows which rows went when this throws part way. That works whether or not the outbox still
+   * runs, like after a logout cancelled its scope. Handles settle Cancelled through the row, and
+   * the outbox moves the key on.
    *
    * A row left sending by a stopped owner would send again under the next owner, so it goes too. A
    * drain still sending it finds the row discarded, and its [commit] does nothing. The drainer can
@@ -750,15 +802,16 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    * change never reaches the cleared truth. The same write drops the row's stored answer, since no
    * commit reads it now.
    */
-  private suspend fun discardPending(key: K): Map<EntryId, OutboxEntry<KeyedMutation<K, M>>> {
-    val discarded = HashMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>()
+  private suspend fun discardPending(
+    key: K,
+    discarded: MutableMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>,
+  ) {
     // From the store itself: a row stored a moment ago may not have reached the shared rows yet,
     // and a row missed here would still send after the clear
     for (row in rows.entries().first()) {
       if (row.payload.key != key) {
         continue
       }
-      discarded[row.id] = row
       var current: OutboxEntry<KeyedMutation<K, M>>? = row
       while (current != null && !current.isDone) {
         val dropped =
@@ -772,8 +825,8 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
         }
         current = rows.entry(row.id).first()
       }
+      discarded[row.id] = row
     }
-    return discarded
   }
 
   /**
@@ -826,8 +879,9 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
    *
    * A listed row applies in its queue position whatever the set knows of it, so a retry or a
    * discard that teaches the set a change never moves it past a newer row. A known change missing
-   * from the list goes last. Its insert has not returned or the list lags, and a key's inserts run
-   * in order, so its row comes after every row the list shows.
+   * from the list goes last. Its insert has not returned or the list lags, and a line's inserts run
+   * in order, so its row comes after every row of its line the list shows. A row of another line
+   * can apply in either order, which is why changes on different lines must commute.
    */
   private fun plan(stored: Fetched<T>?, slice: KeySlice<K, T, M>?): Plan<T, M> {
     if (slice == null) {
@@ -1043,6 +1097,10 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
      *
      * Each change the set knew of when this began goes too, also when the store no longer holds its
      * row, like after a logout deleted every row.
+     *
+     * When a row write fails or the caller is cancelled part way, each change whose row it already
+     * discarded settles Dropped before this throws. The key's records, the other changes and the
+     * truth stay as they are, and a second clear finishes the job.
      */
     override suspend fun clear() {
       // Before the wait, so the row write of each of these changes is in storing already, and a row
@@ -1051,7 +1109,20 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       // A change still being stored would land after the rows below were read and then send
       awaitStored(key)
       base.lock.withLock {
-        val discarded = discardPending(key)
+        val discarded = HashMap<EntryId, OutboxEntry<KeyedMutation<K, M>>>()
+        try {
+          discardPending(key, discarded)
+        } catch (e: Throwable) {
+          // The rows discarded so far stay discarded, so their changes leave the views now,
+          // however late the list is
+          val now = clock.now()
+          edit { s ->
+            discarded.entries.fold(s) { next, (change, row) ->
+              next.dropping(change, row.payload, now)
+            }
+          }
+          throw e
+        }
         val now = clock.now()
         edit { s ->
           var next = s.updatingRecords(key) { null }
@@ -1085,8 +1156,11 @@ internal class RealOptimisticQueryStores<K : Any, T, M>(
       }
     }
 
-    override fun mutate(mutation: M): OutboxOperation =
-      this@RealOptimisticQueryStores.mutate(key, mutation)
+    override fun mutate(
+      mutation: M,
+      ordering: Ordering,
+      admission: CancellableAdmission,
+    ): OutboxOperation = this@RealOptimisticQueryStores.mutate(key, mutation, ordering, admission)
 
     override val pending: Flow<List<PendingMutation<M>>> =
       this@RealOptimisticQueryStores.pending(key)

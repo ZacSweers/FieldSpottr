@@ -31,6 +31,8 @@ import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.append
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
+import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
+import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.clearFetched
@@ -40,6 +42,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.testDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.writeFetched
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
@@ -64,9 +67,16 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonUnquotedLiteral
 
 class OptimisticQueryStoreTest {
   /** Sets a note's text, or deletes the note when [text] is null. */
@@ -1511,6 +1521,379 @@ class OptimisticQueryStoreTest {
     data.assertNoFailures()
   }
 
+  @Test
+  fun `a keyed change stores its line within its key's line`() = runTest {
+    data =
+      testDataScope(clock = testClock(START), online = false, senders = setOf(tagsByItemSender()))
+    val stores =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+      )
+
+    stores.mutate("x", Add("b"), Ordering.Keyed("y")).stored.awaitSucceeded()
+    stores.mutate("x", Add("c")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map { it.key }
+      )
+      .containsExactly("3:\"x\"/y", "\"x\"")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `keyed changes of two values whose order keys overlap stay on separate lines`() = runTest {
+    send.failure = { add, _ -> IllegalStateException("Transient").takeIf { add == Add("b") } }
+    val sender =
+      TagsByItem.sender(retry = RetryPolicy { 1.hours }) { change, id ->
+        send(change.mutation, id)
+      }
+    data = testDataScope(clock = testClock(START), senders = setOf(sender))
+    val stores =
+      data.optimisticStores(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey<String, List<String>>(),
+        keySerializer = BareKey,
+        apply = ::addOnce,
+      )
+
+    // Without the line's length, line "notes" with key "a/b" and line "notes/a" with key "b" join
+    // to one name
+    val b = stores.mutate("notes", Add("b"), Ordering.Keyed("a/b"))
+    stores.pending("notes").first { changes -> changes.any { it.retryAt != null } }
+    val c = stores.mutate("notes/a", Add("c"), Ordering.Keyed("b"))
+    runCurrent()
+
+    assertThat(send.sent).containsExactly(Add("c"))
+    c.assertSucceeded()
+    b.assertPending()
+    assertThat(
+        data
+          .outboxStore<KeyedMutation<String, Add>>("tagsByItem")
+          .entries()
+          .first()
+          .single { it.id == b.id }
+          .key
+      )
+      .isEqualTo("5:notes/a/b")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a change on another line of one value sends and commits while a head backs off`() = runTest {
+    send.failure = { add, _ -> IllegalStateException("Transient").takeIf { add == Add("b") } }
+    val sender = Tags.sender(retry = RetryPolicy { 1.hours }, send = send)
+    data = testDataScope(clock = testClock(START), senders = setOf(sender))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val seen = mutableListOf<List<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value } }
+    runCurrent()
+
+    val withB = seen.size
+    val b = store.mutate(Add("b"), Ordering.Keyed("x"))
+    store.pending.first { changes -> changes.any { it.retryAt != null } }
+    val withC = seen.size
+    val c = store.mutate(Add("c"), Ordering.Keyed("y"))
+    c.awaitSucceeded()
+    runCurrent()
+
+    b.assertPending()
+    assertThat(send.sent).containsExactly(Add("c"))
+    assertThat(truth.data.value?.value).isEqualTo(listOf("a", "c"))
+    assertThat(seen.drop(withB).all { "b" in it.orEmpty() }).isTrue()
+    assertThat(seen.drop(withC).all { "c" in it.orEmpty() }).isTrue()
+    assertThat(seen.last()?.toSet()).isEqualTo(setOf("a", "b", "c"))
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a commit that lands after another line's commit and an older fetch keeps both changes`() =
+    runTest {
+      data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
+      truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+      var failNextWrite = false
+      val base =
+        QueryStore.of(
+          truth.data,
+          write = { fetched, keepsStored ->
+            if (failNextWrite) {
+              failNextWrite = false
+              error("Disk full")
+            }
+            truth.writeFetched(fetched, keepsStored)
+          },
+          clear = truth::clearFetched,
+        )
+      val store = data.optimisticStore(Tags, base = base, apply = ::addOnce)
+      val query = data.query(store, Freshness.staleAfter(1.hours), fetch = fetch)
+      val seen = mutableListOf<List<String>?>()
+      backgroundScope.launch { store.data.collect { seen += it?.value } }
+      runCurrent()
+      // The refresh reads the server before either send, and lands between the two commits
+      fetch.respond = { listOf("a", "z") }
+      fetch.hold()
+      val refresh = query.requestFetch(force = true)
+      advanceTimeBy(1.seconds)
+
+      // The first line's commit fails once, so it lands after the second line's commit
+      failNextWrite = true
+      val withB = seen.size
+      val b = store.mutate(Add("b"), Ordering.Keyed("x"))
+      b.awaitSucceeded()
+      assertThat(failNextWrite).isFalse()
+      advanceTimeBy(100.milliseconds)
+      val withC = seen.size
+      store.mutate(Add("c"), Ordering.Keyed("y")).awaitSucceeded()
+      // The second line's commit landed first, and took the first line's sent change along
+      assertThat(truth.data.value?.value).isEqualTo(listOf("a", "b", "c"))
+      assertOwed(b.id)
+      fetch.release()
+      refresh.awaitSucceeded()
+      assertOwed(b.id)
+      advanceTimeBy(2.seconds)
+      runCurrent()
+
+      assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
+      assertThat(truth.data.value?.value?.toSet()).isEqualTo(setOf("a", "z", "b", "c"))
+      assertThat(seen.drop(withB).all { "b" in it.orEmpty() }).isTrue()
+      assertThat(seen.drop(withC).all { "c" in it.orEmpty() }).isTrue()
+      assertThat(data.actionFailures.assertSingle<IllegalStateException>()).hasMessage("Disk full")
+      data.fetchFailures.assertNone()
+    }
+
+  /** Passes when row [id] of [Tags] is sent and its commit has not landed. */
+  private suspend fun assertOwed(id: EntryId) {
+    val row = checkNotNull(data.outboxStore<Add>("tags").entry(id).first())
+    assertThat(row.status).isEqualTo(OutboxStatus.Sent)
+    assertThat(row.committed).isFalse()
+  }
+
+  @Test
+  fun `an ordering an entry cannot take throws from mutate and leaves data as it was`() = runTest {
+    val (store, _) = tags(online = false)
+    val before = store.data.first()
+
+    for (ordering in listOf(Ordering.Keyed("x", OnPrevious.Cancel), Ordering.Keyed(42))) {
+      assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), ordering) }
+    }
+    runCurrent()
+
+    assertThat(store.data.first()).isEqualTo(before)
+    assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseded change in a set leaves data and pending once its discard landed`() = runTest {
+    val sets =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = MutableStateFlow(false),
+          stores = LaggingOutboxStores(firstListOnly = true),
+          clock = testClock(START),
+        )
+        .create(backgroundScope, setOf(TagsByItem.sender { _, _ -> }))
+        .optimisticStores<String, List<String>, Add>(
+          TagsByItem,
+          base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
+          apply = ::addOnce,
+        )
+    val tags = sets("item")
+    val first = sets.mutate("item", Add("b"), Superseding)
+
+    assertSupersededLeaves(tags, first) { sets.mutate("item", Add("c"), Superseding) }
+  }
+
+  @Test
+  fun `a superseded change in a single store leaves data and pending once its discard landed`() =
+    runTest {
+      val tags = factoryTags(LaggingOutboxStores(firstListOnly = true), online = false) { _, _ -> }
+      val first = tags.mutate(Add("b"), Superseding)
+
+      assertSupersededLeaves(tags, first) { tags.mutate(Add("c"), Superseding) }
+    }
+
+  /**
+   * Holds the row list of [tags] on the stored row of [first], which adds "b", then supersedes it
+   * with [supersede], which adds "c". Passes when "b" leaves `data` and `pending` once its discard
+   * landed and never shows again, also after its handle settles Cancelled, while "c" shows
+   * throughout.
+   */
+  private suspend fun TestScope.assertSupersededLeaves(
+    tags: OptimisticQueryStore<List<String>, Add>,
+    first: OutboxOperation,
+    supersede: () -> OutboxOperation,
+  ) {
+    first.stored.awaitSucceeded()
+    val seen = mutableListOf<List<String>?>()
+    // The one list the views ever get shows the first change's row Queued
+    backgroundScope.launch { tags.data.collect { seen += it?.value } }
+    runCurrent()
+    assertThat(tags.pending.first().map { it.mutation }).containsExactly(Add("b"))
+    assertThat(seen.last()).isEqualTo(listOf("a", "b"))
+
+    val withC = seen.size
+    val second = supersede()
+    first.awaitCancelled()
+    val discarded = seen.size
+    runCurrent()
+    advanceTimeBy(5.seconds)
+    runCurrent()
+
+    assertThat(seen.drop(discarded).filter { "b" in it.orEmpty() }).isEmpty()
+    assertThat(seen.drop(withC).all { "c" in it.orEmpty() }).isTrue()
+    assertThat(seen.last()).isEqualTo(listOf("a", "c"))
+    assertThat(tags.pending.first()).isEmpty()
+    second.assertPending()
+  }
+
+  @Test
+  fun `a store whose sender answers with a value refuses a superseding change`() = runTest {
+    data =
+      testDataScope(
+        clock = testClock(START),
+        senders = setOf(ReplyingTags.exchangingSender { _, _ -> listOf("a") }),
+      )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(ReplyingTags, base = truth, apply = ::addOnce)
+
+    assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), Superseding) }
+    runCurrent()
+
+    assertThat(data.outboxStore<Add>("tags").entries().first()).isEmpty()
+    assertThat(store.data.first()?.value).isEqualTo(listOf("a"))
+  }
+
+  @Test
+  fun `a refused ordering never shows its change to a live collector`() = runTest {
+    data =
+      testDataScope(
+        eager = true,
+        clock = testClock(START),
+        senders = setOf(Tags.sender(send = send)),
+      )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val seen = mutableListOf<Set<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
+    runCurrent()
+
+    for (ordering in listOf(Ordering.Keyed(42), Ordering.Keyed("x", OnPrevious.Cancel))) {
+      assertFailsWith<IllegalArgumentException> { store.mutate(Add("b"), ordering) }
+    }
+    runCurrent()
+
+    assertThat(seen.filter { "b" in it.orEmpty() }).isEmpty()
+    assertThat(send.attempts).isEmpty()
+  }
+
+  @Test
+  fun `a refused reject key never shows its change to a live collector`() = runTest {
+    data =
+      testDataScope(
+        eager = true,
+        clock = testClock(START),
+        senders = setOf(Tags.sender(send = send)),
+      )
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val store = data.optimisticStore(Tags, base = truth, apply = ::addOnce)
+    val seen = mutableListOf<Set<String>?>()
+    backgroundScope.launch { store.data.collect { seen += it?.value?.toSet() } }
+    runCurrent()
+
+    assertFailsWith<IllegalArgumentException> {
+      store.mutate(Add("b"), admission = Admission.Reject(42))
+    }
+    runCurrent()
+
+    assertThat(seen.filter { "b" in it.orEmpty() }).isEmpty()
+    assertThat(send.attempts).isEmpty()
+  }
+
+  @Test
+  fun `a rejected change leaves data and pending as they were and fails its handle`() = runTest {
+    val (store, _) = tags(online = false)
+    store.mutate(Add("b"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+    runCurrent()
+    val before = store.data.first()
+    val pendingBefore = store.pending.first()
+
+    val rejected = store.mutate(Add("c"), admission = Admission.Reject("k"))
+
+    assertThat(rejected.awaitFailed<CommandRejectedException>().key).isEqualTo("k")
+    runCurrent()
+    assertThat(store.data.first()).isEqualTo(before)
+    assertThat(store.pending.first()).isEqualTo(pendingBefore)
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a sent change whose commit is owed frees its reject key`() = runTest {
+    data = testDataScope(clock = testClock(START), senders = setOf(Tags.sender(send = send)))
+    truth = QueryStore.inMemory(Fetched(listOf("a"), START))
+    val base =
+      QueryStore.of(truth.data, write = { _, _ -> error("Disk full") }, clear = truth::clearFetched)
+    val store = data.optimisticStore(Tags, base = base, apply = ::addOnce)
+    val sent = store.mutate(Add("b"), admission = Admission.Reject("k"))
+    sent.awaitSucceeded()
+    assertOwed(sent.id)
+
+    store.mutate(Add("c"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+
+    val failures = data.actionFailures.take()
+    assertThat(failures.map { it.message }.distinct()).containsExactly("Disk full")
+    data.fetchFailures.assertNone()
+  }
+
+  @Test
+  fun `a keyed change rejects only within its key and stores its key's reject key`() = runTest {
+    data =
+      testDataScope(clock = testClock(START), online = false, senders = setOf(tagsByItemSender()))
+    val stores =
+      data.optimisticStores<String, List<String>, Add>(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey(),
+        apply = ::addOnce,
+      )
+
+    stores.mutate("x", Add("b"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+    stores.mutate("y", Add("c"), admission = Admission.Reject("k")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map {
+          it.rejectKey
+        }
+      )
+      .containsExactly("3:\"x\"/k", "3:\"y\"/k")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `reject keys of two values whose order keys overlap stay apart`() = runTest {
+    data =
+      testDataScope(clock = testClock(START), online = false, senders = setOf(tagsByItemSender()))
+    val stores =
+      data.optimisticStores(
+        TagsByItem,
+        base = QueryStore.inMemoryByKey<String, List<String>>(),
+        keySerializer = BareKey,
+        apply = ::addOnce,
+      )
+
+    stores.mutate("notes", Add("b"), admission = Admission.Reject("a/b")).stored.awaitSucceeded()
+    stores.mutate("notes/a", Add("c"), admission = Admission.Reject("b")).stored.awaitSucceeded()
+
+    assertThat(
+        data.outboxStore<KeyedMutation<String, Add>>("tagsByItem").entries().first().map {
+          it.rejectKey
+        }
+      )
+      .containsExactly("5:notes/a/b", "7:notes/a/b")
+    data.assertNoFailures()
+  }
+
   /** Adds [by] to a count, which is not idempotent. */
   @Serializable data class Bump(val by: Int)
 
@@ -1951,6 +2334,47 @@ class OptimisticQueryStoreTest {
   }
 
   /**
+   * A collector holds the only row list, which shows the row as Queued. A discard hides the row
+   * from the pending rows and the count from the moment the call returns, while its status write
+   * takes a second. The row starts to send meanwhile, so the discard fails and the row comes back.
+   */
+  @Test
+  fun `a discard hides a row from pending until the discard fails`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds, firstListOnly = true)
+    val sets =
+      DataScope.Factory(
+          onFailure = TestFailures(),
+          online = MutableStateFlow(false),
+          stores = stores,
+          clock = testClock(START),
+        )
+        .create(backgroundScope, setOf(UnitTags.sender { _, _ -> }))
+        .optimisticStores<Unit, List<String>, Add>(
+          UnitTags,
+          base = { QueryStore.inMemory(Fetched(listOf("a"), START)) },
+          apply = ::addOnce,
+        )
+    val tags = sets(Unit)
+    tags.mutate(Add("b")).stored.await()
+    backgroundScope.launch { tags.data.collect {} }
+    runCurrent()
+    val id = tags.pending.first().single().id
+    assertThat(sets.pendingCount.first()).isEqualTo(1)
+
+    val discarding = tags.discard(id)
+    assertThat(tags.pending.first()).isEmpty()
+    assertThat(sets.pendingCount.first()).isEqualTo(0)
+
+    val rows = stores.delegate.open(UnitTags.name, UnitTags.serializer)
+    val row = checkNotNull(rows.entry(id).first())
+    check(rows.update(row.copy(status = OutboxStatus.Sending), OutboxStatus.Queued))
+    discarding.awaitFailed<IllegalStateException>()
+    runCurrent()
+    assertThat(tags.pending.first().map { it.id }).containsExactly(id)
+    assertThat(sets.pendingCount.first()).isEqualTo(1)
+  }
+
+  /**
    * Another writer stores a change that this store's lagging list has not shown yet. A discard
    * cannot hide a row the store has neither made nor listed, so the change shows once the list
    * does, until the discard's write lands.
@@ -2218,6 +2642,9 @@ private val START = Instant.fromEpochSeconds(1_700_000_000)
 /** The tag list's outbox, whose server answers nothing. */
 private val Tags = OutboxKey<Add>("tags")
 
+/** The line "x", where each change supersedes a waiting one before it that did the same. */
+private val Superseding = Ordering.Keyed("x", OnPrevious.Supersede)
+
 /** The tag list's outbox, whose server answers with the list it holds. */
 private val ReplyingTags = OutboxKey.replying<Add, List<String>>("tags")
 
@@ -2230,6 +2657,18 @@ private val ReplyingTagsByItem =
 
 /** The tag lists' outbox, one list per name, beside [TagsByItem]. */
 private val TagsByName = OutboxKey<KeyedMutation<String, Add>>("tagsByName")
+
+/** Writes a key with no quotes, so one key's encoded form can be the start of another's. */
+@OptIn(ExperimentalSerializationApi::class)
+private object BareKey : KSerializer<String> {
+  override val descriptor = PrimitiveSerialDescriptor("BareKey", PrimitiveKind.STRING)
+
+  override fun serialize(encoder: Encoder, value: String) {
+    (encoder as JsonEncoder).encodeJsonElement(JsonUnquotedLiteral(value))
+  }
+
+  override fun deserialize(decoder: Decoder): String = decoder.decodeString()
+}
 
 /**
  * A new key for the tag lists' outbox, one list per [OptimisticQueryStoreTest.Item]. Each call

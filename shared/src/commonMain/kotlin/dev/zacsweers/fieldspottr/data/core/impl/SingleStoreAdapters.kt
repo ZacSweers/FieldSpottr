@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core.impl
 
+import dev.zacsweers.fieldspottr.data.core.CancellableAdmission
 import dev.zacsweers.fieldspottr.data.core.Delivery
 import dev.zacsweers.fieldspottr.data.core.EntryId
 import dev.zacsweers.fieldspottr.data.core.KeyedMutation
 import dev.zacsweers.fieldspottr.data.core.Operation
+import dev.zacsweers.fieldspottr.data.core.Ordering
 import dev.zacsweers.fieldspottr.data.core.OutboxChange
 import dev.zacsweers.fieldspottr.data.core.OutboxEntry
 import dev.zacsweers.fieldspottr.data.core.OutboxOperation
@@ -40,6 +42,7 @@ private fun <E, P> OutboxEntry<E>.withPayload(payload: P): OutboxEntry<P> =
     committed = committed,
     sentAt = sentAt,
     reply = reply,
+    rejectKey = rejectKey,
   )
 
 /** These rows of changes as rows of [KeyedMutation]s with a `Unit` key. */
@@ -48,6 +51,13 @@ internal fun <M> OutboxStore<M>.keyedByUnit(): OutboxStore<KeyedMutation<Unit, M
   return object : OutboxStore<KeyedMutation<Unit, M>> {
     override suspend fun insert(id: EntryId, key: String, payload: KeyedMutation<Unit, M>) =
       rows.insert(id, key, payload.mutation)
+
+    override suspend fun insert(
+      id: EntryId,
+      key: String,
+      payload: KeyedMutation<Unit, M>,
+      rejectKey: String,
+    ) = rows.insert(id, key, payload.mutation, rejectKey)
 
     override suspend fun update(
       entry: OutboxEntry<KeyedMutation<Unit, M>>,
@@ -87,8 +97,10 @@ internal fun <M> OwnedRows<M>.keyedByUnit(): OwnedRows<KeyedMutation<Unit, M>> {
     override fun enqueue(
       id: EntryId,
       payload: KeyedMutation<Unit, M>,
-      key: String?,
-    ): OutboxOperation = outbox.enqueue(id, payload.mutation, key)
+      ordering: Ordering,
+      line: String,
+      admission: CancellableAdmission,
+    ): OutboxOperation = outbox.enqueue(id, payload.mutation, ordering, line, admission)
 
     override fun retry(id: EntryId): Operation = outbox.retry(id)
 
@@ -114,5 +126,8 @@ internal fun <M> RowOwner<KeyedMutation<Unit, M>>.forChange(): RowOwner<M> {
     ) = owner.commit(entry.keyed(), delivery, sentAt, expected)
 
     override fun committed(id: EntryId) = owner.committed(id)
+
+    override fun superseded(id: EntryId, payload: M) =
+      owner.superseded(id, KeyedMutation(Unit, payload))
   }
 }

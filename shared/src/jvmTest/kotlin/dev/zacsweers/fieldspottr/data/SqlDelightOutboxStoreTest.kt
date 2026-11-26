@@ -37,6 +37,7 @@ import dev.zacsweers.fieldspottr.data.core.UnreadableEntryException
 import dev.zacsweers.fieldspottr.data.core.asCodec
 import dev.zacsweers.fieldspottr.data.core.assertOneTypePerName
 import dev.zacsweers.fieldspottr.data.core.assertUnreadableRowIsHandled
+import dev.zacsweers.fieldspottr.data.core.enqueue
 import dev.zacsweers.fieldspottr.data.core.exchangingSender
 import dev.zacsweers.fieldspottr.data.core.impl.UNKNOWN_REPLY
 import dev.zacsweers.fieldspottr.data.core.replying
@@ -112,7 +113,7 @@ class SqlDelightOutboxStoreTest : OutboxStoreContract() {
     key: String,
   ): EntryId {
     val id = EntryId("unreadable")
-    temporaryDatabase.db().outboxRowQueries.insert(id.value, "test", key, """{"a":1}""")
+    temporaryDatabase.db().outboxRowQueries.insert(id.value, "test", key, """{"a":1}""", null)
     return id
   }
 
@@ -276,7 +277,13 @@ class SqlDelightUnreadableRowTest {
   @Test
   fun `an old row in a database outbox is reported once and blocks no other row`() = runTest {
     val queries = temporaryDatabase.db().outboxRowQueries
-    queries.insert(id = "old", outbox = "changes", orderingKey = "k", payload = OLD_CHANGE)
+    queries.insert(
+      id = "old",
+      outbox = "changes",
+      orderingKey = "k",
+      payload = OLD_CHANGE,
+      rejectKey = null,
+    )
     val stores = SqlDelightOutboxStores({ temporaryDatabase.db().outboxRowQueries }, Dispatchers.IO)
 
     assertUnreadableRowIsHandled(stores, EntryId("old"))
@@ -288,8 +295,20 @@ class SqlDelightUnreadableRowTest {
   @Test
   fun `a failed row that does not decode is reported like a queued one`() = runBlocking {
     val queries = temporaryDatabase.db().outboxRowQueries
-    queries.insert(id = "queued", outbox = "changes", orderingKey = "k", payload = OLD_CHANGE)
-    queries.insert(id = "failed", outbox = "changes", orderingKey = "k", payload = OLD_CHANGE)
+    queries.insert(
+      id = "queued",
+      outbox = "changes",
+      orderingKey = "k",
+      payload = OLD_CHANGE,
+      rejectKey = null,
+    )
+    queries.insert(
+      id = "failed",
+      outbox = "changes",
+      orderingKey = "k",
+      payload = OLD_CHANGE,
+      rejectKey = null,
+    )
     queries.compareAndSet(
       status = "failed",
       cause = "Rejected",
@@ -554,6 +573,16 @@ class SqlDelightOutboxStoreReopenTest {
     assertThat(after?.retryAt).isEqualTo(Instant.parse("2026-06-10T12:00:30.123Z"))
   }
 
+  @Test
+  fun `a reject key reads back after a reopen`() = runTest {
+    val clock = testClock(Instant.parse("2026-06-10T12:00:00Z"))
+    store(clock).insert(EntryId("rejecting"), "k", "a", rejectKey = "r")
+
+    temporaryDatabase.reopen()
+
+    assertThat(store(clock).entry(EntryId("rejecting")).first()?.rejectKey).isEqualTo("r")
+  }
+
   /** Writes what [change] makes of row [id] over the status it has. */
   private suspend fun OutboxStore<String>.write(
     id: EntryId,
@@ -656,6 +685,28 @@ class SqlDelightOutboxStoreSizeTest {
     assertThat(failure.message.orEmpty()).doesNotContain("é")
     assertThat(store.entries().first().map { it.payload }).isEqualTo(listOf("a".repeat(61)))
   }
+
+  @Test
+  fun `an insert whose reject key takes it above the size cap throws and stores nothing`() =
+    runTest {
+      val store =
+        SqlDelightOutboxStores(
+            { temporaryDatabase.db().outboxRowQueries },
+            Dispatchers.IO,
+            maxTextBytes = 64,
+          )
+          .open("notes", String.serializer())
+      // The payload and key alone are exactly the cap, and the one-byte reject key is over it
+      assertFailsWith<IllegalArgumentException> {
+        store.insert(EntryId("rejecting"), "k", "a".repeat(61), rejectKey = "r")
+      }
+
+      assertThat(store.entry(EntryId("rejecting")).first()).isNull()
+      assertThat(store.entries().first()).isEmpty()
+      // Without the reject key, the same row fits
+      store.insert(EntryId("plain"), "k", "a".repeat(61))
+      assertThat(store.entries().first().map { it.id }).isEqualTo(listOf(EntryId("plain")))
+    }
 
   @Test
   fun `an update stores an answer above the size cap as unknown`() = runTest {

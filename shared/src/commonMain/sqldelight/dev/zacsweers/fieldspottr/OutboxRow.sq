@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS outboxRow (
   sentAt INTEGER,
   -- The server's answer in the reply codec's format, kept until the row is committed. The write
   -- that marks the row committed clears it. Null when the server answered with nothing.
-  reply TEXT
+  reply TEXT,
+  -- The reject key the row was inserted with, or null. No update changes it.
+  rejectKey TEXT
 );
 
 -- Rows not done, in send order, for pending and owed
@@ -38,7 +40,8 @@ CREATE INDEX IF NOT EXISTS outboxRow_pending ON outboxRow(outbox, settledAt, seq
 CREATE INDEX IF NOT EXISTS outboxRow_key ON outboxRow(outbox, orderingKey, status, seq);
 
 insert:
-INSERT INTO outboxRow(id, outbox, orderingKey, payload, status) VALUES (?, ?, ?, ?, 'queued');
+INSERT INTO outboxRow(id, outbox, orderingKey, payload, status, rejectKey)
+VALUES (?, ?, ?, ?, 'queued', ?);
 
 pending:
 SELECT * FROM outboxRow WHERE outbox = ? AND settledAt IS NULL ORDER BY seq;

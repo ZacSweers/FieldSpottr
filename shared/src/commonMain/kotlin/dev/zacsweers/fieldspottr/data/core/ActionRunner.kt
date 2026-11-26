@@ -93,6 +93,11 @@ interface ActionRunner {
 /**
  * What a call to [ActionRunner.run] or [ActionRunner.runCancellable] does when a matching command
  * has not settled, as [ActionRunner.run] describes.
+ *
+ * [Outbox.enqueue] and [OptimisticQueryStore.mutate] take [Queue] and [Reject] too. There a reject
+ * key holds while its entry is Queued, Sending or Failed, and frees once it is Sent or Discarded. A
+ * command frees its key when it settles, also when it failed. A Failed entry keeps its key, since a
+ * retry can still send it.
  */
 sealed interface Admission {
   /** Starts a new command, which lines up as its ordering says. The default. */
@@ -115,7 +120,8 @@ sealed interface Admission {
 
 /**
  * The admissions [ActionRunner.runCancellable] takes. It leaves out [Admission.Join], since one
- * holder's cancel would stop a shared command for every caller that shares it.
+ * holder's cancel would stop a shared command for every caller that shares it. [Outbox.enqueue]
+ * takes these for the same reason, since one holder's discard would drop a shared entry.
  */
 sealed interface CancellableAdmission : Admission
 
@@ -124,6 +130,9 @@ sealed interface CancellableAdmission : Admission
  * not settled on its runner. It is the cause of the Failed handle that [ActionRunner.run] and
  * [ActionRunner.runCancellable] return for a call that [Admission.Reject] rejected, so a caller can
  * tell a rejection from a command that ran and failed.
+ *
+ * For [Outbox.enqueue] and [OptimisticQueryStore.mutate], it means an entry with an equal reject
+ * key was not settled yet, so nothing was stored. [key] is the key the caller passed.
  */
 class CommandRejectedException(val key: Any) :
   IllegalStateException("A command with reject key $key has not settled yet")

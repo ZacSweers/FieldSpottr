@@ -27,6 +27,7 @@ class JvmSqlDriverFactory(private val appDirs: FSAppDirs) : SqlDriverFactory {
     val driver = fileSqliteDriver(dbPath.toNioPath().absolutePathString())
     schema.create(driver).await()
     driver.ensureDbPermitOverlayColumns()
+    driver.ensureOutboxRejectKeyColumn()
     return driver
   }
 }
@@ -36,6 +37,11 @@ private suspend fun SqlDriver.ensureDbPermitOverlayColumns() {
     execute(null, "ALTER TABLE dbPermit ADD COLUMN isOverlap INTEGER NOT NULL DEFAULT 0", 0).await()
   }
   runCatching { execute(null, "ALTER TABLE dbPermit ADD COLUMN advisory TEXT", 0).await() }
+}
+
+/** Adds the column from 5.sqm, since this driver creates the schema and never migrates it. */
+internal suspend fun SqlDriver.ensureOutboxRejectKeyColumn() {
+  runCatching { execute(null, "ALTER TABLE outboxRow ADD COLUMN rejectKey TEXT", 0).await() }
 }
 
 /**

@@ -3,10 +3,12 @@
 package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.committedRecords
+import dev.zacsweers.fieldspottr.data.core.impl.knownChanges
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScope
 import dev.zacsweers.fieldspottr.data.core.testing.TestDataScopeFactory
 import dev.zacsweers.fieldspottr.data.core.testing.awaitSucceeded
@@ -15,6 +17,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import dev.zacsweers.fieldspottr.data.core.testing.testDataScopeFactory
 import kotlin.concurrent.Volatile
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
@@ -81,6 +84,23 @@ class OptimisticQueryStoreReplyTest {
 
     assertThat(sets.committedRecords).isEqualTo(1)
     assertThat(seen).isEqualTo(listOf(0, 1))
+  }
+
+  @OptIn(DelicateDataLayerApi::class)
+  @Test
+  fun `a store whose sender answers with a value takes only the serial ordering`() = runTest {
+    val (store, _) = counter()
+    assertThat(store.data.first()?.value).isEqualTo(0)
+
+    for (ordering in listOf(Ordering.Keyed("x"), Ordering.Concurrent)) {
+      assertFailsWith<IllegalArgumentException> { store.mutate(1, ordering) }
+    }
+    runCurrent()
+
+    assertThat(store.data.first()?.value).isEqualTo(0)
+    assertThat(sets.knownChanges).isEqualTo(0)
+    assertThat(data.outboxStore<KeyedMutation<Unit, Int>>(Counter.name).entries().first()).isEmpty()
+    assertThat(server).isEqualTo(0)
   }
 
   @Test

@@ -4,6 +4,7 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.doesNotContain
 import assertk.assertions.hasSize
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
@@ -16,6 +17,7 @@ import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.impl.MAX_ERROR_CHARS
+import dev.zacsweers.fieldspottr.data.core.impl.keysSuperseding
 import dev.zacsweers.fieldspottr.data.core.impl.rowsFollowed
 import dev.zacsweers.fieldspottr.data.core.impl.timersHeld
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
@@ -26,6 +28,7 @@ import dev.zacsweers.fieldspottr.data.core.testing.TestSend
 import dev.zacsweers.fieldspottr.data.core.testing.assertCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.assertFailed
 import dev.zacsweers.fieldspottr.data.core.testing.assertPending
+import dev.zacsweers.fieldspottr.data.core.testing.assertRunning
 import dev.zacsweers.fieldspottr.data.core.testing.assertSucceeded
 import dev.zacsweers.fieldspottr.data.core.testing.awaitCancelled
 import dev.zacsweers.fieldspottr.data.core.testing.awaitFailed
@@ -140,6 +143,234 @@ class OutboxTest {
   }
 
   @Test
+  fun `a serial row stores the whole queue's key and a keyed row stores its own key`() = runTest {
+    val outbox = outbox(online = false)
+
+    outbox.enqueue("a", Ordering.Serial)
+    outbox.enqueue("b", Ordering.Keyed("a"))
+    outbox.enqueue("c", key = "a")
+
+    val rows = outbox.entries.first { it.size == 3 }
+    assertThat(rows.map { it.payload to it.key }).containsExactly("a" to "", "b" to "a", "c" to "a")
+  }
+
+  @OptIn(DelicateDataLayerApi::class)
+  @Test
+  fun `a concurrent row stores its id as its key and sends while another head backs off`() =
+    runTest {
+      send.failure = { payload, _ -> IllegalStateException("Transient").takeIf { payload == "a" } }
+      val outbox = outbox(retry = RetryPolicy(maxAttempts = 3) { 5.minutes })
+      val a = outbox.enqueue("a")
+      outbox.entries.first { rows -> rows.any { it.retryAt != null } }
+      send.hold("b")
+
+      val b = outbox.enqueue("b", Ordering.Concurrent)
+
+      val row =
+        outbox.entries
+          .first { rows -> rows.any { it.payload == "b" } }
+          .single {
+            it.payload == "b"
+          }
+      assertThat(row.key).isEqualTo(b.id.value)
+      send.release("b")
+      b.awaitSucceeded()
+      a.assertPending()
+      assertThat(send.sent).containsExactly("b")
+    }
+
+  @Test
+  fun `an ordering an entry cannot take throws and runs and stores nothing`() = runTest {
+    var applied = 0
+    val outbox = outbox(online = false, apply = { _, _ -> applied++ })
+
+    for (ordering in listOf(Ordering.Keyed("a", OnPrevious.Cancel), Ordering.Keyed(42))) {
+      assertFailsWith<IllegalArgumentException> { outbox.enqueue("a", ordering) }
+    }
+
+    testScheduler.runCurrent()
+    assertThat(applied).isEqualTo(0)
+    assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  @Test
+  fun `a reject key refuses a call while its entry is queued or sending or failed`() = runTest {
+    var applied = 0
+    val outbox = outbox(online = false, apply = { _, _ -> applied++ })
+    val holder = outbox.enqueue("a", admission = Admission.Reject("k"))
+    holder.stored.awaitSucceeded()
+
+    assertRefused(outbox, "queued")
+    send.hold("a")
+    send.failPermanently()
+    data.online.value = true
+    outbox.entries.first { it.single().status == OutboxStatus.Sending }
+    assertRefused(outbox, "sending")
+    send.release("a")
+    holder.awaitFailed<PermanentFailure>()
+    assertRefused(outbox, "failed")
+    runCurrent()
+
+    assertThat(applied).isEqualTo(1)
+    assertThat(send.reverted).containsExactly("a")
+    assertThat(outbox.entries.first().map { it.payload }).containsExactly("a")
+    assertThat(data.actionFailures.take().single()).isInstanceOf<PermanentFailure>()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key is free again once its entry is discarded or sent`() = runTest {
+    val outbox = outbox(online = false)
+    val discarded = outbox.enqueue("a", admission = Admission.Reject("k"))
+    discarded.stored.awaitSucceeded()
+    outbox.discard(discarded.id).awaitSucceeded()
+
+    val sent = outbox.enqueue("b", admission = Admission.Reject("k"))
+    sent.stored.awaitSucceeded()
+    data.online.value = true
+    sent.awaitSucceeded()
+    outbox.enqueue("c", admission = Admission.Reject("k")).awaitSucceeded()
+
+    assertThat(send.sent).containsExactly("b", "c")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key refuses a call on another line`() = runTest {
+    val outbox = outbox(online = false)
+    outbox.enqueue("a", Ordering.Keyed("x"), Admission.Reject("k")).stored.awaitSucceeded()
+
+    assertRefused(outbox, "serial")
+    assertRefused(outbox, "keyed", Ordering.Keyed("y"))
+
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key refuses a call in a new data scope over the same rows`() = runTest {
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val first = scopes.create(owner, setOf(Notes.sender(send = send))).outbox(Notes)
+    first.enqueue("a", admission = Admission.Reject("k")).stored.awaitSucceeded()
+    owner.cancel()
+    runCurrent()
+
+    val later = scopes.create(backgroundScope, setOf(Notes.sender(send = send))).outbox(Notes)
+    assertRefused(later, "b")
+
+    assertThat(scopes.outboxStore<String>("notes").entries().first().map { it.payload })
+      .containsExactly("a")
+    scopes.assertNoFailures()
+  }
+
+  @Test
+  fun `a reject key refuses a call at once while the holder's insert has not returned`() = runTest {
+    val stores = LaggingOutboxStores(insertReturnsAfter = 10.seconds)
+    val rows = stores.open(Rows.name, Rows.serializer)
+    val outbox = dataOver(rows, online = false).outbox(Rows)
+    val holder = outbox.enqueue("a", admission = Admission.Reject("k"))
+    runCurrent()
+
+    val refused = outbox.enqueue("b", admission = Admission.Reject("k"))
+
+    assertThat(refused.assertFailed<CommandRejectedException>().key).isEqualTo("k")
+    assertThat(refused.stored.assertFailed<CommandRejectedException>().key).isEqualTo("k")
+    holder.stored.awaitSucceeded()
+    runCurrent()
+    assertThat(rows.entries().first().map { it.payload }).containsExactly("a")
+  }
+
+  @Test
+  fun `a reject key that is not a String throws and runs and stores nothing`() = runTest {
+    var applied = 0
+    val outbox = outbox(online = false, apply = { _, _ -> applied++ })
+
+    assertFailsWith<IllegalArgumentException> {
+      outbox.enqueue("a", admission = Admission.Reject(42))
+    }
+
+    testScheduler.runCurrent()
+    assertThat(applied).isEqualTo(0)
+    assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  @Test
+  fun `a store without reject keys fails a reject write and stores a queue write`() = runTest {
+    val rows = inMemoryOutboxStore<String>()
+    // Overrides only the members without a default body, so the insert with a reject key throws
+    val plain =
+      object : OutboxStore<String> {
+        override suspend fun insert(id: EntryId, key: String, payload: String) =
+          rows.insert(id, key, payload)
+
+        override suspend fun update(entry: OutboxEntry<String>, expected: OutboxStatus) =
+          rows.update(entry, expected)
+
+        override fun entries() = rows.entries()
+
+        override fun entry(id: EntryId) = rows.entry(id)
+      }
+    var applied = 0
+    val scope = dataOver(plain, online = false)
+    val outbox = scope.outbox(Rows, apply = { _, _ -> applied++ }, revert = { _, _ -> applied-- })
+
+    val rejecting = outbox.enqueue("a", admission = Admission.Reject("k"))
+    rejecting.awaitFailed<UnsupportedOperationException>()
+    rejecting.stored.assertFailed<UnsupportedOperationException>()
+    assertThat(applied).isEqualTo(0)
+    outbox.enqueue("b").stored.awaitSucceeded()
+    runCurrent()
+
+    assertThat(applied).isEqualTo(1)
+    assertThat(rows.entries().first().map { it.payload }).containsExactly("b")
+    assertThat(scope.actionFailures.take().single()).isInstanceOf<UnsupportedOperationException>()
+  }
+
+  @Test
+  fun `a queue write and a reject write never refuse each other`() = runTest {
+    val outbox = outbox(online = false)
+
+    outbox.enqueue("a").stored.awaitSucceeded()
+    outbox.enqueue("b", admission = Admission.Reject("k")).stored.awaitSucceeded()
+    outbox.enqueue("c").stored.awaitSucceeded()
+    runCurrent()
+
+    assertThat(outbox.entries.first().map { it.payload }).containsExactly("a", "b", "c")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `an apply that throws its own CommandRejectedException is reported`() = runTest {
+    val own = CommandRejectedException("k")
+    val outbox = outbox(online = false, apply = { _, _ -> throw own })
+
+    val handle = outbox.enqueue("a", admission = Admission.Reject("k"))
+
+    assertThat(handle.awaitFailed<CommandRejectedException>()).isSameInstanceAs(own)
+    runCurrent()
+    assertThat(data.actionFailures.take()).containsExactly(own)
+    assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  /**
+   * Enqueues [payload] in [outbox] with reject key "k" on [ordering], and passes when the call is
+   * refused: its handle and its stored milestone fail with that key, and no entry for [payload] is
+   * stored.
+   */
+  private suspend fun TestScope.assertRefused(
+    outbox: Outbox<String>,
+    payload: String,
+    ordering: Ordering = Ordering.Serial,
+  ) {
+    val handle = outbox.enqueue(payload, ordering, Admission.Reject("k"))
+    assertThat(handle.awaitFailed<CommandRejectedException>().key).isEqualTo("k")
+    assertThat(handle.stored.awaitFailed<CommandRejectedException>().key).isEqualTo("k")
+    runCurrent()
+    assertThat(outbox.entries.first().map { it.payload }).doesNotContain(payload)
+  }
+
+  @Test
   fun `a failed apply inserts nothing and fails the handle`() = runTest {
     val outbox = outbox(apply = { _, _ -> error("apply failed") })
 
@@ -240,6 +471,182 @@ class OutboxTest {
     assertThat(send.reverted).containsExactly("a")
     assertThat(handle.await()).isEqualTo(OperationState.Cancelled)
     assertThat(outbox.entries.first()).isEmpty()
+  }
+
+  @Test
+  fun `a superseding entry discards a waiting superseding entry before it on its line`() = runTest {
+    val outbox = outbox(online = false)
+    val first = outbox.enqueue("a", Superseding)
+    first.stored.awaitSucceeded()
+
+    val second = outbox.enqueue("b", Superseding)
+    first.awaitCancelled()
+    runCurrent()
+
+    assertThat(send.reverted).containsExactly("a")
+    assertThat(data.outboxStore<String>(Changes.name).entry(first.id).first()?.status)
+      .isEqualTo(OutboxStatus.Discarded)
+    data.online.value = true
+    second.awaitSucceeded()
+    assertThat(send.sent).containsExactly("b")
+    assertThat(send.reverted).containsExactly("a")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `three superseding entries enqueued offline send only the newest`() = runTest {
+    val outbox = outbox(online = false)
+
+    val a = outbox.enqueue("a", Superseding)
+    val b = outbox.enqueue("b", Superseding)
+    val c = outbox.enqueue("c", Superseding)
+    a.awaitCancelled()
+    b.awaitCancelled()
+    data.online.value = true
+    c.awaitSucceeded()
+
+    assertThat(send.sent).containsExactly("c")
+    assertThat(send.reverted).containsExactly("a", "b")
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseding entry leaves one before it that sends and sends after it`() = runTest {
+    send.hold("a")
+    val outbox = outbox()
+    val a = outbox.enqueue("a", Superseding)
+    outbox.entries.first { rows -> rows.any { it.status == OutboxStatus.Sending } }
+
+    val b = outbox.enqueue("b", Superseding)
+    b.stored.awaitSucceeded()
+    runCurrent()
+
+    a.assertRunning()
+    send.release("a")
+    a.awaitSucceeded()
+    b.awaitSucceeded()
+    assertThat(send.sent).containsExactly("a", "b")
+    assertThat(send.reverted).isEmpty()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseding entry leaves a failed one before it as it is`() = runTest {
+    val outbox = outbox()
+    // Offline once the send ends, so the drain stops before it reads the line again
+    send.failure = { payload, _ ->
+      data.online.value = false
+      PermanentFailure("Rejected $payload")
+    }
+    val a = outbox.enqueue("a", Superseding)
+    a.awaitFailed<PermanentFailure>()
+    send.succeed()
+
+    val b = outbox.enqueue("b", Superseding)
+    b.stored.awaitSucceeded()
+    runCurrent()
+
+    val rows = data.outboxStore<String>(Changes.name)
+    assertThat(checkNotNull(rows.entry(a.id).first()).status).isInstanceOf<OutboxStatus.Failed>()
+    data.online.value = true
+    b.awaitSucceeded()
+    assertThat(checkNotNull(rows.entry(a.id).first()).status).isInstanceOf<OutboxStatus.Failed>()
+    assertThat(send.sent).containsExactly("b")
+    assertThat(send.reverted).containsExactly("a")
+  }
+
+  @Test
+  fun `a superseding entry does not reach past a waiting entry of another mode`() = runTest {
+    val outbox = outbox(online = false)
+
+    val a = outbox.enqueue("a", Superseding)
+    val b = outbox.enqueue("b", key = "k")
+    val c = outbox.enqueue("c", Superseding)
+    c.stored.awaitSucceeded()
+    runCurrent()
+    data.online.value = true
+    c.awaitSucceeded()
+
+    a.assertSucceeded()
+    b.assertSucceeded()
+    assertThat(send.sent).containsExactly("a", "b", "c")
+    assertThat(send.reverted).isEmpty()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseding entry leaves a superseding entry on another line`() = runTest {
+    val outbox = outbox(online = false)
+
+    val a = outbox.enqueue("a", Superseding)
+    val b = outbox.enqueue("b", Ordering.Keyed("other", OnPrevious.Supersede))
+    b.stored.awaitSucceeded()
+    runCurrent()
+    data.online.value = true
+
+    a.awaitSucceeded()
+    b.awaitSucceeded()
+    // Lines never wait on each other, so either may send first
+    assertThat(send.sent.toSet()).isEqualTo(setOf("a", "b"))
+    assertThat(send.reverted).isEmpty()
+    data.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseding entry does not discard one stored before a restart`() = runTest {
+    val scopes = testDataScopeFactory(online = false)
+    val owner =
+      CoroutineScope(backgroundScope.coroutineContext + Job(backgroundScope.coroutineContext.job))
+    val first = scopes.create(owner, setOf(Notes.sender(send = send))).outbox(Notes)
+    first.enqueue("a", Superseding).stored.awaitSucceeded()
+    owner.cancel()
+    runCurrent()
+
+    val later =
+      scopes
+        .create(backgroundScope, setOf(Notes.sender(send = send)))
+        .outbox(Notes, revert = send::revert)
+    later.enqueue("b", Superseding).stored.awaitSucceeded()
+    runCurrent()
+    scopes.online.value = true
+    scopes.outboxStore<String>("notes").entries().first { it.isEmpty() }
+
+    assertThat(send.sent).containsExactly("a", "b")
+    assertThat(send.reverted).isEmpty()
+    scopes.assertNoFailures()
+  }
+
+  @Test
+  fun `a superseded entry whose discard fails on the store stays and both send in order`() =
+    runTest {
+      val stores = LaggingOutboxStores()
+      stores.failDiscards = true
+      val data = dataOver(stores.open(Rows.name, Rows.serializer), online = false)
+      val outbox = data.outbox(Rows, revert = send::revert)
+
+      val a = outbox.enqueue("a", Superseding)
+      val b = outbox.enqueue("b", Superseding)
+      b.stored.awaitSucceeded()
+      runCurrent()
+
+      assertThat(data.actionFailures.take().single().message).isEqualTo("Disk error")
+      a.assertPending()
+      data.online.value = true
+      b.awaitSucceeded()
+      a.assertSucceeded()
+      assertThat(send.sent).containsExactly("a", "b")
+      assertThat(send.reverted).isEmpty()
+    }
+
+  @Test
+  fun `a line that drained keeps no superseding entry`() = runTest {
+    val outbox = outbox()
+
+    outbox.enqueue("a", Superseding).awaitSucceeded()
+    runCurrent()
+
+    assertThat(outbox.keysSuperseding).isEqualTo(0)
+    data.assertNoFailures()
   }
 
   @Test
@@ -1947,5 +2354,7 @@ class OutboxTest {
     val Broken = OutboxKey<String>("broken")
     /** The outbox of tests that keep its rows in a store of their own. */
     val Rows = OutboxKey<String>("rows")
+    /** The line "k", where each entry supersedes a waiting one before it that did the same. */
+    val Superseding = Ordering.Keyed("k", OnPrevious.Supersede)
   }
 }

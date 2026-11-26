@@ -19,7 +19,7 @@ import kotlinx.serialization.Serializable
  * mutate(m2)                 data = apply(apply(truth, m1), m2)
  *    |                                   ^
  *    v                                   |
- * entry m2 --> entries [m1, m2] ---------+--> the sender sends m1, then m2, in order per key
+ * entry m2 --> entries [m1, m2] ---------+--> the sender sends m1, then m2, in order per line
  *                                                |
  *                       sent: the store commits it, so the truth takes the server's answer, or
  *                             apply(truth, m) when the server answered with nothing
@@ -64,8 +64,16 @@ import kotlinx.serialization.Serializable
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStore<T, M> : QueryStore<T> {
   /**
-   * Shows [mutation] in [data] now, stores it as an entry, and sends it after the entries before
-   * it.
+   * Shows [mutation] in [data] now, stores it as an entry, and sends it after the entries before it
+   * on its line. [ordering] picks the line among this value's changes, as [Ordering] describes, and
+   * takes what [Outbox.enqueue] takes. Changes on different lines can apply and commit in either
+   * order, so they must commute. A pair that does not can leave the truth wrong until the next
+   * fetch. A store whose sender answers with a value takes [Ordering.Serial] only. A refused
+   * [ordering] throws [IllegalArgumentException], stores nothing and leaves [data] as it was.
+   *
+   * A change that a newer one superseded through [OnPrevious.Supersede] leaves [data] like a
+   * discarded one. So use `Supersede` for a change that sets a value, since a superseded change
+   * that adds to a value is lost.
    *
    * From the moment this returns, each value [data] computes holds the change until it is sent,
    * fails or is dropped, also before its entry is stored. A value computed before this call can
@@ -76,13 +84,22 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * rejected for good or out of attempts, and settles Cancelled once discarded. Its
    * [OutboxOperation.stored] settles once the entry is written, for a caller that only needs the
    * change kept.
+   *
+   * [admission] applies among this value's changes and takes what [Outbox.enqueue] takes. A change
+   * that [Admission.Reject] rejects can show in [data] until the rejection is known. Then it leaves
+   * [data], and the handle fails with a [CommandRejectedException].
    */
-  fun mutate(mutation: M): OutboxOperation
+  fun mutate(
+    mutation: M,
+    ordering: Ordering = Ordering.Serial,
+    admission: CancellableAdmission = Admission.Queue,
+  ): OutboxOperation
 
   /**
    * Changes the server has not confirmed, oldest first: waiting, sending or failed. It lists stored
    * entries only, so a change shows here once its entry is stored, a moment after it shows in
-   * [data]. A sent change that waits for its commit is left out, since the server has it.
+   * [data]. A sent change that waits for its commit is left out, since the server has it. A change
+   * that [discard] or [clear] dropped leaves the list at once.
    */
   val pending: Flow<List<PendingMutation<M>>>
 
@@ -109,7 +126,8 @@ interface OptimisticQueryStore<T, M> : QueryStore<T> {
    * Removes the truth and drops every change the server has not confirmed, so nothing sends later,
    * as on logout. Once this returns, each value [data] computes lacks the dropped changes. A send
    * already in flight may still reach the server, but its result is ignored and its handle settles
-   * Cancelled. A change still being stored is dropped once it is in.
+   * Cancelled. A change still being stored is dropped once it is in. When a store write fails part
+   * way, this throws, and the changes dropped so far stay dropped.
    */
   override suspend fun clear()
 }
@@ -132,20 +150,32 @@ data class PendingMutation<M>(
 
 /**
  * One [OptimisticQueryStore] per key, all sharing one set of entries. Pass it as the store of a
- * [DataScope.keyed] query, and call [mutate] with the key. Entries for one key send in order, and
- * keys do not wait on each other.
+ * [DataScope.keyed] query, and call [mutate] with the key. With [Ordering.Serial], entries for one
+ * key send in order. Keys do not wait on each other.
  */
 @SubclassOptInRequired(DelicateDataLayerApi::class)
 interface OptimisticQueryStores<K : Any, T, M> : (K) -> OptimisticQueryStore<T, M> {
-  /** [OptimisticQueryStore.mutate] on [key]'s store. */
-  fun mutate(key: K, mutation: M): OutboxOperation
+  /**
+   * [OptimisticQueryStore.mutate] on [key]'s store, with [ordering] and [admission] among [key]'s
+   * changes. So a reject key on one key never rejects a change on another.
+   */
+  fun mutate(
+    key: K,
+    mutation: M,
+    ordering: Ordering = Ordering.Serial,
+    admission: CancellableAdmission = Admission.Queue,
+  ): OutboxOperation
 
-  /** [key]'s changes the server has not confirmed, oldest first, from stored entries only. */
+  /**
+   * [key]'s changes the server has not confirmed, oldest first, from stored entries only. A change
+   * that [discard] or [OptimisticQueryStore.clear] dropped leaves the list at once.
+   */
   fun pending(key: K): Flow<List<PendingMutation<M>>>
 
   /**
    * How many changes across every key the server has not confirmed, for a sync badge. It counts
-   * stored entries only, and no sent change that waits for its commit.
+   * stored entries only, and no sent change that waits for its commit. A change that [discard] or
+   * [OptimisticQueryStore.clear] dropped leaves the count at once.
    */
   val pendingCount: Flow<Int>
 

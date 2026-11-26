@@ -2,7 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.zacsweers.fieldspottr.data.core
 
-/** How a command lines up with the other commands on its runner. */
+/**
+ * How a write lines up with the other writes of its receiver: a runner's commands, an outbox's
+ * entries, or one optimistic value's changes. Writes on one line run one at a time, in order, and
+ * lines never wait on each other.
+ *
+ * [Serial] puts the write on the receiver's default line. For a runner and an outbox that is one
+ * line for all its writes, and for an [OptimisticQueryStores] set it is the line of the change's
+ * key. [Keyed] puts it on the line of its key, which in a set is within the change's key. An entry
+ * takes a `String` key with [OnPrevious.Wait] or [OnPrevious.Supersede]. [Concurrent] puts the
+ * write on a line of its own.
+ */
 sealed interface Ordering {
   /** One at a time, in call order. The default for writes. */
   data object Serial : Ordering
@@ -30,6 +40,10 @@ enum class OnPrevious {
   /**
    * Replaces the ones that have not started yet and waits for one that has, so only the newest
    * queued command runs.
+   *
+   * A new entry discards the entry before it on its line once the new one is stored, when that one
+   * chose Supersede too and still waits, as [Outbox.discard] does. The outbox keeps this choice in
+   * memory, so after a restart an entry stored before it sends in its turn.
    */
   Supersede,
   /**

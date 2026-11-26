@@ -262,6 +262,39 @@ abstract class OutboxStoreContract {
   }
 
   @Test
+  fun `every read returns the reject key a row was inserted with and an update keeps it`() =
+    runTest {
+      val store = newStore(1.minutes)
+      val id = EntryId("rejecting")
+      store.insert(id, "k", "a", rejectKey = "r")
+
+      assertEquals(listOf("r"), store.entries().first().map { it.rejectKey })
+      assertEquals("r", store.entry(id).first()?.rejectKey)
+      assertEquals(listOf("r"), store.heads().first().map { it.rejectKey })
+      assertEquals("r", store.head("k")?.rejectKey)
+
+      // The entry the update writes carries another key, and the stored one stays
+      val row = checkNotNull(store.entry(id).first())
+      val failed = row.copy(status = OutboxStatus.Failed("boom"), rejectKey = "other")
+      assertTrue(store.update(failed, OutboxStatus.Queued))
+
+      assertEquals("r", store.entry(id).first()?.rejectKey)
+      assertEquals(listOf("r"), store.entries().first().map { it.rejectKey })
+      assertEquals(listOf("r"), store.owed().map { it.rejectKey })
+      assertEquals(listOf("r"), store.owed("k").map { it.rejectKey })
+    }
+
+  @Test
+  fun `a row inserted without a reject key reads with none`() = runTest {
+    val store = newStore(1.minutes)
+    val id = store.insertNew("k", "a")
+
+    assertNull(checkNotNull(store.entry(id).first()).rejectKey)
+    assertEquals(listOf(null), store.entries().first().map { it.rejectKey })
+    assertNull(checkNotNull(store.head("k")).rejectKey)
+  }
+
+  @Test
   fun `committed and sentAt and reply round trip`() = runTest {
     val store = newStore(1.minutes)
     val id = store.insertNew("k", "a")

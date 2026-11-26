@@ -4,18 +4,22 @@ package dev.zacsweers.fieldspottr.data.core
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.hasMessage
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import dev.zacsweers.fieldspottr.data.core.testing.Add
 import dev.zacsweers.fieldspottr.data.core.testing.LaggingOutboxStores
 import dev.zacsweers.fieldspottr.data.core.testing.TestFailures
 import dev.zacsweers.fieldspottr.data.core.testing.addOnce
 import dev.zacsweers.fieldspottr.data.core.testing.testClock
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
@@ -26,8 +30,9 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 /**
- * An optimistic store's clear after the owner's scope stopped, as on logout. Nothing collects the
- * store's data or pending rows, so the set learns of each change only from its own handles.
+ * An optimistic store's clear after the owner's scope stopped, as on logout. Unless a test says
+ * otherwise, nothing collects the store's data or pending rows, so the set learns of each change
+ * only from its own handles.
  */
 class OptimisticQueryStoreClearTest {
   /** A tag list over [stores], offline, in a data scope whose scope [owner] owns. */
@@ -101,6 +106,51 @@ class OptimisticQueryStoreClearTest {
     assertThat(rows.map { it.payload }).containsExactly(Add("c"))
     assertThat(h.tags.data.first()?.value).isEqualTo(listOf("c"))
     h.failures.assertNone()
+  }
+
+  /**
+   * The clear discards one status write at a time, each taking a second, and the second write
+   * fails. A collector holds the only row list, which still shows both rows. The first change's row
+   * is gone, so it leaves the view and the pending rows when the clear throws.
+   */
+  @Test
+  fun `a clear whose second discard fails drops the first change`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds, firstListOnly = true)
+    val h = Harness(this, stores)
+    h.tags.mutate(Add("b")).stored.await()
+    h.tags.mutate(Add("c")).stored.await()
+    backgroundScope.launch { h.tags.data.collect {} }
+    runCurrent()
+    val clearing = async { assertFailsWith<IllegalStateException> { h.tags.clear() } }
+    advanceTimeBy(1.5.seconds)
+    stores.failDiscards = true
+    advanceTimeBy(1.seconds)
+    runCurrent()
+
+    assertThat(clearing.await()).hasMessage("Disk error")
+    assertThat(h.tags.data.first()?.value).isEqualTo(listOf("c"))
+    assertThat(h.tags.pending.first().map { it.mutation }).containsExactly(Add("c"))
+  }
+
+  /**
+   * As above, with the caller cancelled while the second status write runs. A collector holds the
+   * only row list, which still shows both rows.
+   */
+  @Test
+  fun `a clear cancelled between two discards drops the first change`() = runTest {
+    val stores = LaggingOutboxStores(updateTakes = 1.seconds, firstListOnly = true)
+    val h = Harness(this, stores)
+    h.tags.mutate(Add("b")).stored.await()
+    h.tags.mutate(Add("c")).stored.await()
+    backgroundScope.launch { h.tags.data.collect {} }
+    runCurrent()
+    val clearing = launch { h.tags.clear() }
+    advanceTimeBy(1.5.seconds)
+    clearing.cancel()
+    runCurrent()
+
+    assertThat(clearing.isCancelled).isTrue()
+    assertThat(h.tags.data.first()?.value).isEqualTo(listOf("c"))
   }
 }
 
